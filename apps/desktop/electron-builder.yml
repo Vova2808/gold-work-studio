@@ -1,0 +1,15 @@
+appId: studio.goldwork.app
+productName: Gold Work Studio
+directories:
+  output: ../../release
+files:
+  - dist/**/*
+  - package.json
+asar: true
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+artifactName: Gold-Work-Studio-${version}-portable.${ext}
+

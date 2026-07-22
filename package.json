@@ -1,0 +1,18 @@
+{
+  "name": "gold-work-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable Windows studio for AI-assisted video production",
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "pnpm --filter @gold-work/desktop dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "portable": "pnpm build && pnpm --filter @gold-work/desktop portable"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
