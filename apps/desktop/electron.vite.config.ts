@@ -27,6 +27,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(projectDirectory, "../renderer"),
+    server: { host: "127.0.0.1" },
     build: {
       outDir: resolve(projectDirectory, "dist/renderer"),
       rollupOptions: { input: resolve(projectDirectory, "../renderer/index.html") }

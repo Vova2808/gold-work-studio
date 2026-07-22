@@ -55,9 +55,26 @@ async function createWindow(): Promise<void> {
     }
   });
 
+  window.webContents.on("did-fail-load", (_event, code, description, url) => {
+    console.error(`[renderer] failed to load ${url}: ${code} ${description}`);
+  });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`[renderer] process gone: ${details.reason}`);
+  });
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) {
-    await window.loadURL(devUrl);
+    const loopbackUrl = devUrl.replace("localhost", "127.0.0.1");
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      try {
+        await window.loadURL(loopbackUrl);
+        return;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 150));
+      }
+    }
+    throw lastError;
   } else {
     await window.loadFile(join(currentDirectory, "../renderer/index.html"));
   }
