@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   Bot,
   Bookmark,
   Captions,
@@ -8,25 +10,24 @@ import {
   ChevronLeft,
   CircleUserRound,
   Clapperboard,
+  Clock3,
   Copy,
   Download,
   Eye,
   FileText,
   Folder,
   FolderOpen,
-  Gauge,
   Grid2X2,
   Image,
   Languages,
-  Layers3,
   LayoutDashboard,
   ListPlus,
   LogOut,
   Mic2,
-  Monitor,
   MoreHorizontal,
   Music2,
   Paperclip,
+  Pause,
   Play,
   Plus,
   RotateCcw,
@@ -36,6 +37,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Square,
   SquareTerminal,
   Trash2,
   Upload,
@@ -45,51 +47,25 @@ import {
   X,
   Zap
 } from "lucide-react";
-import type { CreateProjectInput, DesktopApi, Project, QueueTask } from "@gold-work/shared";
+import {
+  createDefaultProjectSettings,
+  type DesktopApi,
+  type Project,
+  type ProjectSettings,
+  type QueueTask,
+  type Scene,
+  type SubtitleSettings,
+  type UpdateProjectInput
+} from "@gold-work/shared";
+import { fallbackApi } from "./fallback-api";
 
 type SectionKey =
-  | "dashboard"
-  | "project"
-  | "scenario"
-  | "clone"
-  | "director"
-  | "projects"
-  | "subtitles"
-  | "thumbnail"
-  | "avatar"
-  | "seo"
-  | "studio"
-  | "queue"
-  | "console"
-  | "settings";
+  | "dashboard" | "project" | "scenario" | "clone" | "director" | "projects"
+  | "subtitles" | "thumbnail" | "avatar" | "seo" | "studio" | "queue"
+  | "console" | "settings";
+type Overlay = { type: "preview" | "timeline"; projectId: string };
 
-const fallbackApi: DesktopApi = {
-  listProjects: async () => [],
-  createProject: async (input: CreateProjectInput): Promise<Project> => ({
-    id: `preview_${Date.now()}`,
-    ...input,
-    status: "draft",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    scenes: []
-  }),
-  createDemoProject: async (): Promise<Project> => ({
-    id: `preview_${Date.now()}`,
-    title: "Барсик — космический кот",
-    topic: "Семейный мультфильм о приключении ленивого кота в космосе",
-    aspectRatio: "16:9",
-    language: "Русский",
-    mode: "standard",
-    status: "ready",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    scenes: []
-  }),
-  getQueue: async () => [],
-  getAppInfo: async () => ({ version: "0.1.0", dataPath: "Режим браузерного предпросмотра", mockMode: true })
-};
-
-const navigation: Array<{ label?: string; items: Array<{ key: SectionKey; title: string; icon: ReactNode; beta?: boolean }> }> = [
+const navigation: Array<{ label: string; items: Array<{ key: SectionKey; title: string; icon: ReactNode; beta?: boolean }> }> = [
   {
     label: "ГЛАВНОЕ",
     items: [
@@ -115,40 +91,160 @@ const navigation: Array<{ label?: string; items: Array<{ key: SectionKey; title:
   }
 ];
 
+const statusLabels: Record<Project["status"], string> = {
+  draft: "Черновик",
+  ready: "Готов к генерации",
+  generating: "Генерация",
+  paused: "На паузе",
+  complete: "Готов",
+  failed: "Остановлен"
+};
+
 export function App() {
   const api = window.goldWork ?? fallbackApi;
   const [activeSection, setActiveSection] = useState<SectionKey>("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
   const [queue, setQueue] = useState<QueueTask[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [appInfo, setAppInfo] = useState<Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const pageScrollRef = useRef<HTMLDivElement>(null);
 
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
+  const overlayProject = overlay ? projects.find((project) => project.id === overlay.projectId) : undefined;
+
   useEffect(() => {
-    void api.listProjects().then(setProjects);
-    void api.getQueue().then(setQueue);
-    void api.getAppInfo().then(setAppInfo);
+    let mounted = true;
+    async function initialLoad() {
+      try {
+        const [loadedProjects, loadedQueue, info] = await Promise.all([api.listProjects(), api.getQueue(), api.getAppInfo()]);
+        if (!mounted) return;
+        setProjects(loadedProjects);
+        setQueue(loadedQueue);
+        setAppInfo(info);
+        setSelectedProjectId((current) => current && loadedProjects.some((project) => project.id === current) ? current : loadedProjects[0]?.id ?? null);
+      } catch (reason) {
+        if (mounted) setError(errorMessage(reason));
+      }
+    }
+    void initialLoad();
+    const polling = window.setInterval(() => {
+      void Promise.all([api.getQueue(), api.listProjects()]).then(([tasks, items]) => {
+        if (!mounted) return;
+        setQueue(tasks);
+        setProjects(items);
+        setSelectedProjectId((current) => current && items.some((project) => project.id === current) ? current : items[0]?.id ?? null);
+      }).catch(() => undefined);
+    }, 750);
+    return () => {
+      mounted = false;
+      window.clearInterval(polling);
+    };
   }, []);
 
   useEffect(() => {
     if (pageScrollRef.current) pageScrollRef.current.scrollTop = 0;
   }, [activeSection]);
 
-  async function createDemo(openProject = true) {
-    setCreating(true);
+  function upsertProject(project: Project) {
+    setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
+    setSelectedProjectId(project.id);
+  }
+
+  async function refresh() {
+    const [items, tasks] = await Promise.all([api.listProjects(), api.getQueue()]);
+    setProjects(items);
+    setQueue(tasks);
+    setSelectedProjectId((current) => current && items.some((project) => project.id === current) ? current : items[0]?.id ?? null);
+  }
+
+  async function createProject(withDemoScenes = false) {
+    setBusy(true);
+    setError(null);
     try {
-      const project = await api.createDemoProject();
-      setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
-      if (openProject) setActiveSection("project");
+      const project = withDemoScenes
+        ? await api.createDemoProject()
+        : await api.createProject({
+            title: `Новый проект ${projects.length + 1}`,
+            topic: "Опишите тему нового видео",
+            aspectRatio: "16:9",
+            language: "Русский",
+            mode: "standard"
+          });
+      upsertProject(project);
+      setActiveSection(withDemoScenes ? "project" : "scenario");
+    } catch (reason) {
+      setError(errorMessage(reason));
     } finally {
-      setCreating(false);
+      setBusy(false);
+    }
+  }
+
+  async function saveProject(id: string, input: UpdateProjectInput) {
+    setError(null);
+    try {
+      const project = await api.updateProject(id, input);
+      upsertProject(project);
+      return project;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  async function duplicateProject(id: string) {
+    try {
+      upsertProject(await api.duplicateProject(id));
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function deleteProject(id: string) {
+    const project = projects.find((candidate) => candidate.id === id);
+    if (!window.confirm(`Удалить проект «${project?.title ?? id}»?`)) return;
+    try {
+      await api.deleteProject(id);
+      if (overlay?.projectId === id) setOverlay(null);
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  function openProject(id: string, section: SectionKey = "project") {
+    setSelectedProjectId(id);
+    setActiveSection(section);
+  }
+
+  async function startGeneration(id: string) {
+    setBusy(true);
+    try {
+      await api.startGeneration(id);
+      setSelectedProjectId(id);
+      setActiveSection("queue");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function queueAction(action: () => Promise<unknown>) {
+    try {
+      await action();
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
     }
   }
 
   function navigate(section: SectionKey) {
     setActiveSection(section);
-    if (section === "queue") void api.getQueue().then(setQueue);
     if (section === "settings") void api.getAppInfo().then(setAppInfo);
   }
 
@@ -159,71 +255,38 @@ export function App() {
         <Sidebar active={activeSection} onNavigate={navigate} />
         <section className="work-area">
           <div className="page-scroll" ref={pageScrollRef}>
-            {activeSection === "dashboard" && (
-              <Dashboard projects={projects} creating={creating} onCreate={() => void createDemo(false)} onNavigate={navigate} />
-            )}
-            {activeSection === "project" && <ProjectEditor project={projects[0]} />}
-            {activeSection === "director" && <Director creating={creating} onCreate={() => void createDemo()} />}
-            {activeSection === "projects" && <ProjectsPage projects={projects} creating={creating} onCreate={() => void createDemo()} />}
-            {activeSection === "queue" && <QueuePage tasks={queue} />}
+            {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} />}
+            {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} />}
+            {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
+            {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} />}
+            {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
+            {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
-            {!["dashboard", "project", "director", "projects", "queue", "settings"].includes(activeSection) && (
-              <ToolPage section={activeSection} />
-            )}
+            {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} />}
           </div>
-          <ConsoleDock open={consoleOpen} onToggle={() => setConsoleOpen((value) => !value)} />
+          <ConsoleDock open={consoleOpen} queue={queue} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
+      {overlay && overlayProject && <ProjectPreviewModal project={overlayProject} initialMode={overlay.type} onClose={() => setOverlay(null)} />}
+      {error && <div className="error-toast"><X size={15} /><span>{error}</span><button onClick={() => setError(null)}>×</button></div>}
     </div>
   );
 }
 
 function TitleBar() {
-  return (
-    <header className="titlebar">
-      <div className="titlebar-brand"><span>GW</span><strong>GOLDWORK STUDIO</strong></div>
-      <div className="window-actions" aria-hidden="true"><button>—</button><button>□</button><button>×</button></div>
-    </header>
-  );
+  const api = window.goldWork ?? fallbackApi;
+  return <header className="titlebar"><div className="titlebar-brand"><span>GW</span><strong>GOLDWORK STUDIO</strong></div><div className="window-actions"><button aria-label="Свернуть" onClick={() => void api.minimizeWindow()}>—</button><button aria-label="Развернуть" onClick={() => void api.toggleMaximizeWindow()}>□</button><button aria-label="Закрыть" onClick={() => void api.closeWindow()}>×</button></div></header>;
 }
 
 function Sidebar({ active, onNavigate }: { active: SectionKey; onNavigate: (section: SectionKey) => void }) {
-  return (
-    <aside className="sidebar">
-      <div className="sidebar-nav">
-        {navigation.map((group) => (
-          <div className="nav-group" key={group.label}>
-            <div className="nav-group-label">{group.label}</div>
-            {group.items.map((item) => (
-              <button key={item.key} className={`nav-item${active === item.key ? " active" : ""}`} onClick={() => onNavigate(item.key)}>
-                {item.icon}<span>{item.title}</span>{item.beta && <em>BETA</em>}
-              </button>
-            ))}
-          </div>
-        ))}
-      </div>
-      <div className="sidebar-footer">
-        <div className="profile-card">
-          <div><CircleUserRound size={16} /><strong>Owner</strong><span>PRO</span></div>
-          <small>Локальный профиль</small>
-          <button><LogOut size={14} />Выйти</button>
-        </div>
-        <button className={`settings-link${active === "settings" ? " active" : ""}`} onClick={() => onNavigate("settings")}>
-          <Settings size={17} />Настройки
-        </button>
-        <div className="app-stats"><span><i />Готов</span><span>GoldWork Studio v0.1.0</span></div>
-      </div>
-    </aside>
-  );
+  return <aside className="sidebar"><div className="sidebar-nav">{navigation.map((group) => <div className="nav-group" key={group.label}><div className="nav-group-label">{group.label}</div>{group.items.map((item) => <button key={item.key} className={`nav-item${active === item.key ? " active" : ""}`} onClick={() => onNavigate(item.key)}>{item.icon}<span>{item.title}</span>{item.beta && <em>BETA</em>}</button>)}</div>)}</div><div className="sidebar-footer"><div className="profile-card"><div><CircleUserRound size={16} /><strong>Owner</strong><span>PRO</span></div><small>Локальный профиль</small><button><LogOut size={14} />Выйти</button></div><button className={`settings-link${active === "settings" ? " active" : ""}`} onClick={() => onNavigate("settings")}><Settings size={17} />Настройки</button><div className="app-stats"><span><i />Готов</span><span>GoldWork Studio v0.2.0</span></div></div></aside>;
 }
 
-function Dashboard({ projects, creating, onCreate, onNavigate }: {
-  projects: Project[];
-  creating: boolean;
-  onCreate: () => void;
-  onNavigate: (section: SectionKey) => void;
+function Dashboard({ projects, selectedId, busy, onCreate, onOpen, onDelete, onPreview, onGenerate, onNavigate }: {
+  projects: Project[]; selectedId?: string; busy: boolean; onCreate: () => void; onOpen: (id: string) => void;
+  onDelete: (id: string) => void; onPreview: (id: string) => void; onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void;
 }) {
-  const visibleProjects = projects.length ? projects : [demoProject("demo-1", "Новый проект"), demoProject("demo-2", "Нет темы")];
   const tools: Array<{ title: string; subtitle: string; icon: ReactNode; route: SectionKey }> = [
     { title: "Превью", subtitle: "AI генерация обложек", icon: <Image size={19} />, route: "thumbnail" },
     { title: "Аватарка", subtitle: "Генератор аватарок", icon: <CircleUserRound size={19} />, route: "avatar" },
@@ -231,156 +294,103 @@ function Dashboard({ projects, creating, onCreate, onNavigate }: {
     { title: "SEO", subtitle: "Заголовки и теги", icon: <Search size={19} />, route: "seo" },
     { title: "Сценарий", subtitle: "Auto / Custom", icon: <FileText size={19} />, route: "scenario" }
   ];
-
-  return (
-    <div className="dashboard-page page-with-actionbar">
-      <PageHeading icon={<Zap size={25} />} title="Dashboard" subtitle="Управление проектами видео" />
-      <section className="quick-panel">
-        <h2><Grid2X2 size={16} />Быстрые инструменты</h2>
-        <div className="quick-grid">
-          {tools.map((tool) => (
-            <button className="quick-card" key={tool.title} onClick={() => onNavigate(tool.route)}>
-              <span>{tool.icon}</span><strong>{tool.title}</strong><small>{tool.subtitle}</small>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div className="projects-heading">
-        <h2><Folder size={17} />Проекты <span>({visibleProjects.length})</span></h2>
-        <div><button className="ghost-button"><FolderOpen size={15} />Папка с видео</button><button className="ghost-button" onClick={onCreate}><Plus size={15} />Добавить ({visibleProjects.length}/30)</button></div>
-      </div>
-
-      <div className="project-list">
-        {visibleProjects.map((project, index) => (
-          <button className="project-row" key={project.id} onClick={() => onNavigate("project")}>
-            <span className="project-check"><Check size={12} /></span>
-            <span className="project-number">{index + 1}</span>
-            <span className="project-main"><strong>{project.title}</strong><small><Languages size={12} />{project.language}<i />1 минута<i /><Mic2 size={12} />Edge TTS<i /><Image size={12} />Nano Banana Pro</small></span>
-            <span className="project-actions"><i /><span><FolderOpen size={15} /></span><span className="danger"><Trash2 size={15} /></span></span>
-          </button>
-        ))}
-      </div>
-
-      <div className="sticky-actions">
-        <div><button className="outline-button" onClick={onCreate} disabled={creating}><Plus size={17} />{creating ? "Создаём..." : "Новый проект"}</button><button className="outline-button gold"><Eye size={17} />Предпросмотр</button></div>
-        <button className="generate-button" onClick={() => onNavigate("project")}><Zap size={17} />ГЕНЕРИРОВАТЬ ВИДЕО</button>
-      </div>
-    </div>
-  );
+  const chosenId = selectedId ?? projects[0]?.id;
+  return <div className="dashboard-page page-with-actionbar"><PageHeading icon={<Zap size={25} />} title="Dashboard" subtitle="Управление проектами видео" /><section className="quick-panel"><h2><Grid2X2 size={16} />Быстрые инструменты</h2><div className="quick-grid">{tools.map((tool) => <button className="quick-card" key={tool.title} onClick={() => onNavigate(tool.route)}><span>{tool.icon}</span><strong>{tool.title}</strong><small>{tool.subtitle}</small></button>)}</div></section><div className="projects-heading"><h2><Folder size={17} />Проекты <span>({projects.length})</span></h2><div><button className="ghost-button"><FolderOpen size={15} />Папка с видео</button><button className="ghost-button" onClick={onCreate}><Plus size={15} />Добавить ({projects.length}/30)</button></div></div>{projects.length === 0 ? <EmptyState icon={<Clapperboard size={34} />} title="Пока нет проектов" text="Создайте первый проект и добавьте сцены будущего ролика." action="Новый проект" onAction={onCreate} /> : <div className="project-list">{projects.map((project, index) => <article className={`project-row${project.id === selectedId ? " selected" : ""}`} key={project.id} onClick={() => onOpen(project.id)}><span className="project-check"><Check size={12} /></span><span className="project-number">{index + 1}</span><span className="project-main"><strong>{project.title}</strong><small><Languages size={12} />{project.language}<i />{project.scenes.length} сцен<i /><Mic2 size={12} />{project.settings.voice.provider}<i /><Image size={12} />{project.settings.image.provider}</small></span><span className={`project-status status-${project.status}`}>{statusLabels[project.status]}</span><span className="project-actions"><button title="Предпросмотр" onClick={(event) => { event.stopPropagation(); onPreview(project.id); }}><Eye size={15} /></button><button className="danger" title="Удалить" onClick={(event) => { event.stopPropagation(); onDelete(project.id); }}><Trash2 size={15} /></button></span></article>)}</div>}<div className="sticky-actions"><div><button className="outline-button" onClick={onCreate} disabled={busy}><Plus size={17} />{busy ? "Подождите..." : "Новый проект"}</button><button className="outline-button gold" disabled={!chosenId} onClick={() => chosenId && onPreview(chosenId)}><Eye size={17} />Предпросмотр</button></div><button className="generate-button" disabled={!chosenId || busy} onClick={() => chosenId && onGenerate(chosenId)}><Zap size={17} />ГЕНЕРИРОВАТЬ ВИДЕО</button></div></div>;
 }
 
-function ProjectEditor({ project }: { project?: Project }) {
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
-  const [startFrame, setStartFrame] = useState(true);
-  const [pairedFrames, setPairedFrames] = useState(false);
-  const [muteVeo, setMuteVeo] = useState(true);
-  const [subtitles, setSubtitles] = useState(false);
-  const [duration, setDuration] = useState("1м");
-  const [topic, setTopic] = useState(project?.topic ?? "Барсик — космический кот");
-
-  return (
-    <div className="project-page page-with-actionbar">
-      <PageHeading icon={<ChevronLeft size={22} />} title={`Проект #${project ? "1" : "1"}`} subtitle="Настройки генерации видео" />
-      <div className="preset-bar"><Bookmark size={16} /><span>Пресет:</span><select><option>Выбрать пресет... (3)</option></select><button title="Загрузить"><Download size={16} /></button><button title="Сохранить"><Save size={16} /></button><button className="danger" title="Удалить"><Trash2 size={16} /></button></div>
-
-      <div className="editor-grid">
-        <SettingsPanel icon={<SlidersHorizontal size={16} />} title="ОСНОВНЫЕ">
-          <Field label="ТЕМА ВИДЕО"><input value={topic} onChange={(event) => setTopic(event.target.value)} /></Field>
-          <Field label="ЯЗЫК"><select defaultValue="Русский"><option>Русский</option><option>English</option><option>Español</option></select></Field>
-          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО">
-            <div className="choice-row">{["30с", "1м", "5м", "10м", "15м", "30м", "60м"].map((value) => <button className={duration === value ? "selected" : ""} onClick={() => setDuration(value)} key={value}>{value}</button>)}</div>
-          </Field>
-          <Field label="СМЕНА КАДРОВ"><select><option>По умолчанию (по сценарию)</option></select><small className="hint">Для опытных пользователей</small></Field>
-          <Field label="ФОРМАТ ВИДЕО"><select><option>▣ 16:9 (YouTube)</option><option>▯ 9:16 (Shorts)</option><option>□ 1:1</option></select></Field>
-        </SettingsPanel>
-
-        <SettingsPanel icon={<Mic2 size={16} />} title="ОЗВУЧКА">
-          <ToggleRow label="Озвучка" checked={voiceEnabled} onChange={setVoiceEnabled} />
-          {voiceEnabled && <>
-            <Field label="ДВИЖОК ОЗВУЧКИ"><select><option>ElevenLabs API</option><option>Edge TTS</option></select><small>Edge TTS бесплатно. ElevenLabs работает по вашему API ключу.</small></Field>
-            <Field label="ШАБЛОН ELEVENLABS"><select><option>ПСИХО</option><option>Мягкий рассказчик</option></select><button className="inline-link">Загрузить шаблоны</button></Field>
-            <ToggleRow label="Цельная озвучка" checked={false} onChange={() => undefined} />
-          </>}
-        </SettingsPanel>
-
-        <SettingsPanel icon={<Image size={16} />} title="ИЗОБРАЖЕНИЯ">
-          <Field label="ГЕНЕРАТОР ИЗОБРАЖЕНИЙ"><select><option>Nano Banana Pro</option><option>GPT Image</option></select></Field>
-          <Field label="СТИЛЬ ИЗОБРАЖЕНИЙ"><select><option>Photorealistic live-action photography mixed</option><option>Family 3D animation</option></select></Field>
-          <ToggleRow label="Последовательная генерация" checked={false} onChange={() => undefined} />
-          <Field label="РЕФЕРЕНС ИЗОБРАЖЕНИЯ (0/3)"><button className="upload-box"><Plus size={21} /><span>Добавить референс</span></button><small>Nano Banana Pro — максимум 3 референса.</small></Field>
-        </SettingsPanel>
-
-        <SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ" wide>
-          <Field label="РЕЖИМ ГЕНЕРАЦИИ"><select><option>TURBO</option><option>STANDARD</option></select><small>Максимальная скорость. 4 промпта параллельно.</small></Field>
-          <ToggleRow label="Veo 3.1 (Image-to-Video)" checked={videoEnabled} onChange={setVideoEnabled} />
-          {videoEnabled && <>
-            <Field label="МОДЕЛЬ VEO"><select><option>Lite</option><option>Fast</option><option>Quality</option></select></Field>
-            <ToggleRow label="Анимация от первого кадра" checked={startFrame} onChange={setStartFrame} />
-            <ToggleRow label="Парные кадры (Start + End)" checked={pairedFrames} onChange={setPairedFrames} />
-            <ToggleRow label="Без музыки/звука в видео" checked={muteVeo} onChange={setMuteVeo} />
-            <Field label="ГРОМКОСТЬ ЗВУКА VEO: 15%"><input type="range" defaultValue="15" /></Field>
-          </>}
-          <div className="sub-card"><strong>Анимация</strong><small>Сколько видео из всех сцен:</small><input type="range" defaultValue="100" /><label><input type="radio" name="distribution" />Равномерно</label><label><input type="radio" name="distribution" defaultChecked />Затухание (плавно)</label></div>
-        </SettingsPanel>
-      </div>
-
-      <div className="editor-secondary">
-        <SettingsPanel icon={<Music2 size={16} />} title="ФОНОВАЯ МУЗЫКА"><p className="empty-note"><Music2 size={21} />Нет добавленных треков</p><button className="outline-button small"><Upload size={15} />Выбрать трек</button><Field label="ГРОМКОСТЬ: 0.1"><input type="range" defaultValue="10" /></Field></SettingsPanel>
-        <SettingsPanel icon={<Captions size={16} />} title="СУБТИТРЫ"><ToggleRow label="Включить субтитры" checked={subtitles} onChange={setSubtitles} /><button className="outline-button small"><SlidersHorizontal size={15} />Настроить стиль субтитров</button></SettingsPanel>
-        <SettingsPanel icon={<Sparkles size={16} />} title="КОНТЕНТ"><div className="content-mode">Режим: Custom — 120 сцен</div><button className="outline-button small"><FileText size={15} />Настроить сценарий</button><button className="outline-button small"><Sparkles size={15} />AI Автозаполнение</button><button className="outline-button small"><WandSparkles size={15} />AI Улучшение</button></SettingsPanel>
-      </div>
-
-      <div className="sticky-actions editor-actions"><span>Все изменения сохраняются локально</span><div><button className="outline-button"><Save size={16} />Сохранить</button><button className="generate-button"><Zap size={17} />Генерировать видео</button></div></div>
-    </div>
-  );
+function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate }: {
+  project?: Project; busy: boolean; onBack: () => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>;
+  onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void;
+}) {
+  const [draft, setDraft] = useState<Project | null>(project ? structuredClone(project) : null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(project ? structuredClone(project) : null), [project?.id]);
+  if (!draft) return <EmptyState icon={<Clapperboard size={34} />} title="Проект не выбран" text="Создайте проект на Dashboard или выберите его в списке." action="Вернуться на Dashboard" onAction={onBack} />;
+  const settings = draft.settings ?? createDefaultProjectSettings();
+  const setSettings = (patch: Partial<ProjectSettings>) => setDraft((current) => current ? { ...current, settings: { ...current.settings, ...patch } } : current);
+  const save = async (): Promise<Project | undefined> => {
+    setSaving(true);
+    try {
+      return await onSave(draft.id, { title: draft.title, topic: draft.topic, language: draft.language, aspectRatio: draft.aspectRatio, mode: draft.mode, settings: draft.settings });
+    } catch {
+      // Корневой компонент уже показывает понятное сообщение об ошибке.
+      return undefined;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const generate = async () => {
+    const saved = await save();
+    if (saved) onGenerate(saved.id);
+  };
+  const saveAndNavigate = async (section: SectionKey) => {
+    const saved = await save();
+    if (saved) onNavigate(section);
+  };
+  return <div className="project-page page-with-actionbar"><PageHeading icon={<button className="back-icon" onClick={onBack}><ChevronLeft size={22} /></button>} title={draft.title} subtitle="Настройки генерации видео" /><div className="preset-bar"><Bookmark size={16} /><span>Пресет:</span><select><option>Рабочий пресет проекта</option></select><button title="Загрузить"><Download size={16} /></button><button title="Сохранить" onClick={() => void save()}><Save size={16} /></button></div><div className="editor-grid"><SettingsPanel icon={<SlidersHorizontal size={16} />} title="ОСНОВНЫЕ"><Field label="НАЗВАНИЕ ПРОЕКТА"><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field><Field label="ТЕМА ВИДЕО"><input value={draft.topic} onChange={(event) => setDraft({ ...draft, topic: event.target.value })} /></Field><Field label="ЯЗЫК"><select value={draft.language} onChange={(event) => setDraft({ ...draft, language: event.target.value })}><option>Русский</option><option>English</option><option>Español</option></select></Field><Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО"><div className="choice-row">{[0.5, 1, 5, 10, 15, 30, 60].map((value) => <button className={settings.durationMinutes === value ? "selected" : ""} onClick={() => setSettings({ durationMinutes: value })} key={value}>{value < 1 ? "30с" : `${value}м`}</button>)}</div></Field><Field label="СМЕНА КАДРОВ"><select value={settings.frameChange} onChange={(event) => setSettings({ frameChange: event.target.value as ProjectSettings["frameChange"] })}><option value="scenario">По сценарию</option><option value="5s">Каждые 5 секунд</option><option value="10s">Каждые 10 секунд</option></select></Field><Field label="ФОРМАТ ВИДЕО"><select value={draft.aspectRatio} onChange={(event) => setDraft({ ...draft, aspectRatio: event.target.value as Project["aspectRatio"] })}><option value="16:9">▣ 16:9 (YouTube)</option><option value="9:16">▯ 9:16 (Shorts)</option><option value="1:1">□ 1:1</option></select></Field></SettingsPanel><SettingsPanel icon={<Mic2 size={16} />} title="ОЗВУЧКА"><ToggleRow label="Озвучка" checked={settings.voice.enabled} onChange={(enabled) => setSettings({ voice: { ...settings.voice, enabled } })} />{settings.voice.enabled && <><Field label="ДВИЖОК ОЗВУЧКИ"><select value={settings.voice.provider} onChange={(event) => setSettings({ voice: { ...settings.voice, provider: event.target.value as ProjectSettings["voice"]["provider"] } })}><option value="edge-tts">Edge TTS</option><option value="elevenlabs">ElevenLabs API</option></select><small>Сейчас используется mock-адаптер. API можно будет добавить в настройках.</small></Field><Field label="ГОЛОС"><select value={settings.voice.voice} onChange={(event) => setSettings({ voice: { ...settings.voice, voice: event.target.value } })}><option value="ru-RU-DmitryNeural">Дмитрий</option><option value="ru-RU-SvetlanaNeural">Светлана</option><option value="custom">Пользовательский</option></select></Field><ToggleRow label="Цельная озвучка" checked={settings.voice.singleTrack} onChange={(singleTrack) => setSettings({ voice: { ...settings.voice, singleTrack } })} /></>}</SettingsPanel><SettingsPanel icon={<Image size={16} />} title="ИЗОБРАЖЕНИЯ"><Field label="ГЕНЕРАТОР ИЗОБРАЖЕНИЙ"><select value={settings.image.provider} onChange={(event) => setSettings({ image: { ...settings.image, provider: event.target.value as ProjectSettings["image"]["provider"] } })}><option value="mock-image">Mock Image</option><option value="nano-banana">Nano Banana Pro</option><option value="gpt-image">GPT Image</option></select></Field><Field label="СТИЛЬ ИЗОБРАЖЕНИЙ"><input value={settings.image.style} onChange={(event) => setSettings({ image: { ...settings.image, style: event.target.value } })} /></Field><ToggleRow label="Последовательная генерация" checked={settings.image.sequential} onChange={(sequential) => setSettings({ image: { ...settings.image, sequential } })} /><Field label={`РЕФЕРЕНСЫ (${settings.image.references.length}/3)`}><button className="upload-box"><Plus size={21} /><span>Добавить референс</span></button></Field></SettingsPanel><SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ"><Field label="РЕЖИМ ГЕНЕРАЦИИ"><select value={settings.video.mode} onChange={(event) => setSettings({ video: { ...settings.video, mode: event.target.value as ProjectSettings["video"]["mode"] } })}><option value="turbo">TURBO</option><option value="standard">STANDARD</option></select><small>До четырёх задач одновременно.</small></Field><ToggleRow label="Генерировать AI-видео" checked={settings.video.enabled} onChange={(enabled) => setSettings({ video: { ...settings.video, enabled } })} />{settings.video.enabled && <><Field label="МОДЕЛЬ"><select value={settings.video.model} onChange={(event) => setSettings({ video: { ...settings.video, model: event.target.value } })}><option>Mock Motion 1</option><option>Veo 3.1 Lite</option><option>Veo 3.1 Fast</option></select></Field><ToggleRow label="Анимация от первого кадра" checked={settings.video.startFrame} onChange={(startFrame) => setSettings({ video: { ...settings.video, startFrame } })} /><ToggleRow label="Парные кадры (Start + End)" checked={settings.video.pairedFrames} onChange={(pairedFrames) => setSettings({ video: { ...settings.video, pairedFrames } })} /><ToggleRow label="Без музыки/звука в видео" checked={settings.video.muteSource} onChange={(muteSource) => setSettings({ video: { ...settings.video, muteSource } })} /><Field label={`ГРОМКОСТЬ ЗВУКА: ${settings.video.sourceVolume}%`}><input type="range" min="0" max="100" value={settings.video.sourceVolume} onChange={(event) => setSettings({ video: { ...settings.video, sourceVolume: Number(event.target.value) } })} /></Field></>}</SettingsPanel></div><div className="editor-secondary"><SettingsPanel icon={<Music2 size={16} />} title="ФОНОВАЯ МУЗЫКА"><p className="empty-note"><Music2 size={21} />{settings.music.path ?? "Нет добавленных треков"}</p><button className="outline-button small"><Upload size={15} />Выбрать трек</button><Field label={`ГРОМКОСТЬ: ${settings.music.volume}%`}><input type="range" value={settings.music.volume} onChange={(event) => setSettings({ music: { ...settings.music, volume: Number(event.target.value) } })} /></Field></SettingsPanel><SettingsPanel icon={<Captions size={16} />} title="СУБТИТРЫ"><ToggleRow label="Включить субтитры" checked={settings.subtitles.enabled} onChange={(enabled) => setSettings({ subtitles: { ...settings.subtitles, enabled } })} /><button className="outline-button small" onClick={() => void saveAndNavigate("subtitles")}><SlidersHorizontal size={15} />Настроить стиль</button></SettingsPanel><SettingsPanel icon={<Sparkles size={16} />} title="КОНТЕНТ"><div className="content-mode">Custom — {draft.scenes.length} сцен</div><button className="outline-button small" onClick={() => void saveAndNavigate("scenario")}><FileText size={15} />Настроить сценарий</button><button className="outline-button small"><Sparkles size={15} />AI Автозаполнение</button></SettingsPanel></div><div className="sticky-actions editor-actions"><span>{draft.scenes.length} сцен · данные сохраняются локально</span><div><button className="outline-button" disabled={saving} onClick={() => void save()}><Save size={16} />{saving ? "Сохраняем..." : "Сохранить"}</button><button className="generate-button" disabled={busy || saving} onClick={() => void generate()}><Zap size={17} />Генерировать видео</button></div></div></div>;
 }
 
-function Director({ creating, onCreate }: { creating: boolean; onCreate: () => void }) {
+function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onBack: () => void }) {
+  const [scenes, setScenes] = useState<Scene[]>(project?.scenes ? structuredClone(project.scenes) : []);
+  const [selectedId, setSelectedId] = useState<string | null>(project?.scenes[0]?.id ?? null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { const next = project?.scenes ? structuredClone(project.scenes) : []; setScenes(next); setSelectedId(next[0]?.id ?? null); }, [project?.id]);
+  if (!project) return <EmptyState icon={<FileText size={34} />} title="Проект не выбран" text="Выберите проект перед редактированием сценария." action="Назад" onAction={onBack} />;
+  if (project.status === "generating" || project.status === "paused") return <EmptyState icon={<Pause size={34} />} title="Сценарий временно заблокирован" text="Во время активной генерации нельзя менять состав сцен. Остановите очередь или дождитесь завершения." action="Назад к проекту" onAction={onBack} />;
+  const selected = scenes.find((scene) => scene.id === selectedId);
+  const reindex = (items: Scene[]) => items.map((scene, order) => ({ ...scene, order }));
+  const addScene = () => { const scene: Scene = { id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, order: scenes.length, title: `Сцена ${scenes.length + 1}`, narration: "", imagePrompt: "", animationPrompt: "", durationSeconds: 5, status: "draft" }; setScenes([...scenes, scene]); setSelectedId(scene.id); };
+  const updateScene = (patch: Partial<Scene>) => setScenes((current) => current.map((scene) => scene.id === selectedId ? { ...scene, ...patch, status: "draft", imagePath: undefined, videoPath: undefined, audioPath: undefined } : scene));
+  const removeScene = (id: string) => { const next = reindex(scenes.filter((scene) => scene.id !== id)); setScenes(next); setSelectedId(next[0]?.id ?? null); };
+  const duplicateScene = (scene: Scene) => { const copy: Scene = { ...structuredClone(scene), id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, title: `${scene.title} — копия`, status: "draft", imagePath: undefined, videoPath: undefined, audioPath: undefined }; const index = scenes.findIndex((item) => item.id === scene.id); const next = [...scenes]; next.splice(index + 1, 0, copy); setScenes(reindex(next)); setSelectedId(copy.id); };
+  const move = (id: string, direction: -1 | 1) => { const index = scenes.findIndex((scene) => scene.id === id); const target = index + direction; if (index < 0 || target < 0 || target >= scenes.length) return; const next = [...scenes]; const current = next[index]; const other = next[target]; if (!current || !other) return; next[index] = other; next[target] = current; setScenes(reindex(next)); };
+  const save = async () => { setSaving(true); try { await onSave(project.id, { scenes: reindex(scenes), status: scenes.length ? "ready" : "draft" }); } catch { /* Ошибка показана в общем уведомлении. */ } finally { setSaving(false); } };
+  return <div className="scenario-page page-with-actionbar"><PageHeading icon={<button className="back-icon" onClick={onBack}><ChevronLeft size={22} /></button>} title="Редактор сценария" subtitle={`${project.title} · ${scenes.length} сцен`} actions={<button className="ghost-button" onClick={addScene}><Plus size={15} />Добавить сцену</button>} />{scenes.length === 0 ? <EmptyState icon={<FileText size={34} />} title="Сценарий пуст" text="Добавьте первую сцену. Для каждой сцены можно задать текст, изображение и движение." action="Добавить сцену" onAction={addScene} /> : <div className="scenario-layout"><aside className="scene-list">{scenes.map((scene, index) => <article className={`scene-list-item${scene.id === selectedId ? " selected" : ""}`} key={scene.id} onClick={() => setSelectedId(scene.id)}><span>{index + 1}</span><div><strong>{scene.title}</strong><small>{scene.durationSeconds} сек · {scene.status}</small></div><div className="scene-mini-actions"><button title="Вверх" onClick={(event) => { event.stopPropagation(); move(scene.id, -1); }}><ArrowUp size={13} /></button><button title="Вниз" onClick={(event) => { event.stopPropagation(); move(scene.id, 1); }}><ArrowDown size={13} /></button></div></article>)}</aside>{selected && <section className="scene-editor"><div className="scene-editor-head"><div><strong>Сцена {selected.order + 1}</strong><small>ID: {selected.id}</small></div><div><button className="ghost-button" onClick={() => duplicateScene(selected)}><Copy size={14} />Копировать</button><button className="danger-button" onClick={() => removeScene(selected.id)}><Trash2 size={14} />Удалить</button></div></div><div className="scene-form-grid"><Field label="НАЗВАНИЕ СЦЕНЫ"><input value={selected.title} onChange={(event) => updateScene({ title: event.target.value })} /></Field><Field label="ДЛИТЕЛЬНОСТЬ, СЕК"><input type="number" min="1" max="60" value={selected.durationSeconds} onChange={(event) => updateScene({ durationSeconds: Math.max(1, Number(event.target.value)) })} /></Field></div><Field label="ТЕКСТ ОЗВУЧКИ"><textarea rows={5} value={selected.narration} onChange={(event) => updateScene({ narration: event.target.value })} placeholder="Текст, который прозвучит в этой сцене" /></Field><Field label="ПРОМПТ ИЗОБРАЖЕНИЯ"><textarea rows={5} value={selected.imagePrompt} onChange={(event) => updateScene({ imagePrompt: event.target.value })} placeholder="Опишите кадр, персонажей, локацию и стиль" /></Field><Field label="ПРОМПТ АНИМАЦИИ / ВИДЕО"><textarea rows={4} value={selected.animationPrompt} onChange={(event) => updateScene({ animationPrompt: event.target.value })} placeholder="Движение камеры и объектов в кадре" /></Field></section>}</div>}<div className="sticky-actions editor-actions"><span>{scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0)} секунд · {scenes.length} сцен</span><div><button className="outline-button" onClick={onBack}>Отмена</button><button className="generate-button" disabled={saving} onClick={() => void save()}><Save size={16} />{saving ? "Сохраняем..." : "Сохранить сценарий"}</button></div></div></div>;
+}
+
+function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project> }) {
+  const defaults = createDefaultProjectSettings().subtitles;
+  const [draft, setDraft] = useState<SubtitleSettings>(project?.settings.subtitles ?? defaults);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(structuredClone(project?.settings.subtitles ?? defaults)), [project?.id]);
+  if (!project) return <EmptyState icon={<Captions size={34} />} title="Проект не выбран" text="Создайте или выберите проект для настройки субтитров." action="Понятно" onAction={() => undefined} />;
+  const save = async () => { setSaving(true); try { await onSave(project.id, { settings: { ...project.settings, subtitles: draft } }); } catch { /* Ошибка показана в общем уведомлении. */ } finally { setSaving(false); } };
+  const previewStyle: CSSProperties = { fontFamily: draft.fontFamily, fontSize: `${Math.max(20, draft.fontSize / 2)}px`, color: draft.textColor, WebkitTextStroke: `${draft.outlineWidth}px ${draft.outlineColor}`, bottom: `${draft.bottomMargin}%`, textShadow: draft.shadow ? "0 6px 12px #000" : "none" };
+  return <div className="subtitle-page page-with-actionbar"><PageHeading icon={<Captions size={24} />} title="Студия субтитров" subtitle="Настройка стиля с живым предпросмотром" /><div className="subtitle-studio"><section className="subtitle-controls"><ToggleRow label="Включить субтитры" checked={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} /><Field label="ШРИФТ"><select value={draft.fontFamily} onChange={(event) => setDraft({ ...draft, fontFamily: event.target.value })}><option>Montserrat ExtraBold</option><option>Arial Black</option><option>Impact</option><option>Segoe UI</option></select></Field><Field label={`РАЗМЕР: ${draft.fontSize}`}><input type="range" min="24" max="110" value={draft.fontSize} onChange={(event) => setDraft({ ...draft, fontSize: Number(event.target.value) })} /></Field><div className="color-grid"><Field label="ЦВЕТ ТЕКСТА"><input type="color" value={draft.textColor} onChange={(event) => setDraft({ ...draft, textColor: event.target.value })} /></Field><Field label="КАРАОКЕ-АКЦЕНТ"><input type="color" value={draft.accentColor} onChange={(event) => setDraft({ ...draft, accentColor: event.target.value })} /></Field><Field label="ОБВОДКА"><input type="color" value={draft.outlineColor} onChange={(event) => setDraft({ ...draft, outlineColor: event.target.value })} /></Field></div><Field label={`ТОЛЩИНА ОБВОДКИ: ${draft.outlineWidth}`}><input type="range" min="0" max="10" value={draft.outlineWidth} onChange={(event) => setDraft({ ...draft, outlineWidth: Number(event.target.value) })} /></Field><Field label={`ОТСТУП СНИЗУ: ${draft.bottomMargin}%`}><input type="range" min="2" max="35" value={draft.bottomMargin} onChange={(event) => setDraft({ ...draft, bottomMargin: Number(event.target.value) })} /></Field><ToggleRow label="Тень" checked={draft.shadow} onChange={(shadow) => setDraft({ ...draft, shadow })} /><ToggleRow label="POP WORDS" checked={draft.popWords} onChange={(popWords) => setDraft({ ...draft, popWords })} /></section><section className="subtitle-preview-panel"><div className={`subtitle-video aspect-${project.aspectRatio.replace(":", "-")}`}><div className="preview-orbit"><span /><span /><span /></div><p style={previewStyle}>КОСМИЧЕСКИЙ <em style={{ color: draft.accentColor }}>КОТ</em></p></div><small>Предпросмотр {project.aspectRatio}. Текст будет синхронизирован после генерации озвучки.</small></section></div><div className="sticky-actions editor-actions"><span>Стиль хранится внутри проекта</span><div><button className="generate-button" disabled={saving} onClick={() => void save()}><Save size={16} />{saving ? "Сохраняем..." : "Сохранить стиль"}</button></div></div></div>;
+}
+
+function Director({ busy, onCreate }: { busy: boolean; onCreate: () => void }) {
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
-
-  function sendPrompt() {
-    if (!prompt.trim()) return;
-    setMessages((current) => [...current, { role: "user", text: prompt }, { role: "assistant", text: "Я подготовлю идею, персонажей, локации и полный сценарий. Пока API не подключён, можно создать демонстрационный проект." }]);
-    setPrompt("");
-  }
-
-  return (
-    <div className="director-page">
-      <PageHeading icon={<WandSparkles size={24} />} title="AI Генератор пресетов" subtitle="Создавай сценарии через чат с AI" actions={<><button className="icon-button"><Bot size={16} /></button><button className="icon-button"><SlidersHorizontal size={16} /></button><button className="ghost-button"><RotateCcw size={15} />История</button><button className="ghost-button"><Plus size={15} />Новый</button></>} />
-      <div className="chat-area">
-        {messages.length === 0 ? <div className="chat-empty"><WandSparkles size={38} /><h2>Создай сценарий</h2><p>Опиши нишу или идею. AI поможет придумать сюжет и подготовит полный пресет проекта.</p><div><button className="ghost-button" onClick={onCreate}>Сделай сценарий</button><button className="ghost-button">Анализ ниши</button></div><small>Недавние диалоги</small>{["Мультфильм о космическом коте", "История для YouTube", "Первое видео канала"].map((text) => <button className="recent-chat" key={text}><FileText size={13} />{text}<span>сегодня</span></button>)}</div> : <div className="messages">{messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${index}`}>{message.text}{message.role === "assistant" && <div className="message-files"><span>characters.json</span><span>locations.json</span><span>scenario.json</span></div>}</article>)}</div>}
-      </div>
-      <div className="chat-composer"><button><Paperclip size={19} /></button><button><Video size={19} /></button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendPrompt()} placeholder="Опиши что нужно или вставь скрин..." /><button className="send" onClick={sendPrompt} disabled={!prompt.trim()}>{creating ? <MoreHorizontal size={19} /> : <Send size={19} />}</button></div>
-    </div>
-  );
+  function sendPrompt() { if (!prompt.trim()) return; setMessages((current) => [...current, { role: "user", text: prompt }, { role: "assistant", text: "Я подготовил демонстрационный ответ. Реальный AI-провайдер подключится через адаптер, а сейчас можно создать проект с готовыми сценами." }]); setPrompt(""); }
+  return <div className="director-page"><PageHeading icon={<WandSparkles size={24} />} title="AI Генератор пресетов" subtitle="Создавай сценарии через чат с AI" actions={<><button className="icon-button"><Bot size={16} /></button><button className="ghost-button"><RotateCcw size={15} />История</button><button className="ghost-button"><Plus size={15} />Новый</button></>} /><div className="chat-area">{messages.length === 0 ? <div className="chat-empty"><WandSparkles size={38} /><h2>Создай сценарий</h2><p>Опиши нишу или идею. Пока API не подключён, программа создаст локальный демонстрационный пресет.</p><div><button className="ghost-button" disabled={busy} onClick={onCreate}>Сделай сценарий</button><button className="ghost-button">Анализ ниши</button></div><small>Недавние диалоги</small>{["Мультфильм о космическом коте", "История для YouTube", "Первое видео канала"].map((text) => <button className="recent-chat" key={text}><FileText size={13} />{text}<span>сегодня</span></button>)}</div> : <div className="messages">{messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${index}`}>{message.text}{message.role === "assistant" && <div className="message-files"><span>characters.json</span><span>locations.json</span><span>scenario.json</span></div>}</article>)}</div>}</div><div className="chat-composer"><button><Paperclip size={19} /></button><button><Video size={19} /></button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendPrompt()} placeholder="Опиши что нужно или вставь скрин..." /><button className="send" onClick={sendPrompt} disabled={!prompt.trim()}><Send size={19} /></button></div></div>;
 }
 
-function ProjectsPage({ projects, creating, onCreate }: { projects: Project[]; creating: boolean; onCreate: () => void }) {
-  return <div><PageHeading icon={<FolderOpen size={24} />} title="Проекты" subtitle="Все сохранённые проекты и материалы" actions={<button className="generate-button" onClick={onCreate}><Plus size={16} />{creating ? "Создаём..." : "Новый проект"}</button>} /><div className="projects-cards">{(projects.length ? projects : [demoProject("empty", "Проект #1")]).map((project) => <article key={project.id}><div><Clapperboard size={26} /><span>{project.aspectRatio}</span></div><h3>{project.title}</h3><p>{project.topic}</p><footer><span><i />{project.status === "ready" ? "Готов к генерации" : "Черновик"}</span><button><MoreHorizontal size={16} /></button></footer></article>)}</div></div>;
+function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete, onPreview, onTimeline, onGenerate }: { projects: Project[]; busy: boolean; onCreate: () => void; onOpen: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onTimeline: (id: string) => void; onGenerate: (id: string) => void }) {
+  return <div><PageHeading icon={<FolderOpen size={24} />} title="Проекты" subtitle="Все сохранённые проекты и материалы" actions={<button className="generate-button" disabled={busy} onClick={onCreate}><Plus size={16} />Новый проект</button>} />{projects.length === 0 ? <EmptyState icon={<FolderOpen size={34} />} title="Список пуст" text="Созданные проекты появятся здесь." action="Создать проект" onAction={onCreate} /> : <div className="projects-cards">{projects.map((project) => <article key={project.id}><div className="project-cover" onClick={() => onPreview(project.id)}><Clapperboard size={26} /><span>{project.aspectRatio}</span></div><h3>{project.title}</h3><p>{project.topic}</p><div className="project-card-meta"><span>{project.scenes.length} сцен</span><span>{Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0))} сек</span><span className={`status-${project.status}`}>{statusLabels[project.status]}</span></div><div className="card-action-grid"><button onClick={() => onOpen(project.id)}><Settings size={14} />Настроить</button><button onClick={() => onPreview(project.id)}><Eye size={14} />Превью</button><button onClick={() => onTimeline(project.id)}><Clock3 size={14} />Таймлайн</button><button onClick={() => onDuplicate(project.id)}><Copy size={14} />Копия</button><button className="danger" onClick={() => onDelete(project.id)}><Trash2 size={14} />Удалить</button><button className="gold" onClick={() => onGenerate(project.id)}><Play size={14} />Запустить</button></div></article>)}</div>}</div>;
 }
 
-function QueuePage({ tasks }: { tasks: QueueTask[] }) {
-  const mockTasks = tasks.length ? tasks : [
-    { id: "audio", label: "Аудио", progress: 0, detail: "Ожидает запуска", icon: <Volume2 size={18} /> },
-    { id: "images", label: "Картинки", progress: 35, detail: "42 / 120 сцен", icon: <Image size={18} /> },
-    { id: "video", label: "AI Видео", progress: 0, detail: "После изображений", icon: <Video size={18} /> },
-    { id: "assemble", label: "Сборка", progress: 0, detail: "Финальный этап", icon: <Clapperboard size={18} /> }
-  ];
-  return <div><PageHeading icon={<ListPlus size={24} />} title="Очередь" subtitle="Задачи генерации и повторные попытки" actions={<button className="danger-button"><X size={15} />Остановить всё</button>} /><section className="queue-board"><div className="queue-summary"><Stat label="Ожидают" value="3" /><Stat label="В работе" value="1" /><Stat label="Завершено" value="0" /><Stat label="Ошибки" value="0" /></div><div className="queue-cards">{mockTasks.map((task: any) => <article key={task.id}><div className="queue-card-head"><span>{task.icon}</span><div><strong>{task.label ?? task.kind}</strong><small>{task.detail ?? task.status}</small></div><em>{task.progress}%</em></div><div className="progress"><span style={{ width: `${task.progress}%` }} /></div><footer><span>{task.progress ? "Выполняется" : "В очереди"}</span><button><MoreHorizontal size={15} /></button></footer></article>)}</div></section></div>;
+function QueuePage({ tasks, projects, onPause, onResume, onStop, onRetry, onClear }: { tasks: QueueTask[]; projects: Project[]; onPause: (id: string) => void; onResume: (id: string) => void; onStop: (id: string) => void; onRetry: (id: string) => void; onClear: () => void }) {
+  const counts = { pending: tasks.filter((task) => task.status === "pending" || task.status === "retry_wait").length, running: tasks.filter((task) => task.status === "running").length, done: tasks.filter((task) => task.status === "done").length, failed: tasks.filter((task) => task.status === "failed" || task.status === "cancelled" || task.status === "blocked").length };
+  const activeProjectIds = [...new Set(tasks.filter((task) => !["done", "cancelled", "failed", "blocked"].includes(task.status)).map((task) => task.projectId))];
+  const icons: Record<QueueTask["kind"], ReactNode> = { director: <WandSparkles size={18} />, image: <Image size={18} />, video: <Video size={18} />, speech: <Volume2 size={18} />, assemble: <Clapperboard size={18} /> };
+  return <div><PageHeading icon={<ListPlus size={24} />} title="Очередь" subtitle="Mock-конвейер, прогресс и повторные попытки" actions={<button className="ghost-button" onClick={onClear}><Trash2 size={15} />Очистить завершённые</button>} />{activeProjectIds.length > 0 && <div className="queue-project-controls">{activeProjectIds.map((id) => { const project = projects.find((item) => item.id === id); const paused = project?.status === "paused"; return <div key={id}><span><Clapperboard size={15} />{project?.title ?? id}</span><button onClick={() => paused ? onResume(id) : onPause(id)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? "Продолжить" : "Пауза"}</button><button className="danger" onClick={() => onStop(id)}><Square size={13} />Стоп</button></div>; })}</div>}<section className="queue-board"><div className="queue-summary"><Stat label="Ожидают" value={String(counts.pending)} /><Stat label="В работе" value={String(counts.running)} /><Stat label="Завершено" value={String(counts.done)} /><Stat label="Ошибки / стоп" value={String(counts.failed)} /></div>{tasks.length === 0 ? <EmptyState icon={<ListPlus size={34} />} title="Очередь пуста" text="Откройте проект и нажмите «Генерировать видео»." action="Готово" onAction={() => undefined} /> : <div className="queue-cards">{tasks.map((task) => <article key={task.id} className={`queue-task status-${task.status}`}><div className="queue-card-head"><span>{icons[task.kind]}</span><div><strong>{task.label}</strong><small>{projects.find((project) => project.id === task.projectId)?.title ?? task.projectId}</small></div><em>{task.progress}%</em></div><div className="progress"><span style={{ width: `${task.progress}%` }} /></div><footer><span className="queue-status">{taskStatusLabel(task.status)} · попытка {task.attempts}/{task.maxAttempts}</span>{task.error && <span className="queue-error">{task.error}</span>}{task.status === "failed" && <button className="retry-button" onClick={() => onRetry(task.id)}><RotateCcw size={13} />Повторить</button>}</footer></article>)}</div>}</section></div>;
+}
+
+function ProjectPreviewModal({ project, initialMode, onClose }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void }) {
+  const [mode, setMode] = useState(initialMode);
+  const totalDuration = project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
+  const maxDuration = Math.max(totalDuration, 1);
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="preview-modal"><header><div><Clapperboard size={20} /><div><strong>{project.title}</strong><small>{project.outputPath ?? "Final.mp4 ещё не собран"}</small></div></div><div><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}><Grid2X2 size={14} />Сцены</button><button className={mode === "timeline" ? "active" : ""} onClick={() => setMode("timeline")}><Clock3 size={14} />Таймлайн</button><button className="modal-close" onClick={onClose}><X size={18} /></button></div></header><div className="preview-stats"><Stat label="Сцен" value={String(project.scenes.length)} /><Stat label="Изображений" value={String(project.scenes.filter((scene) => scene.imagePath).length)} /><Stat label="Видео" value={String(project.scenes.filter((scene) => scene.videoPath).length)} /><Stat label="Длительность" value={`${totalDuration} сек`} /></div>{mode === "preview" ? <div className="scene-gallery">{project.scenes.length === 0 ? <EmptyState icon={<Image size={32} />} title="Нет сцен" text="Добавьте сцены в редакторе сценария." action="Закрыть" onAction={onClose} /> : project.scenes.map((scene) => <article className="preview-scene" key={scene.id}><div className="scene-placeholder"><Image size={28} /><span>{scene.status}</span></div><div><strong>Сцена {scene.order + 1}: {scene.title}</strong><p>{scene.narration || "Текст озвучки не задан"}</p><small>{scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.videoPath ? "видео готово" : "видео ожидается"}</small></div></article>)}</div> : <div className="timeline"><div className="timeline-ruler"><span>0:00</span><span>{Math.round(totalDuration / 2)} сек</span><span>{totalDuration} сек</span></div>{(["Видео / фото", "Озвучка", "Субтитры"] as const).map((track) => <div className="timeline-track" key={track}><strong>{track}</strong><div>{project.scenes.map((scene) => <span key={scene.id} style={{ width: `${Math.max(8, scene.durationSeconds / maxDuration * 100)}%` }} title={scene.title}>{scene.order + 1}<small>{scene.title}</small></span>)}</div></div>)}</div>}<footer><button className="outline-button" onClick={onClose}>Закрыть</button><button className="generate-button" onClick={() => setMode(mode === "preview" ? "timeline" : "preview")}>{mode === "preview" ? <Clock3 size={15} /> : <Grid2X2 size={15} />}{mode === "preview" ? "Открыть таймлайн" : "Показать сцены"}</button></footer></section></div>;
 }
 
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
-  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Сейчас работает безопасный mock-режим. Реальные API подключим через отдельные адаптеры.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Режим" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные изображения" value="4" /><InfoRow label="Повторные попытки" value="3" /></section></div></div>;
+  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Сейчас работает безопасный mock-режим. Реальные API подключаются через отдельные адаптеры.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Режим" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} /><InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} /><InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} /></section></div></div>;
 }
 
 function ToolPage({ section }: { section: SectionKey }) {
   const definitions: Partial<Record<SectionKey, { title: string; subtitle: string; icon: ReactNode; action: string }>> = {
-    scenario: { title: "Сценарий", subtitle: "Редактирование сцен и текста озвучки", icon: <FileText size={25} />, action: "Создать сценарий" },
     clone: { title: "Клон YouTube", subtitle: "Анализ структуры референсного ролика", icon: <Copy size={25} />, action: "Добавить ссылку" },
-    subtitles: { title: "Субтитры", subtitle: "Стилизация и синхронизация текста", icon: <Captions size={25} />, action: "Загрузить видео" },
     thumbnail: { title: "Превью", subtitle: "AI генерация обложек для YouTube", icon: <Image size={25} />, action: "Создать превью" },
     avatar: { title: "Аватарка", subtitle: "Генератор аватаров канала", icon: <CircleUserRound size={25} />, action: "Создать аватар" },
     seo: { title: "SEO", subtitle: "Заголовки, описание и теги", icon: <Search size={25} />, action: "Проанализировать тему" },
@@ -388,37 +398,20 @@ function ToolPage({ section }: { section: SectionKey }) {
     console: { title: "Консоль", subtitle: "Системные события и журнал генерации", icon: <SquareTerminal size={25} />, action: "Очистить журнал" }
   };
   const definition = definitions[section] ?? definitions.studio!;
-  return <div><PageHeading icon={definition.icon} title={definition.title} subtitle={definition.subtitle} /><section className="tool-workspace"><div className="tool-hero">{definition.icon}<h2>{definition.title} готов к работе</h2><p>Интерфейс уже подключён к навигации. Функциональность будет добавляться по этапам вместе с API провайдеров.</p><button className="generate-button"><Plus size={16} />{definition.action}</button></div></section></div>;
+  return <div><PageHeading icon={definition.icon} title={definition.title} subtitle={definition.subtitle} /><section className="tool-workspace"><div className="tool-hero">{definition.icon}<h2>{definition.title} готов к подключению</h2><p>Экран повторяет структуру исходной программы. Провайдер будет подключён после добавления API-ключа.</p><button className="generate-button"><Plus size={16} />{definition.action}</button></div></section></div>;
 }
 
-function ConsoleDock({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return <div className={`console-dock${open ? " open" : ""}`}><button className="console-head" onClick={onToggle}><span><SquareTerminal size={14} />CONSOLE OUTPUT <em>4</em></span><span><Search size={13} /><Copy size={13} /><Save size={13} />{open ? "⌄" : "⌃"}</span></button>{open && <div className="console-lines"><p><time>22:18:04</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p><p><time>22:18:05</time><b>QUEUE</b> Очередь готова · 4 параллельных задачи</p></div>}</div>;
+function ConsoleDock({ open, queue, onToggle }: { open: boolean; queue: QueueTask[]; onToggle: () => void }) {
+  const running = queue.filter((task) => task.status === "running").length;
+  return <div className={`console-dock${open ? " open" : ""}`}><button className="console-head" onClick={onToggle}><span><SquareTerminal size={14} />CONSOLE OUTPUT <em>{queue.length}</em></span><span><Search size={13} /><Copy size={13} /><Save size={13} />{open ? "⌄" : "⌃"}</span></button>{open && <div className="console-lines"><p><time>{new Date().toLocaleTimeString("ru-RU")}</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p><p><time>{new Date().toLocaleTimeString("ru-RU")}</time><b>QUEUE</b> В работе: {running} · всего задач: {queue.length}</p></div>}</div>;
 }
 
-function SettingsPanel({ icon, title, children, wide }: { icon: ReactNode; title: string; children: ReactNode; wide?: boolean }) {
-  return <section className={`settings-panel${wide ? " wide" : ""}`}><h2>{icon}{title}</h2><div className="panel-content">{children}</div></section>;
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
-}
-
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <div className="toggle-row"><span>{label}</span><button className={`toggle${checked ? " on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}><i /></button></div>;
-}
-
-function PageHeading({ icon, title, subtitle, actions }: { icon: ReactNode; title: string; subtitle: string; actions?: ReactNode }) {
-  return <header className="page-heading"><div className="page-title-icon">{icon}</div><div><h1>{title}</h1><p>{subtitle}</p></div>{actions && <div className="heading-actions">{actions}</div>}</header>;
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return <article><span>{label}</span><strong>{value}</strong></article>;
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return <div className="info-row"><span>{label}</span><strong title={value}>{value}</strong></div>;
-}
-
-function demoProject(id: string, title: string): Project {
-  return { id, title, topic: "Проект для автоматической генерации видео", aspectRatio: "16:9", language: "Русский", mode: "standard", status: "draft", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), scenes: [] };
-}
+function SettingsPanel({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) { return <section className="settings-panel"><h2>{icon}{title}</h2><div className="panel-content">{children}</div></section>; }
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
+function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) { return <div className="toggle-row"><span>{label}</span><button className={`toggle${checked ? " on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}><i /></button></div>; }
+function PageHeading({ icon, title, subtitle, actions }: { icon: ReactNode; title: string; subtitle: string; actions?: ReactNode }) { return <header className="page-heading"><div className="page-title-icon">{icon}</div><div><h1>{title}</h1><p>{subtitle}</p></div>{actions && <div className="heading-actions">{actions}</div>}</header>; }
+function Stat({ label, value }: { label: string; value: string }) { return <article><span>{label}</span><strong>{value}</strong></article>; }
+function InfoRow({ label, value }: { label: string; value: string }) { return <div className="info-row"><span>{label}</span><strong title={value}>{value}</strong></div>; }
+function EmptyState({ icon, title, text, action, onAction }: { icon: ReactNode; title: string; text: string; action: string; onAction: () => void }) { return <section className="empty-state">{icon}<h2>{title}</h2><p>{text}</p><button className="outline-button" onClick={onAction}><Plus size={15} />{action}</button></section>; }
+function errorMessage(reason: unknown) { return reason instanceof Error ? reason.message : "Произошла неизвестная ошибка"; }
+function taskStatusLabel(status: QueueTask["status"]) { return ({ pending: "Ожидает", running: "Выполняется", retry_wait: "Ждёт повтора", paused: "Пауза", blocked: "Заблокировано", done: "Готово", failed: "Ошибка", cancelled: "Остановлено" } satisfies Record<QueueTask["status"], string>)[status]; }

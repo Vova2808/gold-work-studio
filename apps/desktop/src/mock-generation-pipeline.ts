@@ -1,0 +1,436 @@
+import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
+import type { Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
+
+export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
+  concurrency: 4,
+  maxAttempts: 3,
+  retryDelaysMs: [1000, 3000]
+};
+
+const taskStep: Record<TaskKind, number> = {
+  director: 18,
+  speech: 14,
+  image: 10,
+  video: 6,
+  assemble: 8
+};
+
+export class MockGenerationPipeline {
+  private tasks: QueueTask[] = [];
+  private initialization?: Promise<void>;
+  private mutation: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly repository: TaskRepository,
+    private readonly projects: ProjectService,
+    readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY
+  ) {}
+
+  async initialize(): Promise<void> {
+    if (!this.initialization) {
+      this.initialization = this.load();
+    }
+    await this.initialization;
+  }
+
+  async list(): Promise<QueueTask[]> {
+    await this.initialize();
+    return structuredClone(this.tasks).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async start(projectId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const project = await this.requireProject(projectId);
+      if (project.scenes.length === 0) throw new Error("Сначала добавьте хотя бы одну сцену");
+
+      const active = this.tasks.filter((task) =>
+        task.projectId === projectId && !["done", "failed", "cancelled"].includes(task.status)
+      );
+      if (active.length > 0) return structuredClone(active);
+
+      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
+      const now = new Date().toISOString();
+      const runId = createId("run");
+      const created: QueueTask[] = [];
+      const images: QueueTask[] = [];
+
+      for (const [index, scene] of project.scenes.entries()) {
+        if (project.settings.voice.enabled) {
+          const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${index + 1}`, [], now);
+          created.push(speech);
+        }
+
+        const previousImage = images[index - 1];
+        const imageDependencies = project.settings.image.sequential && previousImage ? [previousImage.id] : [];
+        const image = this.makeTask(runId, project, scene, "image", `Изображение · сцена ${index + 1}`, imageDependencies, now);
+        images.push(image);
+        created.push(image);
+      }
+
+      if (project.settings.video.enabled) {
+        for (const [index, scene] of project.scenes.entries()) {
+          const currentImage = images[index];
+          if (!currentImage) continue;
+          const nextImage = images[index + 1];
+          const videoDependencies = [currentImage.id];
+          if (project.settings.video.pairedFrames && nextImage) videoDependencies.push(nextImage.id);
+          created.push(this.makeTask(runId, project, scene, "video", `AI-видео · сцена ${index + 1}`, videoDependencies, now));
+        }
+      }
+
+      created.push(this.makeTask(runId, project, undefined, "assemble", "Сборка Final.mp4", created.map((task) => task.id), now));
+      this.tasks.push(...created);
+      await this.projects.mutate(projectId, (current) => ({
+        status: "generating",
+        outputPath: undefined,
+        scenes: current.scenes.map((scene) => ({
+          ...scene,
+          status: "queued",
+          imagePath: undefined,
+          videoPath: undefined,
+          audioPath: undefined
+        }))
+      }));
+      await this.persist();
+      return this.forProject(projectId);
+    });
+  }
+
+  async pause(projectId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const now = new Date().toISOString();
+      let changed = false;
+      for (const task of this.tasks) {
+        if (task.projectId === projectId && (task.status === "pending" || task.status === "running" || task.status === "retry_wait")) {
+          task.pausedFrom = task.status;
+          task.status = "paused";
+          task.updatedAt = now;
+          changed = true;
+        }
+      }
+      if (!changed) {
+        await this.syncProjects();
+        return this.forProject(projectId);
+      }
+      await this.projects.update(projectId, { status: "paused" });
+      await this.persist();
+      return this.forProject(projectId);
+    });
+  }
+
+  async resume(projectId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const now = new Date().toISOString();
+      let changed = false;
+      for (const task of this.tasks) {
+        if (task.projectId === projectId && task.status === "paused") {
+          task.status = task.pausedFrom === "retry_wait" ? "retry_wait" : "pending";
+          if (task.pausedFrom !== "running") task.pausedFrom = undefined;
+          task.updatedAt = now;
+          changed = true;
+        }
+      }
+      if (!changed) {
+        await this.syncProjects();
+        return this.forProject(projectId);
+      }
+      await this.projects.update(projectId, { status: "generating" });
+      await this.persist();
+      return this.forProject(projectId);
+    });
+  }
+
+  async stop(projectId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const now = new Date().toISOString();
+      let changed = false;
+      for (const task of this.tasks) {
+        if (task.projectId === projectId && ["pending", "running", "retry_wait", "paused", "blocked"].includes(task.status)) {
+          task.status = "cancelled";
+          task.pausedFrom = undefined;
+          task.nextAttemptAt = undefined;
+          task.updatedAt = now;
+          changed = true;
+        }
+      }
+      if (!changed) {
+        await this.syncProjects();
+        return this.forProject(projectId);
+      }
+      await this.projects.mutate(projectId, (project) => ({
+        status: "failed",
+        scenes: project.scenes.map((scene) =>
+          scene.status === "ready" ? scene : { ...scene, status: "failed" }
+        )
+      }));
+      await this.persist();
+      return this.forProject(projectId);
+    });
+  }
+
+  async retry(taskId: string): Promise<QueueTask> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const task = this.tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Задача ${taskId} не найдена`);
+      if (task.status === "cancelled") throw new Error("Остановленный проект нужно запустить заново");
+      if (task.status !== "failed") return structuredClone(task);
+      const project = await this.requireProject(task.projectId);
+      const runSceneIds = new Set(this.tasks.filter((candidate) => candidate.runId === task.runId && candidate.sceneId).map((candidate) => candidate.sceneId as string));
+      if (runSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !runSceneIds.has(scene.id))) {
+        throw new Error("Состав сцен изменился. Запустите генерацию проекта заново.");
+      }
+      task.status = "pending";
+      task.progress = 0;
+      task.attempts = 0;
+      task.error = undefined;
+      task.nextAttemptAt = undefined;
+      task.pausedFrom = undefined;
+      task.updatedAt = new Date().toISOString();
+      const unblockedIds = [task.id];
+      for (let index = 0; index < unblockedIds.length; index += 1) {
+        const parentId = unblockedIds[index];
+        for (const dependent of this.tasks) {
+          if (parentId && dependent.projectId === task.projectId && dependent.status === "blocked" && dependent.dependsOn.includes(parentId)) {
+            dependent.status = "pending";
+            dependent.error = undefined;
+            dependent.updatedAt = task.updatedAt;
+            unblockedIds.push(dependent.id);
+          }
+        }
+      }
+      await this.projects.update(task.projectId, { status: "generating" });
+      await this.persist();
+      return structuredClone(task);
+    });
+  }
+
+  async clearFinished(): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const runIds = [...new Set(this.tasks.map((task) => task.runId))];
+      const removableRuns = new Set(runIds.filter((runId) => {
+        const runTasks = this.tasks.filter((task) => task.runId === runId);
+        return runTasks.length > 0 && runTasks.every((task) => task.status === "done" || task.status === "cancelled");
+      }));
+      this.tasks = this.tasks.filter((task) => !removableRuns.has(task.runId));
+      await this.persist();
+      return structuredClone(this.tasks);
+    });
+  }
+
+  async removeProject(projectId: string): Promise<void> {
+    await this.initialize();
+    await this.mutate(async () => {
+      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
+      await this.persist();
+    });
+  }
+
+  async tick(): Promise<void> {
+    await this.initialize();
+    await this.mutate(async () => {
+      const now = new Date().toISOString();
+      const nowTime = Date.now();
+      let changed = false;
+
+      for (const task of this.tasks) {
+        if (task.status === "retry_wait" && (!task.nextAttemptAt || Date.parse(task.nextAttemptAt) <= nowTime)) {
+          task.status = "pending";
+          task.nextAttemptAt = undefined;
+          task.updatedAt = now;
+          changed = true;
+        }
+      }
+
+      for (const task of this.tasks.filter((candidate) => candidate.status === "running")) {
+        task.progress = Math.min(100, task.progress + taskStep[task.kind]);
+        task.updatedAt = now;
+        changed = true;
+        if (task.progress >= 60 && await this.shouldSimulateFailure(task)) {
+          task.progress = 0;
+          task.error = "Тестовая ошибка провайдера ([FAIL])";
+          if (task.attempts < task.maxAttempts) {
+            const delay = this.policy.retryDelaysMs[Math.min(task.attempts - 1, this.policy.retryDelaysMs.length - 1)] ?? 1000;
+            task.status = "retry_wait";
+            task.nextAttemptAt = new Date(nowTime + delay).toISOString();
+          } else {
+            task.status = "failed";
+          }
+          continue;
+        }
+        if (task.progress >= 100) {
+          task.status = "done";
+          task.error = undefined;
+          task.nextAttemptAt = undefined;
+          task.resultPath = `mock://${task.projectId}/${task.sceneId ?? "final"}/${task.kind}`;
+        }
+      }
+
+      let running = this.tasks.filter((task) => task.status === "running").length;
+      for (const task of this.tasks) {
+        if (running >= this.policy.concurrency) break;
+        if (task.status !== "pending") continue;
+        const dependencies = task.dependsOn.map((id) => this.tasks.find((candidate) => candidate.id === id));
+        if (dependencies.some((dependency) => dependency?.status === "failed" || dependency?.status === "cancelled" || dependency?.status === "blocked")) {
+          task.status = "blocked";
+          task.error = "Не выполнена предыдущая задача";
+          task.updatedAt = now;
+          changed = true;
+          continue;
+        }
+        if (!dependencies.every((dependency) => dependency?.status === "done")) continue;
+        task.status = "running";
+        if (task.pausedFrom !== "running") task.attempts += 1;
+        task.pausedFrom = undefined;
+        task.updatedAt = now;
+        running += 1;
+        changed = true;
+      }
+
+      if (changed) {
+        await this.persist();
+        await this.syncProjects();
+      }
+    });
+  }
+
+  private async load(): Promise<void> {
+    const loaded = await this.repository.list();
+    const now = new Date().toISOString();
+    const legacyRuns = new Map<string, string>();
+    this.tasks = loaded.map((task) => ({
+      ...task,
+      runId: task.runId || legacyRuns.get(task.projectId) || (() => {
+        const runId = createId("run");
+        legacyRuns.set(task.projectId, runId);
+        return runId;
+      })(),
+      label: task.label || task.kind,
+      status: task.status === "running" ? "pending" : task.status,
+      pausedFrom: task.status === "running" ? "running" : task.pausedFrom,
+      dependsOn: task.dependsOn ?? [],
+      createdAt: task.createdAt ?? now,
+      updatedAt: task.updatedAt ?? now,
+      maxAttempts: task.maxAttempts || this.policy.maxAttempts
+    }));
+    await this.persist();
+    await this.syncProjects();
+  }
+
+  private makeTask(
+    runId: string,
+    project: Project,
+    scene: Scene | undefined,
+    kind: TaskKind,
+    label: string,
+    dependsOn: string[],
+    now: string
+  ): QueueTask {
+    return {
+      id: createId("task"),
+      runId,
+      projectId: project.id,
+      sceneId: scene?.id,
+      kind,
+      label,
+      status: "pending",
+      attempts: 0,
+      maxAttempts: this.policy.maxAttempts,
+      progress: 0,
+      dependsOn,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  private async shouldSimulateFailure(task: QueueTask): Promise<boolean> {
+    if (!task.sceneId || task.kind === "speech" || task.kind === "assemble") return false;
+    const project = await this.projects.get(task.projectId);
+    const scene = project?.scenes.find((candidate) => candidate.id === task.sceneId);
+    return Boolean(scene && `${scene.imagePrompt}\n${scene.animationPrompt}`.includes("[FAIL]"));
+  }
+
+  private async syncProjects(): Promise<void> {
+    const projectIds = [...new Set(this.tasks.map((task) => task.projectId))];
+    for (const projectId of projectIds) {
+      const tasks = this.tasks.filter((task) => task.projectId === projectId);
+      if (tasks.length === 0) continue;
+      try {
+        await this.projects.mutate(projectId, (project) => {
+          const trackedSceneIds = new Set(tasks.filter((task) => task.sceneId).map((task) => task.sceneId as string));
+          const hasSceneGraphMismatch = trackedSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !trackedSceneIds.has(scene.id));
+          const projectStatus = hasSceneGraphMismatch
+            ? "failed"
+            : tasks.every((task) => task.status === "done")
+              ? "complete"
+              : tasks.some((task) => task.status === "failed" || task.status === "blocked" || task.status === "cancelled")
+                ? "failed"
+                : tasks.every((task) => task.status === "paused" || task.status === "done")
+                  ? "paused"
+                  : "generating";
+          const scenes = project.scenes.map((scene) => {
+            const sceneTasks = tasks.filter((task) => task.sceneId === scene.id);
+            if (sceneTasks.length === 0) return { ...scene, status: "failed" as const };
+            const imageTask = sceneTasks.find((task) => task.kind === "image" && task.status === "done");
+            const videoTask = sceneTasks.find((task) => task.kind === "video" && task.status === "done");
+            const speechTask = sceneTasks.find((task) => task.kind === "speech" && task.status === "done");
+            const status = sceneTasks.some((task) => task.status === "failed" || task.status === "blocked" || task.status === "cancelled")
+              ? "failed"
+              : sceneTasks.every((task) => task.status === "done")
+                ? "ready"
+                : sceneTasks.some((task) => task.status === "running")
+                  ? "generating"
+                  : "queued";
+            return {
+              ...scene,
+              status,
+              imagePath: imageTask?.resultPath ?? scene.imagePath,
+              videoPath: videoTask?.resultPath ?? scene.videoPath,
+              audioPath: speechTask?.resultPath ?? scene.audioPath
+            } satisfies Scene;
+          });
+          return {
+          status: projectStatus,
+          scenes,
+          outputPath: projectStatus === "complete" ? `mock://${projectId}/Final.mp4` : project.outputPath
+          };
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("не найден")) throw error;
+      }
+    }
+  }
+
+  private async requireProject(projectId: string): Promise<Project> {
+    const project = await this.projects.get(projectId);
+    if (!project) throw new Error(`Проект ${projectId} не найден`);
+    return project;
+  }
+
+  private forProject(projectId: string): QueueTask[] {
+    return structuredClone(this.tasks.filter((task) => task.projectId === projectId));
+  }
+
+  private async persist(): Promise<void> {
+    await this.repository.replace(this.tasks);
+  }
+
+  private async mutate<T>(action: () => Promise<T>): Promise<T> {
+    const previous = this.mutation;
+    let release: () => void = () => undefined;
+    this.mutation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+    }
+  }
+}

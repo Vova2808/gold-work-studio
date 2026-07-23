@@ -2,12 +2,14 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { CreateProjectInput, DesktopApi, QueueTask } from "@gold-work/shared";
+import type { CreateProjectInput, DesktopApi, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
+import { FileTaskRepository } from "./file-task-repository.js";
+import { MockGenerationPipeline } from "./mock-generation-pipeline.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
-const queue: QueueTask[] = [];
 let projectService: ProjectService;
+let pipeline: MockGenerationPipeline;
 let dataPath: string;
 
 function resolveDataPath(): string {
@@ -17,24 +19,47 @@ function resolveDataPath(): string {
 
 function registerIpc(): void {
   ipcMain.handle("projects:list", () => projectService.list());
+  ipcMain.handle("projects:get", (_event, id: string) => projectService.get(id));
   ipcMain.handle("projects:create", (_event, input: CreateProjectInput) => projectService.create(input));
   ipcMain.handle("projects:create-demo", () =>
     projectService.create(
       {
-        title: "Первый демонстрационный ролик",
-        topic: "Как одна маленькая привычка меняет день",
-        aspectRatio: "9:16",
+        title: "Барсик — космический кот",
+        topic: "Семейный мультфильм о приключении ленивого кота в космосе",
+        aspectRatio: "16:9",
         language: "Русский",
         mode: "standard"
       },
       true
     )
   );
-  ipcMain.handle("queue:list", () => queue);
+  ipcMain.handle("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
+  ipcMain.handle("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
+  ipcMain.handle("projects:delete", async (_event, id: string) => {
+    await pipeline.removeProject(id);
+    await projectService.delete(id);
+  });
+
+  ipcMain.handle("queue:list", () => pipeline.list());
+  ipcMain.handle("queue:start", (_event, projectId: string) => pipeline.start(projectId));
+  ipcMain.handle("queue:pause", (_event, projectId: string) => pipeline.pause(projectId));
+  ipcMain.handle("queue:resume", (_event, projectId: string) => pipeline.resume(projectId));
+  ipcMain.handle("queue:stop", (_event, projectId: string) => pipeline.stop(projectId));
+  ipcMain.handle("queue:retry", (_event, taskId: string) => pipeline.retry(taskId));
+  ipcMain.handle("queue:clear-finished", () => pipeline.clearFinished());
+  ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return;
+    if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+  });
+  ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
   ipcMain.handle("app:info", () => ({
     version: app.getVersion(),
     dataPath,
-    mockMode: true
+    mockMode: true,
+    queuePolicy: pipeline.policy
   } satisfies Awaited<ReturnType<DesktopApi["getAppInfo"]>>));
 }
 
@@ -46,6 +71,7 @@ async function createWindow(): Promise<void> {
     minHeight: 680,
     backgroundColor: "#090a0f",
     title: "Gold Work Studio",
+    frame: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(currentDirectory, "../preload/index.cjs"),
@@ -75,9 +101,8 @@ async function createWindow(): Promise<void> {
       }
     }
     throw lastError;
-  } else {
-    await window.loadFile(join(currentDirectory, "../renderer/index.html"));
   }
+  await window.loadFile(join(currentDirectory, "../renderer/index.html"));
 }
 
 app.whenReady().then(async () => {
@@ -86,6 +111,12 @@ app.whenReady().then(async () => {
     new FileProjectRepository(join(dataPath, "projects.json")),
     new MockDirectorProvider()
   );
+  pipeline = new MockGenerationPipeline(
+    new FileTaskRepository(join(dataPath, "queue.json")),
+    projectService
+  );
+  await pipeline.initialize();
+  setInterval(() => void pipeline.tick().catch((error: unknown) => console.error("[queue]", error)), 500);
   registerIpc();
   await createWindow();
   app.on("activate", async () => {
