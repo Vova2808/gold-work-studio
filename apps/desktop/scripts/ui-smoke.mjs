@@ -287,25 +287,33 @@ async function run() {
   await wait(350);
   const referenceReady = await window.webContents.executeJavaScript(`(() => {
     const card = document.querySelector(".reference-analysis");
-    return Boolean(card?.textContent?.includes("УЛУЧШЕННЫЙ ХУК") && card?.textContent?.includes("6 сцен"));
+    const youtube = document.querySelector(".youtube-analysis-details");
+    return Boolean(
+      card?.textContent?.includes("УЛУЧШЕННЫЙ ХУК")
+      && card?.textContent?.includes("6 сцен")
+      && youtube?.textContent?.includes("ТРАНСКРИПТ С ТАЙМКОДАМИ")
+      && youtube?.textContent?.includes("ТОП-КОММЕНТАРИИ")
+      && youtube?.textContent?.includes("подписчиков")
+      && youtube?.textContent?.includes("Кадры ролика не анализировались")
+    );
   })()`);
   if (!referenceReady) fail("разбор ссылки на ролик не появился");
   await trace("reference-analysis-ready");
 
   const referenceProjectCreated = await window.webContents.executeJavaScript(`(() => {
-    const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => item.textContent?.includes("Создать проект"));
+    const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => item.textContent?.includes("Согласен"));
     if (!button) return false;
     button.click();
     return true;
   })()`);
-  if (!referenceProjectCreated) fail("кнопка создания проекта из разбора не найдена");
+  if (!referenceProjectCreated) fail("кнопка согласия с YouTube-разбором не найдена");
   await wait(350);
   const referenceScenarioReady = await window.webContents.executeJavaScript(`(() => {
     const text = document.body.innerText;
-    return text.includes("Редактор сценария") && document.querySelectorAll(".scene-list-item").length === 6;
+    return text.includes("Локальный конвейер") && text.includes("Сборка Final.mp4") && Boolean(document.querySelector(".global-progress"));
   })()`);
-  if (!referenceScenarioReady) fail("проект из разбора не создался");
-  await trace("reference-project-ready");
+  if (!referenceScenarioReady) fail("проект из YouTube-разбора не запустился");
+  await trace("youtube-analysis-generation-ready");
 
   await window.webContents.executeJavaScript(`(() => {
     [...document.querySelectorAll(".nav-item")].find((item) => item.textContent?.trim() === "Проект")?.click();
@@ -341,7 +349,7 @@ async function run() {
   if (!settingsTabClicked) fail("вкладка AI и сценарии не найдена");
   await wait(100);
   const settingsTabsReady = await window.webContents.executeJavaScript(
-    "Boolean(document.querySelector('.settings-content')?.textContent?.includes('AnyModel API'))",
+    "Boolean(document.querySelector('.settings-content')?.textContent?.includes('AnyModel API') && document.querySelector('.settings-content')?.textContent?.includes('YouTube Data API v3'))",
   );
   if (!settingsTabsReady) fail("вкладки настроек не переключаются");
   await window.webContents.executeJavaScript(`(() => {

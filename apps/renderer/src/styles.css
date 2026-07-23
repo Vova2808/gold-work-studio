@@ -1087,6 +1087,67 @@ input[type="range"] {
 .analysis-grid small { color: #a28a4d; font-size: 7px; letter-spacing: .09em; }
 .analysis-grid p, .analysis-grid ul { margin: 7px 0 0; color: #aaa79e; font-size: 9px; line-height: 1.55; }
 .analysis-grid ul { padding-left: 16px; }
+.youtube-analysis-details {
+  margin: 0 12px 12px;
+  border: 1px solid #28251c;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #0d0d0c;
+}
+.youtube-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid #24221b;
+}
+.youtube-metrics span {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-right: 1px solid #24221b;
+  color: #66645d;
+  font-size: 8px;
+}
+.youtube-metrics span:last-child { border-right: 0; }
+.youtube-metrics strong { color: #dbc66f; font-size: 12px; }
+.youtube-context-grid {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1fr;
+  gap: 1px;
+  background: #24221b;
+}
+.youtube-context-grid > section {
+  min-width: 0;
+  max-height: 230px;
+  overflow: auto;
+  padding: 11px;
+  background: #10100f;
+}
+.youtube-context-grid small {
+  color: #a38b4c;
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+.youtube-context-grid p {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  margin: 8px 0 0;
+  color: #8d8a81;
+  font-size: 8px;
+  line-height: 1.45;
+}
+.youtube-context-grid b {
+  color: #c4ad60;
+  font-weight: 600;
+}
+.analysis-disclaimer {
+  margin: 0;
+  padding: 9px 11px;
+  border-top: 1px solid #24221b;
+  color: #807969;
+  font-size: 8px;
+  line-height: 1.5;
+}
 .reference-analysis > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 13px; border-top: 1px solid #22211d; }
 .reference-analysis > footer > span { max-width: 58%; color: #65635c; font-size: 8px; line-height: 1.45; }
 .chat-composer {

@@ -17,6 +17,7 @@ let projects: Project[] = [];
 let tasks: QueueTask[] = [];
 let chatTopics: ChatTopic[] = [];
 let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" };
+let youtubeSettings = { configured: false };
 
 function demoScenes(topic: string): Scene[] {
   return ["Завязка", "Главная мысль", "Финал"].map((title, order) => ({
@@ -45,6 +46,28 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     durationSeconds: 10,
     status: "draft" as const
   }));
+  const youtubeContext = /(?:youtube\.com|youtu\.be)$/i.test(parsed.hostname.replace(/^www\./, "")) ? {
+    videoId: parsed.searchParams.get("v") || parsed.pathname.split("/").filter(Boolean).at(-1) || "smoke",
+    title: "Демонстрационный YouTube-ролик",
+    description: "Mock-контекст для проверки интерфейса",
+    publishedAt: new Date().toISOString(),
+    channelId: "channel-smoke",
+    channelTitle: "Тестовый канал",
+    views: 125000,
+    likes: 8400,
+    commentCount: 640,
+    channelSubscribers: 92000,
+    channelViews: 4200000,
+    channelVideoCount: 84,
+    transcript: [
+      { startSeconds: 0, durationSeconds: 5, text: "Сильный хук исходного ролика." },
+      { startSeconds: 5, durationSeconds: 8, text: "Автор формулирует обещание зрителю." }
+    ],
+    transcriptSource: "captions" as const,
+    topComments: [{ author: "Зритель", text: "Полезно и без длинного вступления", likes: 125, publishedAt: new Date().toISOString() }],
+    recentVideos: [{ id: "recent-1", title: "Успешная тема канала", publishedAt: new Date().toISOString(), views: 210000, likes: 11000, commentCount: 700 }],
+    visualAnalysisIncluded: false as const
+  } : undefined;
   return {
     sourceUrl: parsed.toString(),
     sourceTitle: `Референс с ${parsed.hostname.replace(/^www\./, "")}`,
@@ -60,7 +83,8 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     language: "Русский",
     instructions,
     scenes,
-    provider: "mock-director"
+    provider: youtubeContext ? "mock-director+youtube-data-v3" : "mock-director",
+    youtubeContext
   };
 }
 
@@ -220,6 +244,18 @@ export const fallbackApi: DesktopApi = {
   },
   async testAnyModelConnection() {
     return { ok: false, message: "Проверка API доступна только в приложении Electron" };
+  },
+  async getYouTubeSettings() { return clone(youtubeSettings); },
+  async saveYouTubeSettings(input) {
+    youtubeSettings = { configured: Boolean(input.apiKey) || youtubeSettings.configured };
+    return clone(youtubeSettings);
+  },
+  async clearYouTubeKey() {
+    youtubeSettings.configured = false;
+    return clone(youtubeSettings);
+  },
+  async testYouTubeConnection() {
+    return { ok: false, message: "Проверка YouTube Data API доступна только в приложении Electron" };
   },
   async chatWithAnyModel() {
     return "Браузерный mock-ответ. Настоящий AnyModel-чат работает в Electron.";

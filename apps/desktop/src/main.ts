@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -14,6 +14,8 @@ import { TextFileLogger } from "./text-file-logger.js";
 import { AnyModelStore } from "./anymodel-store.js";
 import { AnyModelClient } from "./anymodel-client.js";
 import { ChatTopicRepository } from "./chat-topic-repository.js";
+import { YouTubeClient } from "./youtube-client.js";
+import { YouTubeStore } from "./youtube-store.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let projectService: ProjectService;
@@ -25,6 +27,8 @@ let dataPath: string;
 let anyModelStore: AnyModelStore;
 let anyModelClient: AnyModelClient;
 let chatTopics: ChatTopicRepository;
+let youtubeStore: YouTubeStore;
+let youtubeClient: YouTubeClient;
 let realtimeHttpServer: HttpServer;
 let realtimeServer: SocketServer;
 let realtimeUrl: string;
@@ -81,11 +85,24 @@ function registerIpc(): void {
       true
     )
   );
-  handleIpc("director:analyze-reference", async (_event, input: AnalyzeReferenceInput) =>
-    await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input)
-  );
+  handleIpc("director:analyze-reference", async (_event, input: AnalyzeReferenceInput) => {
+    if (/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(input.url)) {
+      if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
+      const context = await youtubeClient.collect(input.url);
+      return anyModelClient.analyzeYouTube(context, input);
+    }
+    return await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input);
+  });
   handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
-    analysis.provider.startsWith("anymodel:") ? anyModelClient.refine(analysis, instructions) : projectService.refineReference(analysis, instructions)
+    analysis.youtubeContext
+      ? anyModelClient.analyzeYouTube(analysis.youtubeContext, {
+          url: analysis.sourceUrl,
+          language: analysis.language,
+          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim()
+        })
+      : analysis.provider.startsWith("anymodel:")
+        ? anyModelClient.refine(analysis, instructions)
+        : projectService.refineReference(analysis, instructions)
   );
   handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
     projectService.createFromReference(input)
@@ -149,6 +166,10 @@ function registerIpc(): void {
   handleIpc("anymodel:save-settings", (_event, input: SaveAnyModelSettingsInput) => anyModelStore.save(input));
   handleIpc("anymodel:clear-key", () => anyModelStore.clearKey());
   handleIpc("anymodel:test", () => anyModelClient.test());
+  handleIpc("youtube:get-settings", () => youtubeStore.publicSettings());
+  handleIpc("youtube:save-settings", (_event, input: SaveYouTubeSettingsInput) => youtubeStore.save(input));
+  handleIpc("youtube:clear-key", () => youtubeStore.clearKey());
+  handleIpc("youtube:test", () => youtubeClient.test());
   handleIpc("anymodel:chat", (_event, messages: Parameters<AnyModelClient["chatMessage"]>[0]) =>
     anyModelClient.chatMessage(messages)
   );
@@ -301,6 +322,8 @@ app.whenReady().then(async () => {
   dataPath = resolveDataPath();
   anyModelStore = new AnyModelStore(join(dataPath, "credentials", "anymodel.json"));
   anyModelClient = new AnyModelClient(anyModelStore);
+  youtubeStore = new YouTubeStore(join(dataPath, "credentials", "youtube.json"));
+  youtubeClient = new YouTubeClient(youtubeStore, (audio, format) => anyModelClient.transcribeAudio(audio, format));
   chatTopics = new ChatTopicRepository(join(dataPath, "database", "gold-work-studio.sqlite"));
   await chatTopics.initialize();
   logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"));

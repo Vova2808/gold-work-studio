@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
+import { createDefaultProjectSettings, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -217,6 +217,24 @@ export function App() {
     }
   }
 
+  async function acceptYouTubeAnalysis(analysis: ReferenceAnalysis) {
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      await api.startGeneration(project.id);
+      setSelectedProjectId(project.id);
+      setActiveSection("queue");
+      await refresh();
+      setNotice("Разбор принят. Сценарий создан и генерация запущена.");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveProject(id: string, input: UpdateProjectInput) {
     setError(null);
     try {
@@ -328,7 +346,7 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createReferenceProject(analysis)} onInfo={setNotice} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createReferenceProject(analysis)} onAcceptYouTube={(analysis) => void acceptYouTubeAnalysis(analysis)} onInfo={setNotice} />}
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -1291,7 +1309,7 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void }) {
+function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onInfo }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onAcceptYouTube: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -1526,11 +1544,50 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
                   <section><small>ЧТО УЛУЧШИТЬ</small><ul>{analysis.improvements.map((item) => <li key={item}>{item}</li>)}</ul></section>
                   <section className="wide"><small>НОВЫЙ УГОЛ ПОДАЧИ</small><p>{analysis.suggestedAngle}</p></section>
                 </div>
+                {analysis.youtubeContext && (
+                  <div className="youtube-analysis-details">
+                    <div className="youtube-metrics">
+                      <span><strong>{analysis.youtubeContext.views.toLocaleString("ru-RU")}</strong> просмотров</span>
+                      <span><strong>{analysis.youtubeContext.likes.toLocaleString("ru-RU")}</strong> лайков</span>
+                      <span><strong>{analysis.youtubeContext.commentCount.toLocaleString("ru-RU")}</strong> комментариев</span>
+                      <span><strong>{analysis.youtubeContext.channelSubscribers.toLocaleString("ru-RU")}</strong> подписчиков</span>
+                    </div>
+                    <div className="youtube-context-grid">
+                      <section>
+                        <small>ТРАНСКРИПТ С ТАЙМКОДАМИ</small>
+                        <div className="transcript-preview">
+                          {analysis.youtubeContext.transcript.slice(0, 12).map((segment, index) => (
+                            <p key={`${segment.startSeconds}-${index}`}>
+                              <b>{formatTimestamp(segment.startSeconds)}</b>{segment.text}
+                            </p>
+                          ))}
+                        </div>
+                      </section>
+                      <section>
+                        <small>ТОП-КОММЕНТАРИИ</small>
+                        {analysis.youtubeContext.topComments.slice(0, 5).map((comment, index) => (
+                          <p key={`${comment.author}-${index}`}><b>♥ {comment.likes}</b>{comment.text}</p>
+                        ))}
+                        {analysis.youtubeContext.topComments.length === 0 && <p>Комментарии отключены или отсутствуют.</p>}
+                      </section>
+                      <section>
+                        <small>ЧТО ВЫСТРЕЛИЛО НА КАНАЛЕ</small>
+                        {analysis.youtubeContext.recentVideos.slice(0, 5).map((video) => (
+                          <p key={video.id}><b>{video.views.toLocaleString("ru-RU")}</b>{video.title}</p>
+                        ))}
+                      </section>
+                    </div>
+                    <p className="analysis-disclaimer">
+                      Кадры ролика не анализировались. Источник текста: {analysis.youtubeContext.transcriptSource}.
+                      {analysis.youtubeContext.transcriptionAudioMegabytes ? ` Аудио для Gemini: ${analysis.youtubeContext.transcriptionAudioMegabytes} МБ — расход токенов учитывается провайдером.` : " Транскрибация аудио не потребовалась, дополнительных токенов на неё нет."}
+                    </p>
+                  </div>
+                )}
                 <footer>
                   <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
-                  <button className="generate-button" disabled={busy || analyzing} onClick={() => onCreateFromReference(analysis)}>
+                  <button className="generate-button" disabled={busy || analyzing} onClick={() => analysis.youtubeContext ? onAcceptYouTube(analysis) : onCreateFromReference(analysis)}>
                     <WandSparkles size={15} />
-                    Создать проект и сценарий
+                    {analysis.youtubeContext ? "Согласен — запустить генерацию" : "Создать проект и сценарий"}
                   </button>
                 </footer>
               </article>
@@ -1830,11 +1887,24 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
   const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
   const [apiKey, setApiKey] = useState("");
+  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false });
+  const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
-  useEffect(() => { void api.getAnyModelSettings().then(setAnyModel); }, []);
+  useEffect(() => {
+    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings()]).then(([anyModelSettings, youtubeSettings]) => {
+      setAnyModel(anyModelSettings);
+      setYouTube(youtubeSettings);
+    });
+  }, []);
   const saveAnyModel = async () => {
     const saved = await api.saveAnyModelSettings({ ...anyModel, apiKey: apiKey || undefined });
     setAnyModel(saved); setApiKey(""); setConnectionMessage("Настройки сохранены локально и зашифрованы Windows");
+  };
+  const saveYouTube = async () => {
+    const saved = await api.saveYouTubeSettings({ apiKey: youtubeApiKey || undefined });
+    setYouTube(saved);
+    setYouTubeApiKey("");
+    setConnectionMessage("Ключ YouTube Data API сохранён локально и зашифрован Windows");
   };
   const tabs = [
     ["general", "Общие"],
@@ -1888,6 +1958,18 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                 <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.clearAnyModelKey().then(setAnyModel)}>Удалить ключ</button>
               </div>
               {connectionMessage && <p>{connectionMessage}</p>}
+              <h2>YouTube Data API v3 (BYOK)</h2>
+              <p>Используется только официальный API Google: метаданные, просмотры, лайки, комментарии и статистика канала. Ключ не попадает в проекты и логи.</p>
+              <InfoRow label="Статус YouTube" value={youtube.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="КЛЮЧ YOUTUBE DATA API V3">
+                <input type="password" value={youtubeApiKey} onChange={(event) => setYouTubeApiKey(event.target.value)} placeholder={youtube.configured ? "Оставьте пустым, чтобы не менять" : "AIza..."} />
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveYouTube()}><Save size={15} />Сохранить YouTube</button>
+                <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.testYouTubeConnection().then((result) => setConnectionMessage(result.message))}>Проверить YouTube</button>
+                <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.clearYouTubeKey().then(setYouTube)}>Удалить ключ</button>
+              </div>
+              <p>Транскрипт сначала берётся из субтитров. Если их нет, используется yt-dlp и аудио→Gemini через настроенную модель AnyModel. Этот фолбэк расходует токены; анализ кадров пока не выполняется. Получение субтитров и аудио через yt-dlp не является официальным YouTube API и может перестать работать при изменении правил или сайта.</p>
             </>
           )}
           {activeTab === "images" && (
@@ -2100,6 +2182,10 @@ function EmptyState({ icon, title, text, action, onAction }: { icon: ReactNode; 
 }
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : "Произошла неизвестная ошибка";
+}
+function formatTimestamp(seconds: number) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 function taskStatusLabel(status: QueueTask["status"]) {
   return (

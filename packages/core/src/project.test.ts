@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryProjectRepository, MockDirectorProvider, ProjectService } from "./index.js";
+import { parseYouTubeVideoId } from "@gold-work/shared";
 
 test("mock director creates a ready project with three scenes", async () => {
   const repository = new MemoryProjectRepository();
@@ -144,4 +145,11 @@ test("project keeps the saved director chat topic link", async () => {
   assert.equal(updated.chatTopicId, "topic-42");
   assert.equal((await service.get(project.id))?.chatTopicId, "topic-42");
   assert.equal(updated.status, "ready");
+});
+
+test("YouTube links are normalized without accepting unrelated hosts", () => {
+  assert.equal(parseYouTubeVideoId("https://youtu.be/dQw4w9WgXcQ?t=10"), "dQw4w9WgXcQ");
+  assert.equal(parseYouTubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+  assert.equal(parseYouTubeVideoId("https://youtube.com/shorts/dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+  assert.throws(() => parseYouTubeVideoId("https://example.com/watch?v=dQw4w9WgXcQ"), /корректный ID/);
 });

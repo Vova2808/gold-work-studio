@@ -95,6 +95,7 @@ export interface ReferenceAnalysis {
   instructions?: string;
   scenes: Scene[];
   provider: string;
+  youtubeContext?: YouTubeAnalysisContext;
 }
 
 export interface AnalyzeReferenceInput {
@@ -115,6 +116,41 @@ export interface AnyModelSettings {
   textModel: string;
   imageModel: string;
   videoModel: string;
+}
+
+export interface YouTubeSettings {
+  configured: boolean;
+}
+
+export interface SaveYouTubeSettingsInput {
+  apiKey?: string;
+}
+
+export interface TranscriptSegment {
+  startSeconds: number;
+  durationSeconds: number;
+  text: string;
+}
+
+export interface YouTubeAnalysisContext {
+  videoId: string;
+  title: string;
+  description: string;
+  publishedAt: string;
+  channelId: string;
+  channelTitle: string;
+  views: number;
+  likes: number;
+  commentCount: number;
+  channelSubscribers: number;
+  channelViews: number;
+  channelVideoCount: number;
+  transcript: TranscriptSegment[];
+  transcriptSource: "captions" | "yt-dlp-captions" | "gemini-audio";
+  transcriptionAudioMegabytes?: number;
+  topComments: Array<{ author: string; text: string; likes: number; publishedAt: string }>;
+  recentVideos: Array<{ id: string; title: string; publishedAt: string; views: number; likes: number; commentCount: number }>;
+  visualAnalysisIncluded: false;
 }
 
 export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "configured"> {
@@ -215,6 +251,10 @@ export interface DesktopApi {
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
   clearAnyModelKey(): Promise<AnyModelSettings>;
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
+  getYouTubeSettings(): Promise<YouTubeSettings>;
+  saveYouTubeSettings(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings>;
+  clearYouTubeKey(): Promise<YouTubeSettings>;
+  testYouTubeConnection(): Promise<{ ok: boolean; message: string }>;
   chatWithAnyModel(messages: AiChatMessage[]): Promise<string>;
   streamChatWithAnyModel(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string>;
   listChatTopics(): Promise<ChatTopicSummary[]>;
@@ -307,4 +347,21 @@ export function createDefaultProjectSettings(): ProjectSettings {
       quality: "standard"
     }
   };
+}
+
+export function parseYouTubeVideoId(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Укажите полную ссылку YouTube");
+  }
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  const id = host === "youtu.be"
+    ? url.pathname.split("/").filter(Boolean)[0]
+    : ["youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)
+      ? url.searchParams.get("v") ?? (url.pathname.match(/^\/(?:shorts|embed)\/([^/?]+)/)?.[1] ?? "")
+      : "";
+  if (!id || !/^[A-Za-z0-9_-]{6,20}$/.test(id)) throw new Error("Ссылка не содержит корректный ID YouTube-видео");
+  return id;
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, TranscriptSegment, YouTubeAnalysisContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 
@@ -57,6 +57,109 @@ export class AnyModelClient {
       suggestedTitle: parsed.suggestedTitle || "Новый ролик", recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
       language: input.language || "Русский", instructions: input.instructions, scenes, provider: `anymodel:${settings.textModel}`
     };
+  }
+
+  async analyzeYouTube(context: YouTubeAnalysisContext, input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+    const settings = await this.store.publicSettings();
+    const transcript = context.transcript
+      .map((segment) => `[${clock(segment.startSeconds)}] ${segment.text}`)
+      .join("\n")
+      .slice(0, 90_000);
+    const compactContext = {
+      video: {
+        title: context.title,
+        description: context.description.slice(0, 8_000),
+        publishedAt: context.publishedAt,
+        views: context.views,
+        likes: context.likes,
+        comments: context.commentCount
+      },
+      channel: {
+        title: context.channelTitle,
+        subscribers: context.channelSubscribers,
+        views: context.channelViews,
+        videos: context.channelVideoCount
+      },
+      topComments: context.topComments,
+      recentVideos: context.recentVideos,
+      transcriptSource: context.transcriptSource,
+      transcript
+    };
+    const content = await this.chat(settings.textModel, [
+      {
+        role: "system",
+        content: "Ты YouTube-аналитик и сценарный режиссёр. Верни только JSON без markdown. На основе транскрипта с таймкодами, официальной статистики и комментариев объясни, почему ролик работает, что зрителям нравится и что улучшить. Создай новый самостоятельный сценарий — не копируй оригинальный текст, персонажей или брендинг. Визуальные кадры не анализировались, не утверждай обратное."
+      },
+      {
+        role: "user",
+        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]`
+      }
+    ]);
+    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
+    const scenes = (parsed.scenes ?? []).map((scene, order) => ({
+      id: createId("scene"),
+      order,
+      title: scene.title || `Сцена ${order + 1}`,
+      narration: scene.narration || "",
+      imagePrompt: scene.imagePrompt || "",
+      animationPrompt: scene.animationPrompt || "",
+      durationSeconds: Math.max(3, Number(scene.durationSeconds) || 8),
+      status: "draft" as const
+    }));
+    if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
+    return {
+      sourceUrl: input.url,
+      sourceTitle: context.title,
+      niche: parsed.niche || "YouTube-контент",
+      targetAudience: parsed.targetAudience || "Аудитория исходного канала",
+      hook: parsed.hook || scenes[0]!.narration,
+      structure: parsed.structure || [],
+      strengths: parsed.strengths || [],
+      improvements: parsed.improvements || [],
+      suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
+      suggestedTitle: parsed.suggestedTitle || `Новый ролик: ${context.title}`,
+      recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
+      language: input.language || "Русский",
+      instructions: input.instructions,
+      scenes,
+      provider: `anymodel:${settings.textModel}+youtube-data-v3`,
+      youtubeContext: context
+    };
+  }
+
+  async transcribeAudio(audio: Buffer, format: string): Promise<TranscriptSegment[]> {
+    if (audio.byteLength > 25 * 1024 * 1024) throw new Error("Аудио больше 25 МБ. Выберите более короткий ролик или добавьте субтитры.");
+    const settings = await this.store.publicSettings();
+    const response = await this.request("/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: settings.textModel,
+        messages: [
+          {
+            role: "system",
+            content: "Транскрибируй аудио. Верни только JSON-массив без markdown: [{startSeconds,durationSeconds,text}]. Сохраняй язык оригинала и реальные таймкоды."
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Сделай полный транскрипт с таймкодами." },
+              { type: "input_audio", input_audio: { data: audio.toString("base64"), format } }
+            ]
+          }
+        ],
+        temperature: 0
+      })
+    });
+    if (!response.ok) throw new Error(`Gemini-аудио через AnyModel: ${await this.error(response)}`);
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error("Gemini вернул пустой транскрипт");
+    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Array<Partial<TranscriptSegment>>;
+    return parsed.map((segment) => ({
+      startSeconds: Math.max(0, Number(segment.startSeconds) || 0),
+      durationSeconds: Math.max(0, Number(segment.durationSeconds) || 0),
+      text: String(segment.text ?? "").trim()
+    })).filter((segment) => segment.text);
   }
 
   async refine(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis> {
@@ -198,4 +301,9 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+function clock(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
