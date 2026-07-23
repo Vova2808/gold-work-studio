@@ -148,12 +148,13 @@ function registerIpc(): void {
     const error = await shell.openPath(logger.path);
     if (error) throw new Error(error);
   });
-  handleIpc("app:pick-files", async (_event, kind: "image" | "audio" | "video" | "json", multiple = false) => {
+  handleIpc("app:pick-files", async (_event, kind: "image" | "audio" | "video" | "json" | "cookies", multiple = false) => {
     const filters = {
       image: [{ name: "Изображения", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
       audio: [{ name: "Аудио", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }],
       video: [{ name: "Видео", extensions: ["mp4", "mov", "webm", "mkv"] }],
-      json: [{ name: "JSON", extensions: ["json"] }]
+      json: [{ name: "JSON", extensions: ["json"] }],
+      cookies: [{ name: "YouTube cookies.txt", extensions: ["txt"] }]
     };
     const result = await dialog.showOpenDialog({
       title: "Выберите файлы",

@@ -17,7 +17,7 @@ let projects: Project[] = [];
 let tasks: QueueTask[] = [];
 let chatTopics: ChatTopic[] = [];
 let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" };
-let youtubeSettings = { configured: false };
+let youtubeSettings = { configured: false, cookiesFileConfigured: false, cookiesFileName: undefined as string | undefined };
 
 function demoScenes(topic: string): Scene[] {
   return ["Завязка", "Главная мысль", "Финал"].map((title, order) => ({
@@ -247,7 +247,11 @@ export const fallbackApi: DesktopApi = {
   },
   async getYouTubeSettings() { return clone(youtubeSettings); },
   async saveYouTubeSettings(input) {
-    youtubeSettings = { configured: Boolean(input.apiKey) || youtubeSettings.configured };
+    youtubeSettings = {
+      configured: Boolean(input.apiKey) || youtubeSettings.configured,
+      cookiesFileConfigured: input.clearCookiesFile ? false : Boolean(input.cookiesFilePath) || youtubeSettings.cookiesFileConfigured,
+      cookiesFileName: input.clearCookiesFile ? undefined : input.cookiesFilePath?.split(/[\\/]/).at(-1) ?? youtubeSettings.cookiesFileName
+    };
     return clone(youtubeSettings);
   },
   async clearYouTubeKey() {

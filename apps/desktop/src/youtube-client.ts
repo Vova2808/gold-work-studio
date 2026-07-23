@@ -122,10 +122,11 @@ export class YouTubeClient {
       // yt-dlp ниже устойчивее для части языков и возрастных ограничений.
     }
     const directory = await mkdtemp(join(tmpdir(), "gold-work-youtube-"));
+    const cookiesFilePath = await this.store.cookiesFilePath();
     try {
-      const subtitle = await this.ytDlpCaptions(url, directory);
+      const subtitle = await this.ytDlpCaptions(url, directory, cookiesFilePath);
       if (subtitle.length > 0) return { segments: subtitle, source: "yt-dlp-captions" };
-      const audioPath = await this.ytDlpAudio(url, directory);
+      const audioPath = await this.ytDlpAudio(url, directory, cookiesFilePath);
       const audio = await readFile(audioPath);
       const segments = await this.transcribeAudio(audio, extname(audioPath).slice(1) || "mp3");
       if (segments.length === 0) throw new Error("Gemini не вернул транскрипт аудио");
@@ -139,9 +140,10 @@ export class YouTubeClient {
     }
   }
 
-  private async ytDlpCaptions(url: string, directory: string): Promise<TranscriptSegment[]> {
+  private async ytDlpCaptions(url: string, directory: string, cookiesFilePath?: string): Promise<TranscriptSegment[]> {
     try {
       await runYtDlp([
+        ...ytDlpCookieArgs(cookiesFilePath),
         "--skip-download",
         "--write-subs",
         "--write-auto-subs",
@@ -158,9 +160,10 @@ export class YouTubeClient {
     }
   }
 
-  private async ytDlpAudio(url: string, directory: string): Promise<string> {
+  private async ytDlpAudio(url: string, directory: string, cookiesFilePath?: string): Promise<string> {
     try {
       await runYtDlp([
+        ...ytDlpCookieArgs(cookiesFilePath),
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "7",
@@ -169,7 +172,13 @@ export class YouTubeClient {
         url
       ]);
     } catch (error) {
-      throw new Error(`Не удалось получить субтитры, а аудио-фолбэк требует yt-dlp: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (/Sign in to confirm|not a bot|cookies/i.test(message)) {
+        throw new Error(cookiesFilePath
+          ? "YouTube отклонил cookies.txt. Откройте YouTube в браузере, экспортируйте свежий cookies.txt и выберите его повторно в Настройки → AI и сценарии."
+          : "YouTube запросил авторизацию. Экспортируйте свежий cookies.txt из браузера и выберите его в Настройки → AI и сценарии.");
+      }
+      throw new Error(`Не удалось получить субтитры или аудио через yt-dlp: ${message}`);
     }
     const file = (await readdir(directory)).find((name) => /^audio\./.test(name));
     if (!file) throw new Error("yt-dlp не создал аудиофайл");
@@ -259,6 +268,10 @@ async function runYtDlp(args: string[]): Promise<void> {
     }
   }
   throw lastError ?? new Error("yt-dlp не найден");
+}
+
+function ytDlpCookieArgs(cookiesFilePath?: string): string[] {
+  return cookiesFilePath ? ["--cookies", cookiesFilePath] : [];
 }
 
 function runProcess(executable: string, args: string[]): Promise<void> {

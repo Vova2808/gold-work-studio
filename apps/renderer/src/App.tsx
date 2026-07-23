@@ -1887,7 +1887,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
   const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
   const [apiKey, setApiKey] = useState("");
-  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false });
+  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
@@ -1905,6 +1905,13 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
     setYouTube(saved);
     setYouTubeApiKey("");
     setConnectionMessage("Ключ YouTube Data API сохранён локально и зашифрован Windows");
+  };
+  const chooseYouTubeCookies = async () => {
+    const [cookiesFilePath] = await api.pickFiles("cookies");
+    if (!cookiesFilePath) return;
+    const saved = await api.saveYouTubeSettings({ cookiesFilePath });
+    setYouTube(saved);
+    setConnectionMessage("cookies.txt сохранён локально и будет использоваться только yt-dlp");
   };
   const tabs = [
     ["general", "Общие"],
@@ -1968,6 +1975,13 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                 <button className="generate-button" onClick={() => void saveYouTube()}><Save size={15} />Сохранить YouTube</button>
                 <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.testYouTubeConnection().then((result) => setConnectionMessage(result.message))}>Проверить YouTube</button>
                 <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.clearYouTubeKey().then(setYouTube)}>Удалить ключ</button>
+              </div>
+              <h2>Авторизация yt-dlp</h2>
+              <p>Если YouTube показывает «Sign in to confirm you’re not a bot», экспортируйте свежий cookies.txt из браузера в формате Netscape и выберите его здесь. Файл остаётся на вашем компьютере. Не отправляйте его другим людям и не добавляйте в GitHub.</p>
+              <InfoRow label="Cookies YouTube" value={youtube.cookiesFileConfigured ? youtube.cookiesFileName ?? "Настроены" : "Не настроены"} />
+              <div className="provider-actions">
+                <button className="outline-button small" onClick={() => void chooseYouTubeCookies()}>Выбрать cookies.txt</button>
+                <button className="outline-button small" disabled={!youtube.cookiesFileConfigured} onClick={() => void api.saveYouTubeSettings({ clearCookiesFile: true }).then(setYouTube)}>Удалить cookies</button>
               </div>
               <p>Транскрипт сначала берётся из субтитров. Если их нет, используется yt-dlp и аудио→Gemini через настроенную модель AnyModel. Этот фолбэк расходует токены; анализ кадров пока не выполняется. Получение субтитров и аудио через yt-dlp не является официальным YouTube API и может перестать работать при изменении правил или сайта.</p>
             </>

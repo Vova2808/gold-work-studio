@@ -51,7 +51,7 @@ const api: DesktopApi = {
   writeLog: (level: LogLevel, message: string, details?: Record<string, unknown>) =>
     ipcRenderer.invoke("app:write-log", level, message, details),
   openLogFile: () => ipcRenderer.invoke("app:open-log"),
-  pickFiles: (kind: "image" | "audio" | "video" | "json", multiple = false) =>
+  pickFiles: (kind: "image" | "audio" | "video" | "json" | "cookies", multiple = false) =>
     ipcRenderer.invoke("app:pick-files", kind, multiple),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),

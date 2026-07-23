@@ -120,10 +120,14 @@ export interface AnyModelSettings {
 
 export interface YouTubeSettings {
   configured: boolean;
+  cookiesFileConfigured: boolean;
+  cookiesFileName?: string;
 }
 
 export interface SaveYouTubeSettingsInput {
   apiKey?: string;
+  cookiesFilePath?: string;
+  clearCookiesFile?: boolean;
 }
 
 export interface TranscriptSegment {
@@ -277,7 +281,7 @@ export interface DesktopApi {
   openProjectFolder(projectId: string): Promise<void>;
   writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
   openLogFile(): Promise<void>;
-  pickFiles(kind: "image" | "audio" | "video" | "json", multiple?: boolean): Promise<string[]>;
+  pickFiles(kind: "image" | "audio" | "video" | "json" | "cookies", multiple?: boolean): Promise<string[]>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;

@@ -1,10 +1,11 @@
 import { safeStorage } from "electron";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import type { SaveYouTubeSettingsInput, YouTubeSettings } from "@gold-work/shared";
 
 interface StoredYouTubeSettings {
   encryptedApiKey?: string;
+  cookiesFilePath?: string;
 }
 
 export class YouTubeStore {
@@ -15,7 +16,16 @@ export class YouTubeStore {
   }
 
   async publicSettings(): Promise<YouTubeSettings> {
-    return { configured: Boolean((await this.read()).encryptedApiKey) };
+    const stored = await this.read();
+    return {
+      configured: Boolean(stored.encryptedApiKey),
+      cookiesFileConfigured: Boolean(stored.cookiesFilePath),
+      cookiesFileName: stored.cookiesFilePath ? basename(stored.cookiesFilePath) : undefined
+    };
+  }
+
+  async cookiesFilePath(): Promise<string | undefined> {
+    return (await this.read()).cookiesFilePath ?? process.env.YT_DLP_COOKIES_PATH;
   }
 
   async apiKey(): Promise<string | undefined> {
@@ -27,16 +37,33 @@ export class YouTubeStore {
 
   async save(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings> {
     const current = await this.read();
+    let changed = false;
     if (input.apiKey?.trim()) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error("Защищённое хранилище Windows недоступно");
       current.encryptedApiKey = safeStorage.encryptString(input.apiKey.trim()).toString("base64");
-      await this.write(current);
+      changed = true;
     }
+    if (input.cookiesFilePath?.trim()) {
+      const cookiesFilePath = input.cookiesFilePath.trim();
+      const header = (await readFile(cookiesFilePath, "utf8")).slice(0, 500);
+      if (!/Netscape HTTP Cookie File/i.test(header)) {
+        throw new Error("Выберите cookies.txt в формате Netscape");
+      }
+      current.cookiesFilePath = cookiesFilePath;
+      changed = true;
+    }
+    if (input.clearCookiesFile) {
+      delete current.cookiesFilePath;
+      changed = true;
+    }
+    if (changed) await this.write(current);
     return this.publicSettings();
   }
 
   async clearKey(): Promise<YouTubeSettings> {
-    await this.write({});
+    const current = await this.read();
+    delete current.encryptedApiKey;
+    await this.write(current);
     return this.publicSettings();
   }
 

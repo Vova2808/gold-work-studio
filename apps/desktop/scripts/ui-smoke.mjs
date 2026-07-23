@@ -207,6 +207,10 @@ async function run() {
     [...document.querySelectorAll(".settings-menu button")].find((item) => item.textContent?.includes("AI и сценарии"))?.click();
   })()`);
   await wait(100);
+  const youtubeCookiesSettingsReady = await window.webContents.executeJavaScript(
+    "document.body.innerText.includes('Авторизация yt-dlp') && document.body.innerText.includes('Выбрать cookies.txt')",
+  );
+  if (!youtubeCookiesSettingsReady) fail("настройка YouTube cookies.txt не отображается");
   const mockProviderConfigured = await window.webContents.executeJavaScript(`(() => {
     const input = document.querySelector('.settings-content input[type="password"]');
     if (!input) return false;
