@@ -1,5 +1,7 @@
 import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
 import type { Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
+import { LocalProjectStorage } from "./local-project-storage.js";
+import { StandardRenderer } from "./standard-renderer.js";
 
 export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
   concurrency: 4,
@@ -23,6 +25,8 @@ export class MockGenerationPipeline {
   constructor(
     private readonly repository: TaskRepository,
     private readonly projects: ProjectService,
+    private readonly storage: LocalProjectStorage,
+    private readonly renderer: StandardRenderer,
     readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY
   ) {}
 
@@ -42,6 +46,7 @@ export class MockGenerationPipeline {
     await this.initialize();
     return this.mutate(async () => {
       const project = await this.requireProject(projectId);
+      await this.storage.ensureProject(project);
       if (project.scenes.length === 0) throw new Error("Сначала добавьте хотя бы одну сцену");
 
       const active = this.tasks.filter((task) =>
@@ -92,6 +97,87 @@ export class MockGenerationPipeline {
           audioPath: undefined
         }))
       }));
+      await this.persist();
+      return this.forProject(projectId);
+    });
+  }
+
+  async regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const project = await this.requireProject(projectId);
+      const scene = project.scenes.find((candidate) => candidate.id === sceneId);
+      if (!scene) throw new Error("Сцена не найдена");
+      const projectTasks = this.tasks.filter((task) => task.projectId === projectId);
+      if (projectTasks.some((task) => ["pending", "running", "retry_wait", "paused"].includes(task.status))) {
+        throw new Error("Сначала дождитесь завершения или остановите текущую очередь");
+      }
+
+      const runId = projectTasks[0]?.runId ?? createId("run");
+      const now = new Date().toISOString();
+      this.tasks = this.tasks.filter(
+        (task) => task.projectId !== projectId || (task.sceneId !== sceneId && task.kind !== "assemble")
+      );
+      const runTasks = this.tasks.filter((task) => task.projectId === projectId && task.runId === runId);
+      const created: QueueTask[] = [];
+
+      if (project.settings.voice.enabled) {
+        created.push(this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now));
+      }
+      const previousScene = project.scenes.find((candidate) => candidate.order === scene.order - 1);
+      const previousImage = project.settings.image.sequential && previousScene
+        ? runTasks.find((task) => task.sceneId === previousScene.id && task.kind === "image")
+        : undefined;
+      const image = this.makeTask(
+        runId,
+        project,
+        scene,
+        "image",
+        `Изображение · сцена ${scene.order + 1}`,
+        previousImage ? [previousImage.id] : [],
+        now
+      );
+      created.push(image);
+      if (project.settings.video.enabled) {
+        const nextScene = project.scenes.find((candidate) => candidate.order === scene.order + 1);
+        const nextImage = project.settings.video.pairedFrames && nextScene
+          ? runTasks.find((task) => task.sceneId === nextScene.id && task.kind === "image")
+          : undefined;
+        created.push(
+          this.makeTask(
+            runId,
+            project,
+            scene,
+            "video",
+            `AI-видео · сцена ${scene.order + 1}`,
+            [image.id, ...(nextImage ? [nextImage.id] : [])],
+            now
+          )
+        );
+      }
+      this.tasks.push(...created);
+      const assembleDependencies = this.tasks
+        .filter((task) => task.projectId === projectId && task.runId === runId && task.kind !== "assemble")
+        .map((task) => task.id);
+      this.tasks.push(
+        this.makeTask(runId, project, undefined, "assemble", "Сборка Final.mp4", assembleDependencies, now)
+      );
+      await this.projects.mutate(projectId, (current) => ({
+        status: "generating",
+        outputPath: undefined,
+        scenes: current.scenes.map((candidate) =>
+          candidate.id === sceneId
+            ? {
+                ...candidate,
+                status: "queued",
+                imagePath: undefined,
+                videoPath: undefined,
+                audioPath: undefined
+              }
+            : candidate
+        )
+      }));
+      await this.storage.ensureProject(await this.requireProject(projectId));
       await this.persist();
       return this.forProject(projectId);
     });
@@ -264,10 +350,14 @@ export class MockGenerationPipeline {
           continue;
         }
         if (task.progress >= 100) {
-          task.status = "done";
-          task.error = undefined;
-          task.nextAttemptAt = undefined;
-          task.resultPath = `mock://${task.projectId}/${task.sceneId ?? "final"}/${task.kind}`;
+          try {
+            task.resultPath = await this.executeTask(task);
+            task.status = "done";
+            task.error = undefined;
+            task.nextAttemptAt = undefined;
+          } catch (error) {
+            this.scheduleFailure(task, error, nowTime);
+          }
         }
       }
 
@@ -355,6 +445,34 @@ export class MockGenerationPipeline {
     return Boolean(scene && `${scene.imagePrompt}\n${scene.animationPrompt}`.includes("[FAIL]"));
   }
 
+  private async executeTask(task: QueueTask): Promise<string> {
+    const project = await this.requireProject(task.projectId);
+    await this.storage.ensureProject(project);
+    if (task.kind === "assemble") return this.renderer.render(project);
+    if (task.kind === "director") return `local://${project.id}/scenario.json`;
+    const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
+    if (!scene) throw new Error("Сцена для задачи не найдена");
+    if (task.kind === "image") return this.storage.createPlaceholderImage(project, scene);
+    if (task.kind === "speech") return this.storage.createPlaceholderAudio(project, scene);
+    if (task.kind === "video") return this.renderer.renderScene(project, scene);
+    throw new Error(`Неизвестный тип задачи: ${task.kind}`);
+  }
+
+  private scheduleFailure(task: QueueTask, error: unknown, nowTime: number): void {
+    task.progress = 0;
+    task.error = error instanceof Error ? error.message : String(error);
+    if (task.attempts < task.maxAttempts) {
+      const delay = this.policy.retryDelaysMs[
+        Math.min(task.attempts - 1, this.policy.retryDelaysMs.length - 1)
+      ] ?? 1000;
+      task.status = "retry_wait";
+      task.nextAttemptAt = new Date(nowTime + delay).toISOString();
+    } else {
+      task.status = "failed";
+      task.nextAttemptAt = undefined;
+    }
+  }
+
   private async syncProjects(): Promise<void> {
     const projectIds = [...new Set(this.tasks.map((task) => task.projectId))];
     for (const projectId of projectIds) {
@@ -394,10 +512,11 @@ export class MockGenerationPipeline {
               audioPath: speechTask?.resultPath ?? scene.audioPath
             } satisfies Scene;
           });
+          const finalTask = tasks.find((task) => task.kind === "assemble" && task.status === "done");
           return {
-          status: projectStatus,
-          scenes,
-          outputPath: projectStatus === "complete" ? `mock://${projectId}/Final.mp4` : project.outputPath
+            status: projectStatus,
+            scenes,
+            outputPath: projectStatus === "complete" ? finalTask?.resultPath : project.outputPath
           };
         });
       } catch (error) {

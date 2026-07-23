@@ -243,6 +243,29 @@ export function App() {
     }
   }
 
+  async function regenerateScene(projectId: string, sceneId: string) {
+    setBusy(true);
+    try {
+      await api.regenerateScene(projectId, sceneId);
+      setOverlay(null);
+      setSelectedProjectId(projectId);
+      setActiveSection("queue");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openProjectFolder(projectId: string) {
+    try {
+      await api.openProjectFolder(projectId);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
   function navigate(section: SectionKey) {
     setActiveSection(section);
     if (section === "settings") void api.getAppInfo().then(setAppInfo);
@@ -268,7 +291,7 @@ export function App() {
           <ConsoleDock open={consoleOpen} queue={queue} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
-      {overlay && overlayProject && <ProjectPreviewModal project={overlayProject} initialMode={overlay.type} onClose={() => setOverlay(null)} />}
+      {overlay && overlayProject && <ProjectPreviewModal project={overlayProject} initialMode={overlay.type} onClose={() => setOverlay(null)} onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)} onOpenFolder={() => void openProjectFolder(overlayProject.id)} />}
       {error && <div className="error-toast"><X size={15} /><span>{error}</span><button onClick={() => setError(null)}>×</button></div>}
     </div>
   );
@@ -374,18 +397,74 @@ function QueuePage({ tasks, projects, onPause, onResume, onStop, onRetry, onClea
   const counts = { pending: tasks.filter((task) => task.status === "pending" || task.status === "retry_wait").length, running: tasks.filter((task) => task.status === "running").length, done: tasks.filter((task) => task.status === "done").length, failed: tasks.filter((task) => task.status === "failed" || task.status === "cancelled" || task.status === "blocked").length };
   const activeProjectIds = [...new Set(tasks.filter((task) => !["done", "cancelled", "failed", "blocked"].includes(task.status)).map((task) => task.projectId))];
   const icons: Record<QueueTask["kind"], ReactNode> = { director: <WandSparkles size={18} />, image: <Image size={18} />, video: <Video size={18} />, speech: <Volume2 size={18} />, assemble: <Clapperboard size={18} /> };
-  return <div><PageHeading icon={<ListPlus size={24} />} title="Очередь" subtitle="Mock-конвейер, прогресс и повторные попытки" actions={<button className="ghost-button" onClick={onClear}><Trash2 size={15} />Очистить завершённые</button>} />{activeProjectIds.length > 0 && <div className="queue-project-controls">{activeProjectIds.map((id) => { const project = projects.find((item) => item.id === id); const paused = project?.status === "paused"; return <div key={id}><span><Clapperboard size={15} />{project?.title ?? id}</span><button onClick={() => paused ? onResume(id) : onPause(id)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? "Продолжить" : "Пауза"}</button><button className="danger" onClick={() => onStop(id)}><Square size={13} />Стоп</button></div>; })}</div>}<section className="queue-board"><div className="queue-summary"><Stat label="Ожидают" value={String(counts.pending)} /><Stat label="В работе" value={String(counts.running)} /><Stat label="Завершено" value={String(counts.done)} /><Stat label="Ошибки / стоп" value={String(counts.failed)} /></div>{tasks.length === 0 ? <EmptyState icon={<ListPlus size={34} />} title="Очередь пуста" text="Откройте проект и нажмите «Генерировать видео»." action="Готово" onAction={() => undefined} /> : <div className="queue-cards">{tasks.map((task) => <article key={task.id} className={`queue-task status-${task.status}`}><div className="queue-card-head"><span>{icons[task.kind]}</span><div><strong>{task.label}</strong><small>{projects.find((project) => project.id === task.projectId)?.title ?? task.projectId}</small></div><em>{task.progress}%</em></div><div className="progress"><span style={{ width: `${task.progress}%` }} /></div><footer><span className="queue-status">{taskStatusLabel(task.status)} · попытка {task.attempts}/{task.maxAttempts}</span>{task.error && <span className="queue-error">{task.error}</span>}{task.status === "failed" && <button className="retry-button" onClick={() => onRetry(task.id)}><RotateCcw size={13} />Повторить</button>}</footer></article>)}</div>}</section></div>;
+  return <div><PageHeading icon={<ListPlus size={24} />} title="Очередь" subtitle="Локальный конвейер, прогресс и повторные попытки" actions={<button className="ghost-button" onClick={onClear}><Trash2 size={15} />Очистить завершённые</button>} />{activeProjectIds.length > 0 && <div className="queue-project-controls">{activeProjectIds.map((id) => { const project = projects.find((item) => item.id === id); const paused = project?.status === "paused"; return <div key={id}><span><Clapperboard size={15} />{project?.title ?? id}</span><button onClick={() => paused ? onResume(id) : onPause(id)}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? "Продолжить" : "Пауза"}</button><button className="danger" onClick={() => onStop(id)}><Square size={13} />Стоп</button></div>; })}</div>}<section className="queue-board"><div className="queue-summary"><Stat label="Ожидают" value={String(counts.pending)} /><Stat label="В работе" value={String(counts.running)} /><Stat label="Завершено" value={String(counts.done)} /><Stat label="Ошибки / стоп" value={String(counts.failed)} /></div>{tasks.length === 0 ? <EmptyState icon={<ListPlus size={34} />} title="Очередь пуста" text="Откройте проект и нажмите «Генерировать видео»." action="Готово" onAction={() => undefined} /> : <div className="queue-cards">{tasks.map((task) => <article key={task.id} className={`queue-task status-${task.status}`}><div className="queue-card-head"><span>{icons[task.kind]}</span><div><strong>{task.label}</strong><small>{projects.find((project) => project.id === task.projectId)?.title ?? task.projectId}</small></div><em>{task.progress}%</em></div><div className="progress"><span style={{ width: `${task.progress}%` }} /></div><footer><span className="queue-status">{taskStatusLabel(task.status)} · попытка {task.attempts}/{task.maxAttempts}</span>{task.error && <span className="queue-error">{task.error}</span>}{task.status === "failed" && <button className="retry-button" onClick={() => onRetry(task.id)}><RotateCcw size={13} />Повторить</button>}</footer></article>)}</div>}</section></div>;
 }
 
-function ProjectPreviewModal({ project, initialMode, onClose }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void }) {
+function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string) => void; onOpenFolder: () => void }) {
   const [mode, setMode] = useState(initialMode);
   const totalDuration = project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
   const maxDuration = Math.max(totalDuration, 1);
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="preview-modal"><header><div><Clapperboard size={20} /><div><strong>{project.title}</strong><small>{project.outputPath ?? "Final.mp4 ещё не собран"}</small></div></div><div><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}><Grid2X2 size={14} />Сцены</button><button className={mode === "timeline" ? "active" : ""} onClick={() => setMode("timeline")}><Clock3 size={14} />Таймлайн</button><button className="modal-close" onClick={onClose}><X size={18} /></button></div></header><div className="preview-stats"><Stat label="Сцен" value={String(project.scenes.length)} /><Stat label="Изображений" value={String(project.scenes.filter((scene) => scene.imagePath).length)} /><Stat label="Видео" value={String(project.scenes.filter((scene) => scene.videoPath).length)} /><Stat label="Длительность" value={`${totalDuration} сек`} /></div>{mode === "preview" ? <div className="scene-gallery">{project.scenes.length === 0 ? <EmptyState icon={<Image size={32} />} title="Нет сцен" text="Добавьте сцены в редакторе сценария." action="Закрыть" onAction={onClose} /> : project.scenes.map((scene) => <article className="preview-scene" key={scene.id}><div className="scene-placeholder"><Image size={28} /><span>{scene.status}</span></div><div><strong>Сцена {scene.order + 1}: {scene.title}</strong><p>{scene.narration || "Текст озвучки не задан"}</p><small>{scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.videoPath ? "видео готово" : "видео ожидается"}</small></div></article>)}</div> : <div className="timeline"><div className="timeline-ruler"><span>0:00</span><span>{Math.round(totalDuration / 2)} сек</span><span>{totalDuration} сек</span></div>{(["Видео / фото", "Озвучка", "Субтитры"] as const).map((track) => <div className="timeline-track" key={track}><strong>{track}</strong><div>{project.scenes.map((scene) => <span key={scene.id} style={{ width: `${Math.max(8, scene.durationSeconds / maxDuration * 100)}%` }} title={scene.title}>{scene.order + 1}<small>{scene.title}</small></span>)}</div></div>)}</div>}<footer><button className="outline-button" onClick={onClose}>Закрыть</button><button className="generate-button" onClick={() => setMode(mode === "preview" ? "timeline" : "preview")}>{mode === "preview" ? <Clock3 size={15} /> : <Grid2X2 size={15} />}{mode === "preview" ? "Открыть таймлайн" : "Показать сцены"}</button></footer></section></div>;
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="preview-modal">
+        <header>
+          <div><Clapperboard size={20} /><div><strong>{project.title}</strong><small>{project.outputPath ?? "Final.mp4 ещё не собран"}</small></div></div>
+          <div>
+            <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}><Grid2X2 size={14} />Сцены</button>
+            <button className={mode === "timeline" ? "active" : ""} onClick={() => setMode("timeline")}><Clock3 size={14} />Таймлайн</button>
+            <button className="modal-close" onClick={onClose}><X size={18} /></button>
+          </div>
+        </header>
+        <div className="preview-stats">
+          <Stat label="Сцен" value={String(project.scenes.length)} />
+          <Stat label="Изображений" value={String(project.scenes.filter((scene) => scene.imagePath).length)} />
+          <Stat label="Видео" value={String(project.scenes.filter((scene) => scene.videoPath).length)} />
+          <Stat label="Длительность" value={`${totalDuration} сек`} />
+        </div>
+        {mode === "preview" ? (
+          <div className="scene-gallery">
+            {project.scenes.length === 0 ? (
+              <EmptyState icon={<Image size={32} />} title="Нет сцен" text="Добавьте сцены в редакторе сценария." action="Закрыть" onAction={onClose} />
+            ) : project.scenes.map((scene) => (
+              <article className="preview-scene" key={scene.id}>
+                <div className="scene-placeholder"><Image size={28} /><span>{scene.status}</span></div>
+                <div>
+                  <strong>Сцена {scene.order + 1}: {scene.title}</strong>
+                  <p>{scene.narration || "Текст озвучки не задан"}</p>
+                  <small>{scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.videoPath ? "видео готово" : "видео ожидается"}</small>
+                  <button className="retry-button" disabled={project.status === "generating" || project.status === "paused"} onClick={() => onRegenerate(scene.id)}>
+                    <RotateCcw size={13} />Перегенерировать сцену
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="timeline">
+            <div className="timeline-ruler"><span>0:00</span><span>{Math.round(totalDuration / 2)} сек</span><span>{totalDuration} сек</span></div>
+            {(["Видео / фото", "Озвучка", "Субтитры"] as const).map((track) => (
+              <div className="timeline-track" key={track}>
+                <strong>{track}</strong>
+                <div>{project.scenes.map((scene) => <span key={scene.id} style={{ width: `${Math.max(8, scene.durationSeconds / maxDuration * 100)}%` }} title={scene.title}>{scene.order + 1}<small>{scene.title}</small></span>)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <footer>
+          <button className="outline-button" onClick={onOpenFolder}><FolderOpen size={15} />Открыть папку</button>
+          <button className="outline-button" onClick={onClose}>Закрыть</button>
+          <button className="generate-button" onClick={() => setMode(mode === "preview" ? "timeline" : "preview")}>
+            {mode === "preview" ? <Clock3 size={15} /> : <Grid2X2 size={15} />}
+            {mode === "preview" ? "Открыть таймлайн" : "Показать сцены"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
-  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Сейчас работает безопасный mock-режим. Реальные API подключаются через отдельные адаптеры.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Режим" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} /><InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} /><InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} /></section></div></div>;
+  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Локальная сборка Standard уже работает. Внешние нейросети пока работают через безопасные mock-адаптеры и не расходуют деньги.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Провайдеры нейросетей" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="FFmpeg" value={appInfo?.ffmpegAvailable ? "Готов к сборке MP4" : "Недоступен"} /><InfoRow label="Папка проектов" value={appInfo?.workspacePath ?? "Загрузка..."} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} /><InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} /><InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} /></section></div></div>;
 }
 
 function ToolPage({ section }: { section: SectionKey }) {

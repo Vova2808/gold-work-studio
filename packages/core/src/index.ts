@@ -19,6 +19,34 @@ export interface DirectorProvider {
   createScenes(brief: DirectorBrief): Promise<Scene[]>;
 }
 
+export interface ProviderContext {
+  projectId: string;
+  sceneId?: string;
+  signal?: AbortSignal;
+}
+
+export interface GeneratedMedia {
+  provider: string;
+  path: string;
+  mimeType: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
+export interface ImageProvider {
+  readonly id: string;
+  generate(prompt: string, aspectRatio: Project["aspectRatio"], context: ProviderContext): Promise<GeneratedMedia>;
+}
+
+export interface SpeechProvider {
+  readonly id: string;
+  synthesize(text: string, voice: string, context: ProviderContext): Promise<GeneratedMedia>;
+}
+
+export interface VideoProvider {
+  readonly id: string;
+  animate(imagePath: string, prompt: string, durationSeconds: number, context: ProviderContext): Promise<GeneratedMedia>;
+}
+
 export interface ProjectRepository {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project | undefined>;
@@ -41,6 +69,7 @@ function mergeSettings(settings?: ProjectSettings): ProjectSettings {
   return {
     ...defaults,
     ...settings,
+    script: { ...defaults.script, ...settings.script },
     voice: { ...defaults.voice, ...settings.voice },
     image: { ...defaults.image, ...settings.image, references: [...(settings.image?.references ?? [])] },
     video: { ...defaults.video, ...settings.video },
@@ -116,6 +145,10 @@ export class ProjectService {
     const scenes = withDemoScenes
       ? await this.director.createScenes({ topic: input.topic, language: input.language, durationSeconds: 30 })
       : [];
+    const settings = createDefaultProjectSettings();
+    settings.video.enabled = input.mode === "pro";
+    settings.assembly.kenBurns = input.mode === "standard";
+    settings.assembly.fadeTransitions = input.mode === "standard";
     const project: Project = normalizeProject({
       id: createId("project"),
       ...input,
@@ -123,7 +156,7 @@ export class ProjectService {
       createdAt: now,
       updatedAt: now,
       scenes,
-      settings: createDefaultProjectSettings()
+      settings
     });
     await this.projects.save(project);
     return project;

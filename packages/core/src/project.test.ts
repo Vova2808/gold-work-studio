@@ -18,7 +18,26 @@ test("mock director creates a ready project with three scenes", async () => {
 
   assert.equal(project.status, "ready");
   assert.equal(project.scenes.length, 3);
+  assert.equal(project.settings.voice.enabled, true);
+  assert.equal(project.settings.video.enabled, false);
+  assert.equal(project.settings.assembly.kenBurns, true);
+  assert.equal(project.settings.assembly.fadeTransitions, true);
   assert.deepEqual(await service.list(), [project]);
+});
+
+test("pro projects enable the video stage", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const project = await service.create({
+    title: "Pro",
+    topic: "Animated scenes",
+    aspectRatio: "16:9",
+    language: "English",
+    mode: "pro"
+  });
+
+  assert.equal(project.settings.video.enabled, true);
+  assert.equal(project.settings.assembly.kenBurns, false);
+  assert.equal(project.settings.assembly.fadeTransitions, false);
 });
 
 test("project service updates order, duplicates and deletes projects", async () => {

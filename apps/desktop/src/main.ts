@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
@@ -6,10 +6,14 @@ import type { CreateProjectInput, DesktopApi, UpdateProjectInput } from "@gold-w
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { MockGenerationPipeline } from "./mock-generation-pipeline.js";
+import { LocalProjectStorage } from "./local-project-storage.js";
+import { StandardRenderer } from "./standard-renderer.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let projectService: ProjectService;
 let pipeline: MockGenerationPipeline;
+let projectStorage: LocalProjectStorage;
+let standardRenderer: StandardRenderer;
 let dataPath: string;
 
 function resolveDataPath(): string {
@@ -39,6 +43,13 @@ function registerIpc(): void {
     await pipeline.removeProject(id);
     await projectService.delete(id);
   });
+  ipcMain.handle("projects:open-folder", async (_event, id: string) => {
+    const project = await projectService.get(id);
+    if (!project) throw new Error("Проект не найден");
+    const directory = await projectStorage.ensureProject(project);
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(error);
+  });
 
   ipcMain.handle("queue:list", () => pipeline.list());
   ipcMain.handle("queue:start", (_event, projectId: string) => pipeline.start(projectId));
@@ -46,6 +57,9 @@ function registerIpc(): void {
   ipcMain.handle("queue:resume", (_event, projectId: string) => pipeline.resume(projectId));
   ipcMain.handle("queue:stop", (_event, projectId: string) => pipeline.stop(projectId));
   ipcMain.handle("queue:retry", (_event, taskId: string) => pipeline.retry(taskId));
+  ipcMain.handle("queue:regenerate-scene", (_event, projectId: string, sceneId: string) =>
+    pipeline.regenerateScene(projectId, sceneId)
+  );
   ipcMain.handle("queue:clear-finished", () => pipeline.clearFinished());
   ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   ipcMain.handle("window:toggle-maximize", (event) => {
@@ -58,7 +72,9 @@ function registerIpc(): void {
   ipcMain.handle("app:info", () => ({
     version: app.getVersion(),
     dataPath,
+    workspacePath: projectStorage.rootPath,
     mockMode: true,
+    ffmpegAvailable: standardRenderer.isAvailable(),
     queuePolicy: pipeline.policy
   } satisfies Awaited<ReturnType<DesktopApi["getAppInfo"]>>));
 }
@@ -111,9 +127,13 @@ app.whenReady().then(async () => {
     new FileProjectRepository(join(dataPath, "projects.json")),
     new MockDirectorProvider()
   );
+  projectStorage = new LocalProjectStorage(join(dataPath, "workspace", "projects"));
+  standardRenderer = new StandardRenderer(projectStorage);
   pipeline = new MockGenerationPipeline(
     new FileTaskRepository(join(dataPath, "queue.json")),
-    projectService
+    projectService,
+    projectStorage,
+    standardRenderer
   );
   await pipeline.initialize();
   setInterval(() => void pipeline.tick().catch((error: unknown) => console.error("[queue]", error)), 500);

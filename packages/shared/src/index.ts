@@ -21,6 +21,10 @@ export interface SubtitleSettings {
 export interface ProjectSettings {
   durationMinutes: number;
   frameChange: "scenario" | "5s" | "10s";
+  script: {
+    provider: "mock" | "gemini" | "claude";
+    model: string;
+  };
   voice: {
     enabled: boolean;
     provider: "edge-tts" | "elevenlabs";
@@ -150,16 +154,29 @@ export interface DesktopApi {
   stopGeneration(projectId: string): Promise<QueueTask[]>;
   retryTask(taskId: string): Promise<QueueTask>;
   clearFinishedTasks(): Promise<QueueTask[]>;
+  regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]>;
+  openProjectFolder(projectId: string): Promise<void>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
-  getAppInfo(): Promise<{ version: string; dataPath: string; mockMode: boolean; queuePolicy: QueuePolicy }>;
+  getAppInfo(): Promise<{
+    version: string;
+    dataPath: string;
+    workspacePath: string;
+    mockMode: boolean;
+    ffmpegAvailable: boolean;
+    queuePolicy: QueuePolicy;
+  }>;
 }
 
 export function createDefaultProjectSettings(): ProjectSettings {
   return {
     durationMinutes: 1,
     frameChange: "scenario",
+    script: {
+      provider: "mock",
+      model: "Built-in Gemini (подключение позже)"
+    },
     voice: {
       enabled: true,
       provider: "edge-tts",
@@ -173,7 +190,7 @@ export function createDefaultProjectSettings(): ProjectSettings {
       references: []
     },
     video: {
-      enabled: true,
+      enabled: false,
       provider: "mock-video",
       model: "Mock Motion 1",
       mode: "turbo",
@@ -198,8 +215,8 @@ export function createDefaultProjectSettings(): ProjectSettings {
       popWords: true
     },
     assembly: {
-      kenBurns: false,
-      fadeTransitions: false,
+      kenBurns: true,
+      fadeTransitions: true,
       audioNormalize: false,
       dualTrack: false,
       removeSilence: false,

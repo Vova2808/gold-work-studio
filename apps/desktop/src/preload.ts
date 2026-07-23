@@ -16,6 +16,9 @@ const api: DesktopApi = {
   stopGeneration: (projectId: string) => ipcRenderer.invoke("queue:stop", projectId),
   retryTask: (taskId: string) => ipcRenderer.invoke("queue:retry", taskId),
   clearFinishedTasks: () => ipcRenderer.invoke("queue:clear-finished"),
+  regenerateScene: (projectId: string, sceneId: string) =>
+    ipcRenderer.invoke("queue:regenerate-scene", projectId, sceneId),
+  openProjectFolder: (projectId: string) => ipcRenderer.invoke("projects:open-folder", projectId),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),

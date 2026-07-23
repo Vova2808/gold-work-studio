@@ -30,6 +30,10 @@ function demoScenes(topic: string): Scene[] {
 function makeProject(input: CreateProjectInput, withScenes: boolean): Project {
   const now = new Date().toISOString();
   const scenes = withScenes ? demoScenes(input.topic) : [];
+  const settings = createDefaultProjectSettings();
+  settings.video.enabled = input.mode === "pro";
+  settings.assembly.kenBurns = input.mode === "standard";
+  settings.assembly.fadeTransitions = input.mode === "standard";
   return {
     id: createId("project"),
     ...input,
@@ -37,7 +41,7 @@ function makeProject(input: CreateProjectInput, withScenes: boolean): Project {
     createdAt: now,
     updatedAt: now,
     scenes,
-    settings: createDefaultProjectSettings()
+    settings
   };
 }
 
@@ -248,6 +252,44 @@ export const fallbackApi: DesktopApi = {
     tasks = tasks.filter((task) => !removableRuns.has(task.runId));
     return clone(tasks);
   },
+  async regenerateScene(projectId, sceneId) {
+    const project = requireProject(projectId);
+    const scene = project.scenes.find((candidate) => candidate.id === sceneId);
+    if (!scene) throw new Error("Сцена не найдена");
+    const runId = tasks.find((task) => task.projectId === projectId)?.runId ?? createId("run");
+    tasks = tasks.filter(
+      (task) => task.projectId !== projectId || (task.sceneId !== sceneId && task.kind !== "assemble")
+    );
+    const created: QueueTask[] = [];
+    if (project.settings.voice.enabled) {
+      created.push(makeTask(runId, projectId, sceneId, "speech", `Озвучка · сцена ${scene.order + 1}`, []));
+    }
+    const image = makeTask(runId, projectId, sceneId, "image", `Изображение · сцена ${scene.order + 1}`, []);
+    created.push(image);
+    if (project.settings.video.enabled) {
+      created.push(makeTask(runId, projectId, sceneId, "video", `AI-видео · сцена ${scene.order + 1}`, [image.id]));
+    }
+    tasks.push(...created);
+    tasks.push(
+      makeTask(
+        runId,
+        projectId,
+        undefined,
+        "assemble",
+        "Сборка Final.mp4",
+        tasks.filter((task) => task.projectId === projectId && task.kind !== "assemble").map((task) => task.id)
+      )
+    );
+    project.status = "generating";
+    project.outputPath = undefined;
+    project.scenes = project.scenes.map((candidate) =>
+      candidate.id === sceneId
+        ? { ...candidate, status: "queued", imagePath: undefined, videoPath: undefined, audioPath: undefined }
+        : candidate
+    );
+    return clone(tasks.filter((task) => task.projectId === projectId));
+  },
+  async openProjectFolder() {},
   async minimizeWindow() {},
   async toggleMaximizeWindow() {},
   async closeWindow() {},
@@ -255,7 +297,9 @@ export const fallbackApi: DesktopApi = {
     return {
       version: "0.2.0",
       dataPath: "Режим браузерного предпросмотра",
+      workspacePath: "Недоступно в браузерном предпросмотре",
       mockMode: true,
+      ffmpegAvailable: false,
       queuePolicy: { concurrency: 4, maxAttempts: 3, retryDelaysMs: [1000, 3000] }
     };
   }

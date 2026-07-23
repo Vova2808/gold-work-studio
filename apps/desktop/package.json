@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@gold-work/core": "workspace:*",
-    "@gold-work/shared": "workspace:*"
+    "@gold-work/shared": "workspace:*",
+    "ffmpeg-static": "^5.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

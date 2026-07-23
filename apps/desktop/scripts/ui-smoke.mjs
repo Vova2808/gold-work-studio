@@ -118,7 +118,7 @@ async function run() {
   await wait(1100);
 
   const queueText = await window.webContents.executeJavaScript("document.body.innerText");
-  if (!queueText.includes("Mock-конвейер") || !queueText.includes("Сборка Final.mp4")) fail("задачи не появились в очереди");
+  if (!queueText.includes("Локальный конвейер") || !queueText.includes("Сборка Final.mp4")) fail("задачи не появились в очереди");
   await trace("queue-ready");
 
   const paused = await window.webContents.executeJavaScript(`(() => {
@@ -158,6 +158,11 @@ async function run() {
   await wait(250);
   const modalOpened = await window.webContents.executeJavaScript("Boolean(document.querySelector('.preview-modal'))");
   if (!modalOpened) fail("окно предпросмотра не открылось");
+  const sceneControlsReady = await window.webContents.executeJavaScript(`(() => {
+    const text = document.querySelector(".preview-modal")?.textContent ?? "";
+    return text.includes("Перегенерировать сцену") && text.includes("Открыть папку");
+  })()`);
+  if (!sceneControlsReady) fail("кнопки папки и перегенерации сцены не появились");
   await window.webContents.executeJavaScript(`(() => {
     const button = [...document.querySelectorAll(".preview-modal button")].find((item) => item.textContent?.includes("Открыть таймлайн"));
     button?.click();
