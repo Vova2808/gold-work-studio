@@ -292,6 +292,7 @@ export const fallbackApi: DesktopApi = {
   async openProjectFolder() {},
   async writeLog() {},
   async openLogFile() {},
+  async pickFiles() { return []; },
   async minimizeWindow() {},
   async toggleMaximizeWindow() {},
   async closeWindow() {},

@@ -177,8 +177,49 @@ async function run() {
   await trace("preview-capture-written");
   await window.webContents.executeJavaScript("document.querySelector('.modal-close')?.click()");
   await wait(150);
+
+  await window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll(".nav-item")].find((item) => item.textContent?.includes("AI Генератор"));
+    button?.click();
+  })()`);
+  await wait(250);
+  const directorOpened = await window.webContents.executeJavaScript(
+    "document.body.innerText.includes('AI Генератор пресетов')",
+  );
+  if (!directorOpened) fail("AI-генератор не открылся");
+  const nicheClicked = await window.webContents.executeJavaScript(`(() => {
+    const niche = [...document.querySelectorAll("button")].find((item) => item.textContent?.includes("Анализ ниши"));
+    if (!niche) return false;
+    niche.click();
+    return true;
+  })()`);
+  if (!nicheClicked) fail("кнопка анализа ниши не найдена");
+  await wait(100);
+  const directorControlsReady = await window.webContents.executeJavaScript(
+    "Boolean(document.querySelector('.chat-composer input')?.value.includes('Проанализируй нишу'))",
+  );
+  if (!directorControlsReady) fail("кнопки AI-генератора не работают");
+  await trace("director-controls-ready");
+
   await window.webContents.executeJavaScript("document.querySelector('.settings-link')?.click()");
   await wait(250);
+  const settingsTabClicked = await window.webContents.executeJavaScript(`(() => {
+    const ai = [...document.querySelectorAll(".settings-menu button")].find((item) => item.textContent?.includes("AI и сценарии"));
+    if (!ai) return false;
+    ai.click();
+    return true;
+  })()`);
+  if (!settingsTabClicked) fail("вкладка AI и сценарии не найдена");
+  await wait(100);
+  const settingsTabsReady = await window.webContents.executeJavaScript(
+    "Boolean(document.querySelector('.settings-content')?.textContent?.includes('Gemini / Claude'))",
+  );
+  if (!settingsTabsReady) fail("вкладки настроек не переключаются");
+  await window.webContents.executeJavaScript(`(() => {
+    const storage = [...document.querySelectorAll(".settings-menu button")].find((item) => item.textContent?.includes("Папки и хранение"));
+    storage?.click();
+  })()`);
+  await wait(150);
   const logControlsReady = await window.webContents.executeJavaScript(`(() => {
     const text = document.body.innerText;
     return text.includes("TXT-лог программы") && text.includes("Открыть TXT-лог");

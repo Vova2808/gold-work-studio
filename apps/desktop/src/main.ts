@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
@@ -110,6 +110,20 @@ function registerIpc(): void {
     await logger.flush();
     const error = await shell.openPath(logger.path);
     if (error) throw new Error(error);
+  });
+  handleIpc("app:pick-files", async (_event, kind: "image" | "audio" | "video" | "json", multiple = false) => {
+    const filters = {
+      image: [{ name: "Изображения", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+      audio: [{ name: "Аудио", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }],
+      video: [{ name: "Видео", extensions: ["mp4", "mov", "webm", "mkv"] }],
+      json: [{ name: "JSON", extensions: ["json"] }]
+    };
+    const result = await dialog.showOpenDialog({
+      title: "Выберите файлы",
+      properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
+      filters: filters[kind] ?? [{ name: "Все файлы", extensions: ["*"] }]
+    });
+    return result.canceled ? [] : result.filePaths;
   });
   handleIpc("app:info", () => ({
     version: app.getVersion(),

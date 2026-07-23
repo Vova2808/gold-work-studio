@@ -159,6 +159,7 @@ export interface DesktopApi {
   openProjectFolder(projectId: string): Promise<void>;
   writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
   openLogFile(): Promise<void>;
+  pickFiles(kind: "image" | "audio" | "video" | "json", multiple?: boolean): Promise<string[]>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
