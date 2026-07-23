@@ -115,7 +115,20 @@ async function run() {
   })()`);
   if (!generated) fail("кнопка запуска генерации не найдена");
   await trace("generation-clicked");
-  await wait(1100);
+  await wait(200);
+  const globalProgressReady = await window.webContents.executeJavaScript(`(() => {
+    const bar = document.querySelector(".global-progress");
+    const stages = bar?.querySelectorAll(".global-progress-stages button");
+    return Boolean(bar && stages && stages.length >= 2 && bar.textContent?.includes("%"));
+  })()`);
+  if (!globalProgressReady) fail("global progress bar did not appear");
+  await window.webContents.executeJavaScript("document.querySelector('.global-progress-head')?.click()");
+  await wait(50);
+  const progressCollapsed = await window.webContents.executeJavaScript("Boolean(document.querySelector('.global-progress.collapsed'))");
+  if (!progressCollapsed) fail("global progress bar does not collapse");
+  await window.webContents.executeJavaScript("document.querySelector('.global-progress-head')?.click()");
+  await trace("global-progress-ready");
+  await wait(900);
 
   const queueText = await window.webContents.executeJavaScript("document.body.innerText");
   if (!queueText.includes("Локальный конвейер") || !queueText.includes("Сборка Final.mp4")) fail("задачи не появились в очереди");

@@ -396,6 +396,7 @@ export const fallbackApi: DesktopApi = {
       dataPath: "Режим браузерного предпросмотра",
       workspacePath: "Недоступно в браузерном предпросмотре",
       logPath: "Недоступно в браузерном предпросмотре",
+      realtimeUrl: undefined,
       mockMode: true,
       ffmpegAvailable: false,
       queuePolicy: { concurrency: 4, maxAttempts: 3, retryDelaysMs: [1000, 3000] }

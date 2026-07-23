@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer, type Server as HttpServer } from "node:http";
+import { Server as SocketServer } from "socket.io";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
 import type { AnalyzeReferenceInput, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
@@ -21,6 +23,9 @@ let logger: TextFileLogger;
 let dataPath: string;
 let anyModelStore: AnyModelStore;
 let anyModelClient: AnyModelClient;
+let realtimeHttpServer: HttpServer;
+let realtimeServer: SocketServer;
+let realtimeUrl: string;
 
 function resolveDataPath(): string {
   const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR;
@@ -98,15 +103,15 @@ function registerIpc(): void {
   });
 
   handleIpc("queue:list", () => pipeline.list());
-  handleIpc("queue:start", (_event, projectId: string) => pipeline.start(projectId));
-  handleIpc("queue:pause", (_event, projectId: string) => pipeline.pause(projectId));
-  handleIpc("queue:resume", (_event, projectId: string) => pipeline.resume(projectId));
-  handleIpc("queue:stop", (_event, projectId: string) => pipeline.stop(projectId));
-  handleIpc("queue:retry", (_event, taskId: string) => pipeline.retry(taskId));
+  handleIpc("queue:start", (_event, projectId: string) => mutateQueue(() => pipeline.start(projectId)));
+  handleIpc("queue:pause", (_event, projectId: string) => mutateQueue(() => pipeline.pause(projectId)));
+  handleIpc("queue:resume", (_event, projectId: string) => mutateQueue(() => pipeline.resume(projectId)));
+  handleIpc("queue:stop", (_event, projectId: string) => mutateQueue(() => pipeline.stop(projectId)));
+  handleIpc("queue:retry", (_event, taskId: string) => mutateQueue(() => pipeline.retry(taskId)));
   handleIpc("queue:regenerate-scene", (_event, projectId: string, sceneId: string) =>
-    pipeline.regenerateScene(projectId, sceneId)
+    mutateQueue(() => pipeline.regenerateScene(projectId, sceneId))
   );
-  handleIpc("queue:clear-finished", () => pipeline.clearFinished());
+  handleIpc("queue:clear-finished", () => mutateQueue(() => pipeline.clearFinished()));
   handleIpc("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   handleIpc("window:toggle-maximize", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -153,6 +158,7 @@ function registerIpc(): void {
     dataPath,
     workspacePath: projectStorage.rootPath,
     logPath: logger.path,
+    realtimeUrl,
     mockMode: true,
     ffmpegAvailable: standardRenderer.isAvailable(),
     queuePolicy: pipeline.policy
@@ -209,6 +215,37 @@ async function createWindow(): Promise<void> {
   await window.loadFile(join(currentDirectory, "../renderer/index.html"));
 }
 
+async function startRealtimeServer(): Promise<void> {
+  realtimeHttpServer = createServer((_request, response) => {
+    response.writeHead(404);
+    response.end();
+  });
+  realtimeServer = new SocketServer(realtimeHttpServer, {
+    cors: { origin: "*" },
+    transports: ["websocket", "polling"]
+  });
+  await new Promise<void>((resolve, reject) => {
+    realtimeHttpServer.once("error", reject);
+    realtimeHttpServer.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = realtimeHttpServer.address();
+  if (!address || typeof address === "string") throw new Error("Не удалось запустить локальный Socket.io");
+  realtimeUrl = `http://127.0.0.1:${address.port}`;
+  realtimeServer.on("connection", (socket) => {
+    void pipeline.list().then((tasks) => socket.emit("queue:snapshot", tasks));
+  });
+}
+
+async function publishQueue(): Promise<void> {
+  realtimeServer?.emit("queue:snapshot", await pipeline.list());
+}
+
+async function mutateQueue<TResult>(mutation: () => TResult | Promise<TResult>): Promise<TResult> {
+  const result = await mutation();
+  await publishQueue();
+  return result;
+}
+
 app.whenReady().then(async () => {
   dataPath = resolveDataPath();
   anyModelStore = new AnyModelStore(join(dataPath, "credentials", "anymodel.json"));
@@ -234,8 +271,11 @@ app.whenReady().then(async () => {
     anyModelClient
   );
   await pipeline.initialize();
+  await startRealtimeServer();
   setInterval(
-    () => void pipeline.tick().catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
+    () => void pipeline.tick()
+      .then(() => publishQueue())
+      .catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
     500
   );
   registerIpc();
@@ -250,5 +290,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  realtimeServer?.close();
+  realtimeHttpServer?.close();
   if (logger) void logger.write("info", "app.before_quit");
 });

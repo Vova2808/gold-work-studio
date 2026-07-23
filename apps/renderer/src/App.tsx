@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
 import { createDefaultProjectSettings, type AnyModelSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
+import { io } from "socket.io-client";
 
 type SectionKey = "dashboard" | "project" | "scenario" | "clone" | "director" | "projects" | "subtitles" | "thumbnail" | "avatar" | "seo" | "studio" | "queue" | "console" | "settings";
 type Overlay = { type: "preview" | "timeline"; projectId: string };
@@ -80,6 +81,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(true);
+  const [progressCollapsed, setProgressCollapsed] = useState(false);
   const pageScrollRef = useRef<HTMLDivElement>(null);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
@@ -101,10 +103,11 @@ export function App() {
     }
     void initialLoad();
     const polling = window.setInterval(() => {
-      void Promise.all([api.getQueue(), api.listProjects()])
+      const queueRequest = window.goldWork ? Promise.resolve<QueueTask[] | null>(null) : api.getQueue();
+      void Promise.all([queueRequest, api.listProjects()])
         .then(([tasks, items]) => {
           if (!mounted) return;
-          setQueue(tasks);
+          if (tasks) setQueue(tasks);
           setProjects(items);
           setSelectedProjectId((current) => (current && items.some((project) => project.id === current) ? current : (items[0]?.id ?? null)));
         })
@@ -115,6 +118,16 @@ export function App() {
       window.clearInterval(polling);
     };
   }, []);
+
+  useEffect(() => {
+    if (!appInfo?.realtimeUrl) return;
+    const socket = io(appInfo.realtimeUrl, { transports: ["websocket"] });
+    socket.on("queue:snapshot", (tasks: QueueTask[]) => setQueue(tasks));
+    socket.on("connect_error", (reason) => void api.writeLog("warn", "queue.socket_error", { message: reason.message }));
+    return () => {
+      socket.close();
+    };
+  }, [appInfo?.realtimeUrl]);
 
   useEffect(() => {
     if (pageScrollRef.current) pageScrollRef.current.scrollTop = 0;
@@ -309,6 +322,16 @@ export function App() {
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
             {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} onAction={() => setNotice("Этот инструмент подключим после добавления соответствующего API. Экран уже готов к интеграции.")} />}
           </div>
+          <GlobalProgressBar
+            tasks={queue}
+            projects={projects}
+            collapsed={progressCollapsed}
+            onToggle={() => setProgressCollapsed((value) => !value)}
+            onOpen={(projectId) => {
+              setSelectedProjectId(projectId);
+              setActiveSection("queue");
+            }}
+          />
           <ConsoleDock open={consoleOpen} queue={queue} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
@@ -328,6 +351,40 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function GlobalProgressBar({ tasks, projects, collapsed, onToggle, onOpen }: { tasks: QueueTask[]; projects: Project[]; collapsed: boolean; onToggle: () => void; onOpen: (projectId: string) => void }) {
+  const activeStatuses = new Set<QueueTask["status"]>(["pending", "running", "retry_wait", "paused", "blocked"]);
+  const activeRunIds = new Set(tasks.filter((task) => activeStatuses.has(task.status)).map((task) => task.runId));
+  const relevant = tasks.filter((task) => activeRunIds.has(task.runId));
+  if (relevant.length === 0) return null;
+  const projectId = relevant.find((task) => activeStatuses.has(task.status))?.projectId ?? relevant[0]?.projectId;
+  if (!projectId) return null;
+  const project = projects.find((item) => item.id === projectId);
+  const summary = (kind: QueueTask["kind"]) => {
+    const items = relevant.filter((task) => task.kind === kind);
+    return { total: items.length, done: items.filter((task) => task.status === "done").length, progress: items.length ? Math.round(items.reduce((sum, task) => sum + (task.status === "done" ? 100 : task.progress), 0) / items.length) : 0 };
+  };
+  const images = summary("image");
+  const speech = summary("speech");
+  const assembly = summary("assemble");
+  const overall = Math.round(relevant.reduce((sum, task) => sum + (task.status === "done" ? 100 : task.progress), 0) / relevant.length);
+  return (
+    <section className={`global-progress${collapsed ? " collapsed" : ""}`}>
+      <button className="global-progress-head" onClick={onToggle}>
+        <span><Zap size={14} />{project?.title ?? "Генерация"}</span>
+        <strong>{overall}%</strong>
+        <span>{collapsed ? "⌃" : "⌄"}</span>
+      </button>
+      {!collapsed && (
+        <div className="global-progress-stages">
+          {images.total > 0 && <button onClick={() => onOpen(projectId)}><Image size={14} /><span>Картинки <b>{images.done}/{images.total}</b></span><i><em style={{ width: `${images.progress}%` }} /></i></button>}
+          {speech.total > 0 && <button onClick={() => onOpen(projectId)}><Mic2 size={14} /><span>Озвучка <b>{speech.done}/{speech.total}</b></span><i><em style={{ width: `${speech.progress}%` }} /></i></button>}
+          {assembly.total > 0 && <button onClick={() => onOpen(projectId)}><Clapperboard size={14} /><span>Сборка <b>{assembly.progress}%</b></span><i><em style={{ width: `${assembly.progress}%` }} /></i></button>}
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -225,6 +225,7 @@ export interface DesktopApi {
     dataPath: string;
     workspacePath: string;
     logPath: string;
+    realtimeUrl?: string;
     mockMode: boolean;
     ffmpegAvailable: boolean;
     queuePolicy: QueuePolicy;
