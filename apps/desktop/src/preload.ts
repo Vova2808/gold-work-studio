@@ -53,6 +53,7 @@ const api: DesktopApi = {
   openLogFile: () => ipcRenderer.invoke("app:open-log"),
   pickFiles: (kind: "image" | "audio" | "video" | "json" | "cookies", multiple = false) =>
     ipcRenderer.invoke("app:pick-files", kind, multiple),
+  pickDirectory: () => ipcRenderer.invoke("app:pick-directory"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),

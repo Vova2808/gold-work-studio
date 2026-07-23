@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/project.test.js"
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "@gold-work/shared": "workspace:*"

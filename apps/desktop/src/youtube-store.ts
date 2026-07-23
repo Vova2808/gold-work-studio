@@ -1,11 +1,13 @@
 import { safeStorage } from "electron";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
-import type { SaveYouTubeSettingsInput, YouTubeSettings } from "@gold-work/shared";
+import { describeCookiesProblem, validateCookiesContent, type SaveYouTubeSettingsInput, type YouTubeSettings } from "@gold-work/shared";
 
 interface StoredYouTubeSettings {
   encryptedApiKey?: string;
   cookiesFilePath?: string;
+  workDirPath?: string;
 }
 
 export class YouTubeStore {
@@ -20,12 +22,38 @@ export class YouTubeStore {
     return {
       configured: Boolean(stored.encryptedApiKey),
       cookiesFileConfigured: Boolean(stored.cookiesFilePath),
-      cookiesFileName: stored.cookiesFilePath ? basename(stored.cookiesFilePath) : undefined
+      cookiesFileName: stored.cookiesFilePath ? basename(stored.cookiesFilePath) : undefined,
+      workDirConfigured: Boolean(stored.workDirPath),
+      workDirPath: stored.workDirPath
     };
   }
 
   async cookiesFilePath(): Promise<string | undefined> {
     return (await this.read()).cookiesFilePath ?? process.env.YT_DLP_COOKIES_PATH;
+  }
+
+  /** Рабочая/временная папка для yt-dlp (или переопределение через окружение). undefined — использовать системный tmp. */
+  async workDir(): Promise<string | undefined> {
+    return (await this.read()).workDirPath ?? process.env.GOLD_WORK_TEMP_DIR;
+  }
+
+  /**
+   * Пред-проверка cookies перед запуском yt-dlp. Возвращает путь, если cookies заданы и валидны;
+   * undefined — если не заданы; бросает понятную ошибку, если заданы, но некорректны или недоступны.
+   * Содержимое cookies никогда не логируется и не возвращается наружу.
+   */
+  async resolveValidatedCookies(): Promise<string | undefined> {
+    const cookiesFilePath = await this.cookiesFilePath();
+    if (!cookiesFilePath) return undefined;
+    let content: string;
+    try {
+      content = await readFile(cookiesFilePath, "utf8");
+    } catch {
+      throw new Error("Файл cookies.txt не найден по сохранённому пути. Выберите его заново в Настройки → AI и сценарии.");
+    }
+    const problem = describeCookiesProblem(validateCookiesContent(content));
+    if (problem) throw new Error(problem);
+    return cookiesFilePath;
   }
 
   async apiKey(): Promise<string | undefined> {
@@ -45,15 +73,32 @@ export class YouTubeStore {
     }
     if (input.cookiesFilePath?.trim()) {
       const cookiesFilePath = input.cookiesFilePath.trim();
-      const header = (await readFile(cookiesFilePath, "utf8")).slice(0, 500);
-      if (!/Netscape HTTP Cookie File/i.test(header)) {
-        throw new Error("Выберите cookies.txt в формате Netscape");
-      }
+      const content = await readFile(cookiesFilePath, "utf8");
+      const problem = describeCookiesProblem(validateCookiesContent(content));
+      if (problem) throw new Error(problem);
       current.cookiesFilePath = cookiesFilePath;
       changed = true;
     }
     if (input.clearCookiesFile) {
       delete current.cookiesFilePath;
+      changed = true;
+    }
+    if (input.workDirPath?.trim()) {
+      const workDirPath = input.workDirPath.trim();
+      const info = await stat(workDirPath).catch(() => undefined);
+      if (!info?.isDirectory()) {
+        throw new Error("Выбранная рабочая папка не найдена или не является папкой");
+      }
+      try {
+        await access(workDirPath, constants.W_OK);
+      } catch {
+        throw new Error("Нет прав на запись в выбранную рабочую папку. Выберите другую папку.");
+      }
+      current.workDirPath = workDirPath;
+      changed = true;
+    }
+    if (input.clearWorkDir) {
+      delete current.workDirPath;
       changed = true;
     }
     if (changed) await this.write(current);

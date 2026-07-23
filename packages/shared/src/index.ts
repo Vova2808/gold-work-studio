@@ -122,12 +122,16 @@ export interface YouTubeSettings {
   configured: boolean;
   cookiesFileConfigured: boolean;
   cookiesFileName?: string;
+  workDirConfigured: boolean;
+  workDirPath?: string;
 }
 
 export interface SaveYouTubeSettingsInput {
   apiKey?: string;
   cookiesFilePath?: string;
   clearCookiesFile?: boolean;
+  workDirPath?: string;
+  clearWorkDir?: boolean;
 }
 
 export interface TranscriptSegment {
@@ -282,6 +286,7 @@ export interface DesktopApi {
   writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
   openLogFile(): Promise<void>;
   pickFiles(kind: "image" | "audio" | "video" | "json" | "cookies", multiple?: boolean): Promise<string[]>;
+  pickDirectory(): Promise<string | undefined>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
@@ -368,4 +373,65 @@ export function parseYouTubeVideoId(value: string): string {
       : "";
   if (!id || !/^[A-Za-z0-9_-]{6,20}$/.test(id)) throw new Error("Ссылка не содержит корректный ID YouTube-видео");
   return id;
+}
+
+// --- yt-dlp preflight: чистые (без Electron/fs) хелперы для проверки cookies и свободного места ---
+
+/** Минимально требуемое свободное место в рабочей папке для запуска yt-dlp (распаковка PyInstaller + временные файлы). */
+export const MIN_FREE_DISK_BYTES = 512 * 1024 * 1024;
+
+export interface CookiesValidationResult {
+  /** Файл в формате Netscape (корректный заголовок). */
+  netscape: boolean;
+  /** Есть хотя бы одна cookie домена youtube.com. */
+  hasYouTubeCookie: boolean;
+}
+
+/**
+ * Проверяет СОДЕРЖИМОЕ cookies.txt, не раскрывая значений: только факты (формат и наличие домена).
+ * Никогда не логируйте и не возвращайте сам текст cookies наружу.
+ */
+export function validateCookiesContent(content: string): CookiesValidationResult {
+  const netscape = /Netscape HTTP Cookie File/i.test(content) || /^#\s*HTTP Cookie File/im.test(content);
+  const hasYouTubeCookie = content.split(/\r?\n/).some((line) => {
+    if (!line || line.startsWith("#")) return false;
+    const domain = line.split("\t")[0]?.toLowerCase() ?? "";
+    return domain.includes("youtube.com");
+  });
+  return { netscape, hasYouTubeCookie };
+}
+
+/** Понятное сообщение о проблеме с cookies (или undefined, если всё в порядке). Без раскрытия значений. */
+export function describeCookiesProblem(result: CookiesValidationResult): string | undefined {
+  if (!result.netscape) {
+    return "Файл cookies.txt не в формате Netscape. Экспортируйте его расширением для экспорта cookies в формате Netscape.";
+  }
+  if (!result.hasYouTubeCookie) {
+    return "В cookies.txt нет cookies домена youtube.com. Войдите в аккаунт на YouTube и экспортируйте cookies заново.";
+  }
+  return undefined;
+}
+
+export interface FreeSpaceResult {
+  ok: boolean;
+  availableBytes: number;
+  requiredBytes: number;
+}
+
+/** Достаточно ли свободного места (по умолчанию — MIN_FREE_DISK_BYTES). */
+export function evaluateFreeSpace(availableBytes: number, requiredBytes: number = MIN_FREE_DISK_BYTES): FreeSpaceResult {
+  return { ok: availableBytes >= requiredBytes, availableBytes, requiredBytes };
+}
+
+/** Человекочитаемый размер (Б/КБ/МБ/ГБ/ТБ). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 Б";
+  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }

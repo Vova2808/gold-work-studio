@@ -1887,7 +1887,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
   const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
   const [apiKey, setApiKey] = useState("");
-  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false });
+  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
@@ -1912,6 +1912,13 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
     const saved = await api.saveYouTubeSettings({ cookiesFilePath });
     setYouTube(saved);
     setConnectionMessage("cookies.txt сохранён локально и будет использоваться только yt-dlp");
+  };
+  const chooseWorkDir = async () => {
+    const dir = await api.pickDirectory();
+    if (!dir) return;
+    const saved = await api.saveYouTubeSettings({ workDirPath: dir });
+    setYouTube(saved);
+    setConnectionMessage("Рабочая папка сохранена — yt-dlp будет использовать её для временных файлов");
   };
   const tabs = [
     ["general", "Общие"],
@@ -1982,6 +1989,13 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <div className="provider-actions">
                 <button className="outline-button small" onClick={() => void chooseYouTubeCookies()}>Выбрать cookies.txt</button>
                 <button className="outline-button small" disabled={!youtube.cookiesFileConfigured} onClick={() => void api.saveYouTubeSettings({ clearCookiesFile: true }).then(setYouTube)}>Удалить cookies</button>
+              </div>
+              <h2>Рабочая папка yt-dlp</h2>
+              <p>Папка для временных файлов yt-dlp: распаковка исполняемого файла и загрузки. Выберите папку на диске с достаточным свободным местом (например, D:\GoldWorkTemp), если системный диск переполнен. Если не задана — используется системная временная папка.</p>
+              <InfoRow label="Рабочая папка" value={youtube.workDirConfigured ? youtube.workDirPath ?? "Настроена" : "Системная временная папка"} />
+              <div className="provider-actions">
+                <button className="outline-button small" onClick={() => void chooseWorkDir()}>Выбрать папку</button>
+                <button className="outline-button small" disabled={!youtube.workDirConfigured} onClick={() => void api.saveYouTubeSettings({ clearWorkDir: true }).then(setYouTube)}>Сбросить папку</button>
               </div>
               <p>Транскрипт сначала берётся из субтитров. Если их нет, используется yt-dlp и аудио→Gemini через настроенную модель AnyModel. Этот фолбэк расходует токены; анализ кадров пока не выполняется. Получение субтитров и аудио через yt-dlp не является официальным YouTube API и может перестать работать при изменении правил или сайта.</p>
             </>

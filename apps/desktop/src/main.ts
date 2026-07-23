@@ -163,6 +163,13 @@ function registerIpc(): void {
     });
     return result.canceled ? [] : result.filePaths;
   });
+  handleIpc("app:pick-directory", async () => {
+    const result = await dialog.showOpenDialog({
+      title: "Выберите рабочую папку",
+      properties: ["openDirectory", "createDirectory"]
+    });
+    return result.canceled ? undefined : result.filePaths[0];
+  });
   handleIpc("anymodel:get-settings", () => anyModelStore.publicSettings());
   handleIpc("anymodel:save-settings", (_event, input: SaveAnyModelSettingsInput) => anyModelStore.save(input));
   handleIpc("anymodel:clear-key", () => anyModelStore.clearKey());
