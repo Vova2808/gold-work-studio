@@ -36,7 +36,7 @@ export class YouTubeClient {
       this.api("channels", { part: "snippet,statistics", id: channelId }, key),
       this.comments(videoId, key),
       this.recent(channelId, key),
-      this.transcript(url, videoId)
+      this.safeTranscript(url, videoId)
     ]);
     const channel = asItems(channelResponse)[0] as YouTubeChannel | undefined;
     if (!channel) throw new Error("YouTube не вернул статистику канала");
@@ -108,6 +108,19 @@ export class YouTubeClient {
         commentCount: number(video.statistics.commentCount)
       };
     }).sort((a, b) => b.views - a.views);
+  }
+
+  /** Транскрипт необязателен: если получить не удалось (защищённый ролик без cookies), разбор продолжается без текста. */
+  private async safeTranscript(url: string, videoId: string): Promise<{
+    segments: TranscriptSegment[];
+    source: YouTubeAnalysisContext["transcriptSource"];
+    audioMegabytes?: number;
+  }> {
+    try {
+      return await this.transcript(url, videoId);
+    } catch {
+      return { segments: [], source: "none" };
+    }
   }
 
   private async transcript(url: string, videoId: string): Promise<{

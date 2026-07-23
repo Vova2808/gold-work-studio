@@ -1561,6 +1561,9 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                               <b>{formatTimestamp(segment.startSeconds)}</b>{segment.text}
                             </p>
                           ))}
+                          {analysis.youtubeContext.transcript.length === 0 && (
+                            <p>Текст ролика недоступен без входа в аккаунт YouTube. Разбор построен на метаданных и комментариях. Чтобы анализировать по тексту, добавьте cookies.txt в Настройки → AI и сценарии.</p>
+                          )}
                         </div>
                       </section>
                       <section>
@@ -1578,7 +1581,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                       </section>
                     </div>
                     <p className="analysis-disclaimer">
-                      Кадры ролика не анализировались. Источник текста: {analysis.youtubeContext.transcriptSource}.
+                      Кадры ролика не анализировались. Источник текста: {({ captions: "субтитры", "yt-dlp-captions": "субтитры (yt-dlp)", "gemini-audio": "аудио → Gemini", none: "недоступен (нужен вход/cookies)" } as const)[analysis.youtubeContext.transcriptSource]}.
                       {analysis.youtubeContext.transcriptionAudioMegabytes ? ` Аудио для Gemini: ${analysis.youtubeContext.transcriptionAudioMegabytes} МБ — расход токенов учитывается провайдером.` : " Транскрибация аудио не потребовалась, дополнительных токенов на неё нет."}
                     </p>
                   </div>
