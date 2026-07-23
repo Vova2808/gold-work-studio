@@ -86,6 +86,21 @@ export class LocalProjectStorage {
     return join(this.sceneDirectory(project, scene), "scene.mp4");
   }
 
+  async saveGeneratedImage(project: Project, scene: Scene, data: Buffer): Promise<string> {
+    await this.ensureProject(project);
+    const path = join(this.sceneDirectory(project, scene), "image.png");
+    await writeAtomic(path, data);
+    await writeAtomic(join(this.sceneDirectory(project, scene), "image-prompt.txt"), scene.imagePrompt);
+    return path;
+  }
+
+  async saveGeneratedVideo(project: Project, scene: Scene, data: Buffer): Promise<string> {
+    await this.ensureProject(project);
+    const path = this.sceneVideoPath(project, scene);
+    await writeAtomic(path, data);
+    return path;
+  }
+
   async ensureProject(project: Project): Promise<string> {
     const directory = this.projectDirectory(project.id);
     await mkdir(join(directory, "scenes"), { recursive: true });

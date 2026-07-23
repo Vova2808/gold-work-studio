@@ -14,6 +14,7 @@ const createId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${Mat
 const clone = <T,>(value: T): T => structuredClone(value);
 let projects: Project[] = [];
 let tasks: QueueTask[] = [];
+let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" };
 
 function demoScenes(topic: string): Scene[] {
   return ["Завязка", "Главная мысль", "Финал"].map((title, order) => ({
@@ -205,6 +206,18 @@ export const fallbackApi: DesktopApi = {
     project.status = "ready";
     projects.unshift(project);
     return clone(project);
+  },
+  async getAnyModelSettings() { return clone(anyModelSettings); },
+  async saveAnyModelSettings(input) {
+    anyModelSettings = { ...input, configured: Boolean(input.apiKey) || anyModelSettings.configured };
+    return clone(anyModelSettings);
+  },
+  async clearAnyModelKey() {
+    anyModelSettings.configured = false;
+    return clone(anyModelSettings);
+  },
+  async testAnyModelConnection() {
+    return { ok: false, message: "Проверка API доступна только в приложении Electron" };
   },
   async updateProject(id: string, input: UpdateProjectInput) {
     const project = requireProject(id);

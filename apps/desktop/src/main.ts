@@ -2,13 +2,15 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } f
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { AnalyzeReferenceInput, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, UpdateProjectInput } from "@gold-work/shared";
+import type { AnalyzeReferenceInput, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 import { TextFileLogger } from "./text-file-logger.js";
+import { AnyModelStore } from "./anymodel-store.js";
+import { AnyModelClient } from "./anymodel-client.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let projectService: ProjectService;
@@ -17,6 +19,8 @@ let projectStorage: LocalProjectStorage;
 let standardRenderer: StandardRenderer;
 let logger: TextFileLogger;
 let dataPath: string;
+let anyModelStore: AnyModelStore;
+let anyModelClient: AnyModelClient;
 
 function resolveDataPath(): string {
   const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR;
@@ -70,9 +74,11 @@ function registerIpc(): void {
       true
     )
   );
-  handleIpc("director:analyze-reference", (_event, input: AnalyzeReferenceInput) => projectService.analyzeReference(input));
+  handleIpc("director:analyze-reference", async (_event, input: AnalyzeReferenceInput) =>
+    await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input)
+  );
   handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
-    projectService.refineReference(analysis, instructions)
+    analysis.provider.startsWith("anymodel:") ? anyModelClient.refine(analysis, instructions) : projectService.refineReference(analysis, instructions)
   );
   handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
     projectService.createFromReference(input)
@@ -132,6 +138,10 @@ function registerIpc(): void {
     });
     return result.canceled ? [] : result.filePaths;
   });
+  handleIpc("anymodel:get-settings", () => anyModelStore.publicSettings());
+  handleIpc("anymodel:save-settings", (_event, input: SaveAnyModelSettingsInput) => anyModelStore.save(input));
+  handleIpc("anymodel:clear-key", () => anyModelStore.clearKey());
+  handleIpc("anymodel:test", () => anyModelClient.test());
   handleIpc("app:info", () => ({
     version: app.getVersion(),
     dataPath,
@@ -195,6 +205,8 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   dataPath = resolveDataPath();
+  anyModelStore = new AnyModelStore(join(dataPath, "credentials", "anymodel.json"));
+  anyModelClient = new AnyModelClient(anyModelStore);
   logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"));
   await logger.initialize();
   process.on("uncaughtExceptionMonitor", (error) => void logger.write("error", "process.uncaught_exception", { error }));
@@ -212,7 +224,8 @@ app.whenReady().then(async () => {
     projectStorage,
     standardRenderer,
     DEFAULT_QUEUE_POLICY,
-    (event) => void logger.write(event.level, event.message, event.details)
+    (event) => void logger.write(event.level, event.message, event.details),
+    anyModelClient
   );
   await pipeline.initialize();
   setInterval(

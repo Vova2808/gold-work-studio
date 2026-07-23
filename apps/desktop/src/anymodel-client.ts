@@ -1,0 +1,116 @@
+import { randomUUID } from "node:crypto";
+import type { AnalyzeReferenceInput, ReferenceAnalysis, Scene } from "@gold-work/shared";
+import { createId } from "@gold-work/core";
+import { AnyModelStore } from "./anymodel-store.js";
+
+export class AnyModelClient {
+  constructor(private readonly store: AnyModelStore) {}
+
+  async configured(): Promise<boolean> {
+    return (await this.store.publicSettings()).configured;
+  }
+
+  async test(): Promise<{ ok: boolean; message: string }> {
+    try {
+      const response = await this.request("/v1/models");
+      if (!response.ok) throw new Error(await this.error(response));
+      return { ok: true, message: "AnyModel подключён, ключ работает" };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+    const settings = await this.store.publicSettings();
+    const metadata = await this.referenceMetadata(input.url);
+    const content = await this.chat(settings.textModel, [
+      { role: "system", content: "Ты сценарный аналитик. Верни только JSON без markdown. Не утверждай, что видел ролик, если дан только заголовок и описание. Создай самостоятельный сценарий, не копируй чужой текст или брендинг." },
+      { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
+    ]);
+    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
+    const scenes = (parsed.scenes ?? []).map((scene, order) => ({
+      id: createId("scene"), order, title: scene.title || `Сцена ${order + 1}`, narration: scene.narration || "",
+      imagePrompt: scene.imagePrompt || "", animationPrompt: scene.animationPrompt || "", durationSeconds: scene.durationSeconds || 8, status: "draft" as const
+    }));
+    if (!scenes.length) throw new Error("Модель не вернула сцены");
+    return {
+      sourceUrl: input.url, sourceTitle: parsed.sourceTitle || metadata.title || "Референс",
+      niche: parsed.niche || "Не определена", targetAudience: parsed.targetAudience || "Не определена",
+      hook: parsed.hook || scenes[0]!.narration, structure: parsed.structure || [], strengths: parsed.strengths || [],
+      improvements: parsed.improvements || [], suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельный ролик",
+      suggestedTitle: parsed.suggestedTitle || "Новый ролик", recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
+      language: input.language || "Русский", instructions: input.instructions, scenes, provider: `anymodel:${settings.textModel}`
+    };
+  }
+
+  async refine(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis> {
+    return this.analyzeReference({ url: analysis.sourceUrl, language: analysis.language, instructions: `${analysis.instructions || ""}\nТекущий разбор: ${JSON.stringify(analysis)}\nИзмени по просьбе: ${instructions}` });
+  }
+
+  async generateImage(prompt: string, size: string): Promise<Buffer> {
+    const settings = await this.store.publicSettings();
+    const response = await this.request("/v1/images/generations", { method: "POST", body: JSON.stringify({ model: settings.imageModel, prompt, n: 1, size, quality: "high", output_format: "png", response_format: "b64_json" }) });
+    if (!response.ok) throw new Error(await this.error(response));
+    const data = await response.json() as { data?: Array<{ b64_json?: string }> };
+    const encoded = data.data?.[0]?.b64_json;
+    if (!encoded) throw new Error("AnyModel не вернул изображение");
+    return Buffer.from(encoded, "base64");
+  }
+
+  async generateVideo(prompt: string, duration: number, aspectRatio: string): Promise<Buffer> {
+    const settings = await this.store.publicSettings();
+    const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({ model: settings.videoModel, prompt, duration: [5, 8, 10, 15].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a), resolution: "720p", aspect_ratio: aspectRatio }) });
+    if (!create.ok) throw new Error(await this.error(create));
+    const ticket = create.headers.get("x-9router-connection-id");
+    const created = await create.json() as { request_id?: string; id?: string };
+    const id = created.request_id || created.id;
+    if (!id || !ticket) throw new Error("AnyModel не вернул идентификатор видео-задачи");
+    for (let attempt = 0; attempt < 180; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const poll = await this.request(`/v1/videos/${encodeURIComponent(id)}`, { headers: { "x-9router-connection-id": ticket } });
+      if (!poll.ok) throw new Error(await this.error(poll));
+      const status = await poll.json() as { status?: string; url?: string; result_url?: string; error?: string };
+      const url = status.result_url || status.url;
+      if (url) {
+        const result = await fetch(url);
+        if (!result.ok) throw new Error("Не удалось скачать готовое видео");
+        return Buffer.from(await result.arrayBuffer());
+      }
+      if (status.status === "failed") throw new Error(status.error || "Генерация видео завершилась ошибкой");
+    }
+    throw new Error("Истекло время ожидания видео");
+  }
+
+  private async chat(model: string, messages: Array<{ role: string; content: string }>): Promise<string> {
+    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, reasoning_effort: "high", temperature: 0.4 }) });
+    if (!response.ok) throw new Error(await this.error(response));
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error("AnyModel вернул пустой ответ");
+    return content;
+  }
+
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+    const settings = await this.store.publicSettings();
+    const key = await this.store.apiKey();
+    if (!key) throw new Error("Сначала сохраните новый API-ключ AnyModel в настройках");
+    return fetch(`${settings.baseUrl}${path}`, { ...init, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers } });
+  }
+
+  private async error(response: Response): Promise<string> {
+    const text = await response.text();
+    return `AnyModel ${response.status}: ${text.slice(0, 300)}`;
+  }
+
+  private async referenceMetadata(url: string): Promise<{ title?: string; author?: string }> {
+    try {
+      const endpoint = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const response = await fetch(endpoint);
+      if (!response.ok) return {};
+      const data = await response.json() as { title?: string; author_name?: string };
+      return { title: data.title, author: data.author_name };
+    } catch {
+      return {};
+    }
+  }
+}

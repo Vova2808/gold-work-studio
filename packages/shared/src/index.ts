@@ -23,7 +23,7 @@ export interface ProjectSettings {
   durationMinutes: number;
   frameChange: "scenario" | "5s" | "10s";
   script: {
-    provider: "mock" | "gemini" | "claude";
+    provider: "mock" | "gemini" | "claude" | "anymodel";
     model: string;
   };
   voice: {
@@ -33,14 +33,14 @@ export interface ProjectSettings {
     singleTrack: boolean;
   };
   image: {
-    provider: "mock-image" | "nano-banana" | "gpt-image";
+    provider: "mock-image" | "nano-banana" | "gpt-image" | "anymodel-image";
     style: string;
     sequential: boolean;
     references: string[];
   };
   video: {
     enabled: boolean;
-    provider: "mock-video" | "veo";
+    provider: "mock-video" | "veo" | "anymodel-video";
     model: string;
     mode: "turbo" | "standard";
     startFrame: boolean;
@@ -107,6 +107,18 @@ export interface CreateReferenceProjectInput {
   analysis: ReferenceAnalysis;
   aspectRatio: AspectRatio;
   mode: ProjectMode;
+}
+
+export interface AnyModelSettings {
+  configured: boolean;
+  baseUrl: string;
+  textModel: string;
+  imageModel: string;
+  videoModel: string;
+}
+
+export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "configured"> {
+  apiKey?: string;
 }
 
 export interface Project {
@@ -179,6 +191,10 @@ export interface DesktopApi {
   analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis>;
   refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis>;
   createReferenceProject(input: CreateReferenceProjectInput): Promise<Project>;
+  getAnyModelSettings(): Promise<AnyModelSettings>;
+  saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
+  clearAnyModelKey(): Promise<AnyModelSettings>;
+  testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   duplicateProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;

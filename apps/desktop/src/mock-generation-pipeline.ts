@@ -2,6 +2,7 @@ import { createId, type ProjectService, type TaskRepository } from "@gold-work/c
 import type { LogLevel, Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
+import { AnyModelClient } from "./anymodel-client.js";
 
 export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
   concurrency: 4,
@@ -36,7 +37,8 @@ export class MockGenerationPipeline {
     private readonly storage: LocalProjectStorage,
     private readonly renderer: StandardRenderer,
     readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
-    private readonly eventSink: PipelineEventSink = () => undefined
+    private readonly eventSink: PipelineEventSink = () => undefined,
+    private readonly anyModel?: AnyModelClient
   ) {}
 
   async initialize(): Promise<void> {
@@ -476,8 +478,17 @@ export class MockGenerationPipeline {
     if (task.kind === "director") return `local://${project.id}/scenario.json`;
     const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
     if (!scene) throw new Error("Сцена для задачи не найдена");
+    if (task.kind === "image" && project.settings.image.provider === "anymodel-image") {
+      if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
+      const size = project.aspectRatio === "9:16" ? "1024x1792" : project.aspectRatio === "1:1" ? "1024x1024" : "1792x1024";
+      return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(scene.imagePrompt, size));
+    }
     if (task.kind === "image") return this.storage.createPlaceholderImage(project, scene);
     if (task.kind === "speech") return this.storage.createPlaceholderAudio(project, scene);
+    if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
+      if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
+      return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio));
+    }
     if (task.kind === "video") return this.renderer.renderScene(project, scene);
     throw new Error(`Неизвестный тип задачи: ${task.kind}`);
   }

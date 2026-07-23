@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
+import { createDefaultProjectSettings, type AnyModelSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 
 type SectionKey = "dashboard" | "project" | "scenario" | "clone" | "director" | "projects" | "subtitles" | "thumbnail" | "avatar" | "seo" | "studio" | "queue" | "console" | "settings";
@@ -733,6 +733,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
               <option value="mock-image">Mock Image</option>
               <option value="nano-banana">Nano Banana Pro</option>
               <option value="gpt-image">GPT Image</option>
+              <option value="anymodel-image">AnyModel API</option>
             </select>
           </Field>
           <Field label="СТИЛЬ ИЗОБРАЖЕНИЙ">
@@ -774,6 +775,13 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
           <ToggleRow label="Генерировать AI-видео" checked={settings.video.enabled} onChange={(enabled) => setSettings({ video: { ...settings.video, enabled } })} />
           {settings.video.enabled && (
             <>
+              <Field label="ПРОВАЙДЕР ВИДЕО">
+                <select value={settings.video.provider} onChange={(event) => setSettings({ video: { ...settings.video, provider: event.target.value as ProjectSettings["video"]["provider"] } })}>
+                  <option value="mock-video">Локальный mock</option>
+                  <option value="anymodel-video">AnyModel API</option>
+                  <option value="veo">Veo</option>
+                </select>
+              </Field>
               <Field label="МОДЕЛЬ">
                 <select
                   value={settings.video.model}
@@ -786,6 +794,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
                   <option>Mock Motion 1</option>
                   <option>Veo 3.1 Lite</option>
                   <option>Veo 3.1 Fast</option>
+                  <option>xai/grok-imagine-video</option>
                 </select>
               </Field>
               <ToggleRow label="Анимация от первого кадра" checked={settings.video.startFrame} onChange={(startFrame) => setSettings({ video: { ...settings.video, startFrame } })} />
@@ -1620,6 +1629,14 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
+  const [apiKey, setApiKey] = useState("");
+  const [connectionMessage, setConnectionMessage] = useState("");
+  useEffect(() => { void api.getAnyModelSettings().then(setAnyModel); }, []);
+  const saveAnyModel = async () => {
+    const saved = await api.saveAnyModelSettings({ ...anyModel, apiKey: apiKey || undefined });
+    setAnyModel(saved); setApiKey(""); setConnectionMessage("Настройки сохранены локально и зашифрованы Windows");
+  };
   const tabs = [
     ["general", "Общие"],
     ["ai", "AI и сценарии"],
@@ -1656,11 +1673,22 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
           )}
           {activeTab === "ai" && (
             <>
-              <h2>AI и сценарии</h2>
-              <p>Сценарий будет создавать Gemini по умолчанию. Дополнительными адаптерами можно подключить Claude или OpenAI без изменения остальной программы.</p>
-              <InfoRow label="Текущий режим" value="Локальный mock" />
-              <InfoRow label="Планируемые модели" value="Gemini / Claude" />
-              <InfoRow label="Формат результата" value="Структурированный JSON" />
+              <h2>AnyModel API</h2>
+              <p>Ключ передаётся только из Electron и хранится зашифрованным через Windows safeStorage. Он не попадает в проекты, логи или GitHub.</p>
+              <InfoRow label="Статус" value={anyModel.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="НОВЫЙ API-КЛЮЧ">
+                <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={anyModel.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте новый ключ после отзыва старого"} />
+              </Field>
+              <Field label="BASE URL"><input value={anyModel.baseUrl} onChange={(event) => setAnyModel({ ...anyModel, baseUrl: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ СЦЕНАРИЯ"><input value={anyModel.textModel} onChange={(event) => setAnyModel({ ...anyModel, textModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ"><input value={anyModel.imageModel} onChange={(event) => setAnyModel({ ...anyModel, imageModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ВИДЕО"><input value={anyModel.videoModel} onChange={(event) => setAnyModel({ ...anyModel, videoModel: event.target.value })} /></Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveAnyModel()}><Save size={15} />Сохранить</button>
+                <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.testAnyModelConnection().then((result) => setConnectionMessage(result.message))}>Проверить подключение</button>
+                <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.clearAnyModelKey().then(setAnyModel)}>Удалить ключ</button>
+              </div>
+              {connectionMessage && <p>{connectionMessage}</p>}
             </>
           )}
           {activeTab === "images" && (
@@ -1668,6 +1696,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <h2>Изображения</h2>
               <p>Каждая сцена получает собственный промпт и отдельную картинку. Неудачный кадр можно будет перегенерировать независимо.</p>
               <InfoRow label="Планируемый сервис" value="Nano Banana / Gemini" />
+              <InfoRow label="AnyModel" value={anyModel.imageModel} />
               <InfoRow label="Референсы" value="До 3 изображений" />
               <InfoRow label="Сохранение" value="Сразу в папку сцены" />
             </>
@@ -1687,6 +1716,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <p>Standard собирает ролик из картинок с движением камеры. Pro дополнительно оживляет выбранные сцены через Veo.</p>
               <InfoRow label="Standard" value="Ken Burns и переходы" />
               <InfoRow label="Pro" value="Veo image-to-video" />
+              <InfoRow label="AnyModel" value={anyModel.videoModel} />
               <InfoRow label="Финальная сборка" value="FFmpeg" />
             </>
           )}

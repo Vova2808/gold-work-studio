@@ -246,7 +246,7 @@ async function run() {
   if (!settingsTabClicked) fail("вкладка AI и сценарии не найдена");
   await wait(100);
   const settingsTabsReady = await window.webContents.executeJavaScript(
-    "Boolean(document.querySelector('.settings-content')?.textContent?.includes('Gemini / Claude'))",
+    "Boolean(document.querySelector('.settings-content')?.textContent?.includes('AnyModel API'))",
   );
   if (!settingsTabsReady) fail("вкладки настроек не переключаются");
   await window.webContents.executeJavaScript(`(() => {

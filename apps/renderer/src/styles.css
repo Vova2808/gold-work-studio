@@ -1149,6 +1149,7 @@ input[type="range"] {
   color: #64635d;
   font-size: 9px;
 }
+.provider-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
 .info-row {
   min-height: 38px;
   display: grid;
