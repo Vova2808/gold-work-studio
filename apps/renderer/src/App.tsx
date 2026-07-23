@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
+import { createDefaultProjectSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 
 type SectionKey = "dashboard" | "project" | "scenario" | "clone" | "director" | "projects" | "subtitles" | "thumbnail" | "avatar" | "seo" | "studio" | "queue" | "console" | "settings";
@@ -189,6 +189,21 @@ export function App() {
     }
   }
 
+  async function createReferenceProject(analysis: ReferenceAnalysis) {
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      setActiveSection("scenario");
+      setNotice("Проект создан по разбору референса. Проверьте и отредактируйте сцены.");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveProject(id: string, input: UpdateProjectInput) {
     setError(null);
     try {
@@ -288,7 +303,7 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onInfo={setNotice} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createReferenceProject(analysis)} onInfo={setNotice} />}
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -1156,22 +1171,39 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onInfo }: { busy: boolean; onCreate: () => void; onInfo: (message: string) => void }) {
+function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
+  const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
-  function sendPrompt() {
-    if (!prompt.trim()) return;
-    setMessages((current) => [
-      ...current,
-      { role: "user", text: prompt },
-      {
-        role: "assistant",
-        text: "Я подготовил демонстрационный ответ. Реальный AI-провайдер подключится через адаптер, а сейчас можно создать проект с готовыми сценами.",
-      },
-    ]);
+  async function sendPrompt() {
+    const text = prompt.trim();
+    if (!text || analyzing) return;
+    setMessages((current) => [...current, { role: "user", text }]);
     setPrompt("");
+    setAnalyzing(true);
+    try {
+      const url = text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "");
+      if (url) {
+        const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
+        setAnalysis(result);
+        setMessages((current) => [...current, { role: "assistant", text: `Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.` }]);
+        onInfo("Референс разобран. Можно уточнить хук или сразу создать проект.");
+      } else if (analysis) {
+        const refined = await api.refineReferenceAnalysis(analysis, text);
+        setAnalysis(refined);
+        setMessages((current) => [...current, { role: "assistant", text: `Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.` }]);
+      } else {
+        setMessages((current) => [...current, { role: "assistant", text: "Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; реальный провайдер подключится через API." }]);
+      }
+    } catch (reason) {
+      const message = errorMessage(reason);
+      setMessages((current) => [...current, { role: "assistant", text: `Не удалось разобрать ссылку: ${message}` }]);
+    } finally {
+      setAnalyzing(false);
+    }
   }
 
   function openRecent(text: string) {
@@ -1215,6 +1247,7 @@ function Director({ busy, onCreate, onInfo }: { busy: boolean; onCreate: () => v
               onClick={() => {
                 setMessages([]);
                 setPrompt("");
+                setAnalysis(null);
                 onInfo("Создан новый локальный диалог");
               }}
             >
@@ -1229,7 +1262,7 @@ function Director({ busy, onCreate, onInfo }: { busy: boolean; onCreate: () => v
           <div className="chat-empty">
             <WandSparkles size={38} />
             <h2>Создай сценарий</h2>
-            <p>Опиши нишу или идею. Пока API не подключён, программа создаст локальный демонстрационный пресет.</p>
+            <p>Опиши нишу или пришли ссылку на ролик. Чат разберёт хук, аудиторию, структуру и подготовит улучшенный самостоятельный сценарий.</p>
             <div>
               <button className="ghost-button" disabled={busy} onClick={onCreate}>
                 Сделай сценарий
@@ -1267,6 +1300,33 @@ function Director({ busy, onCreate, onInfo }: { busy: boolean; onCreate: () => v
                 )}
               </article>
             ))}
+            {analyzing && <article className="message assistant">Анализирую нишу, хук, структуру и удержание…</article>}
+            {analysis && (
+              <article className="reference-analysis">
+                <header>
+                  <div>
+                    <strong>{analysis.sourceTitle}</strong>
+                    <small>{analysis.provider === "mock-director" ? "Демонстрационный разбор — API ещё не подключён" : `Анализ: ${analysis.provider}`}</small>
+                  </div>
+                  <span>{analysis.scenes.length} сцен</span>
+                </header>
+                <div className="analysis-grid">
+                  <section><small>НИША</small><p>{analysis.niche}</p></section>
+                  <section><small>АУДИТОРИЯ</small><p>{analysis.targetAudience}</p></section>
+                  <section className="wide"><small>УЛУЧШЕННЫЙ ХУК</small><p>{analysis.hook}</p></section>
+                  <section><small>СИЛЬНЫЕ СТОРОНЫ</small><ul>{analysis.strengths.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section><small>ЧТО УЛУЧШИТЬ</small><ul>{analysis.improvements.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section className="wide"><small>НОВЫЙ УГОЛ ПОДАЧИ</small><p>{analysis.suggestedAngle}</p></section>
+                </div>
+                <footer>
+                  <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
+                  <button className="generate-button" disabled={busy || analyzing} onClick={() => onCreateFromReference(analysis)}>
+                    <WandSparkles size={15} />
+                    Создать проект и сценарий
+                  </button>
+                </footer>
+              </article>
+            )}
           </div>
         )}
       </div>
@@ -1277,8 +1337,8 @@ function Director({ busy, onCreate, onInfo }: { busy: boolean; onCreate: () => v
         <button title="Добавить видео-референс" onClick={() => void attachFile("video")}>
           <Video size={19} />
         </button>
-        <input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendPrompt()} placeholder="Опиши что нужно или вставь скрин..." />
-        <button className="send" onClick={sendPrompt} disabled={!prompt.trim()}>
+        <input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void sendPrompt()} placeholder="Опиши идею или вставь ссылку на ролик..." />
+        <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim() || analyzing}>
           <Send size={19} />
         </button>
       </div>

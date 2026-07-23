@@ -40,6 +40,33 @@ test("pro projects enable the video stage", async () => {
   assert.equal(project.settings.assembly.fadeTransitions, false);
 });
 
+test("reference analysis can be refined and converted into a ready project", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const analysis = await service.analyzeReference({
+    url: "https://www.youtube.com/watch?v=demo",
+    instructions: "Сделай самостоятельный ролик с более сильным удержанием",
+    language: "Русский"
+  });
+
+  assert.equal(analysis.sourceUrl, "https://www.youtube.com/watch?v=demo");
+  assert.equal(analysis.scenes.length, 6);
+  assert.match(analysis.hook, /детал/i);
+
+  const refined = await service.refineReference(analysis, "Сделай хук жёстче");
+  assert.notEqual(refined.hook, analysis.hook);
+  assert.match(refined.suggestedAngle, /хук жёстче/i);
+
+  const project = await service.createFromReference({
+    analysis: refined,
+    aspectRatio: "16:9",
+    mode: "standard"
+  });
+  assert.equal(project.status, "ready");
+  assert.equal(project.scenes.length, 6);
+  assert.equal(project.referenceAnalysis?.sourceUrl, analysis.sourceUrl);
+  assert.equal(project.settings.video.enabled, false);
+});
+
 test("project service updates order, duplicates and deletes projects", async () => {
   const repository = new MemoryProjectRepository();
   const service = new ProjectService(repository, new MockDirectorProvider());

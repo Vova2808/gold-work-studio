@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } f
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { CreateProjectInput, DesktopApi, LogLevel, UpdateProjectInput } from "@gold-work/shared";
+import type { AnalyzeReferenceInput, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -69,6 +69,13 @@ function registerIpc(): void {
       },
       true
     )
+  );
+  handleIpc("director:analyze-reference", (_event, input: AnalyzeReferenceInput) => projectService.analyzeReference(input));
+  handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
+    projectService.refineReference(analysis, instructions)
+  );
+  handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
+    projectService.createFromReference(input)
   );
   handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
   handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));

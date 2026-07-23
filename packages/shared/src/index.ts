@@ -79,6 +79,36 @@ export interface Scene {
   audioPath?: string;
 }
 
+export interface ReferenceAnalysis {
+  sourceUrl: string;
+  sourceTitle: string;
+  niche: string;
+  targetAudience: string;
+  hook: string;
+  structure: string[];
+  strengths: string[];
+  improvements: string[];
+  suggestedAngle: string;
+  suggestedTitle: string;
+  recommendedDurationSeconds: number;
+  language: string;
+  instructions?: string;
+  scenes: Scene[];
+  provider: string;
+}
+
+export interface AnalyzeReferenceInput {
+  url: string;
+  instructions?: string;
+  language?: string;
+}
+
+export interface CreateReferenceProjectInput {
+  analysis: ReferenceAnalysis;
+  aspectRatio: AspectRatio;
+  mode: ProjectMode;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -91,6 +121,7 @@ export interface Project {
   updatedAt: string;
   scenes: Scene[];
   settings: ProjectSettings;
+  referenceAnalysis?: ReferenceAnalysis;
   outputPath?: string;
 }
 
@@ -145,6 +176,9 @@ export interface DesktopApi {
   getProject(id: string): Promise<Project | undefined>;
   createProject(input: CreateProjectInput): Promise<Project>;
   createDemoProject(): Promise<Project>;
+  analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis>;
+  refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis>;
+  createReferenceProject(input: CreateReferenceProjectInput): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   duplicateProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;

@@ -4,6 +4,7 @@ import {
   type DesktopApi,
   type Project,
   type QueueTask,
+  type ReferenceAnalysis,
   type Scene,
   type TaskKind,
   type UpdateProjectInput
@@ -25,6 +26,39 @@ function demoScenes(topic: string): Scene[] {
     durationSeconds: 8,
     status: "draft"
   }));
+}
+
+function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
+  const parsed = new URL(url);
+  const hook = "Ты уверен, что делаешь всё правильно? Одна деталь полностью меняет результат.";
+  const titles = ["Хук", "Обещание", "Контекст", "Неожиданный поворот", "Практическое решение", "Финал"];
+  const scenes = titles.map((title, order) => ({
+    id: createId("scene"),
+    order,
+    title,
+    narration: order === 0 ? hook : `${title}. Самостоятельная улучшенная часть ролика по мотивам структуры референса.`,
+    imagePrompt: `${title}. Выразительный кадр для YouTube, единый визуальный стиль, без копирования брендинга референса`,
+    animationPrompt: "Динамичное движение камеры и визуальный акцент на главной мысли",
+    durationSeconds: 10,
+    status: "draft" as const
+  }));
+  return {
+    sourceUrl: parsed.toString(),
+    sourceTitle: `Референс с ${parsed.hostname.replace(/^www\./, "")}`,
+    niche: "Развлекательный или образовательный YouTube-контент",
+    targetAudience: "Зрители 18–44 лет, которым нужен быстрый понятный результат",
+    hook,
+    structure: ["0–5 сек: хук", "5–15 сек: обещание", "Проблема → поворот → решение", "Вывод и следующий шаг"],
+    strengths: ["Понятная тема", "Хорошая основа для серии"],
+    improvements: ["Усилить первый кадр", "Убрать длинное вступление", "Менять визуальный акцент каждые 5–8 секунд"],
+    suggestedAngle: instructions || "Сделать самостоятельный ролик в той же нише с более сильным удержанием",
+    suggestedTitle: "Главная ошибка, которая мешает получить результат",
+    recommendedDurationSeconds: 60,
+    language: "Русский",
+    instructions,
+    scenes,
+    provider: "mock-director"
+  };
 }
 
 function makeProject(input: CreateProjectInput, withScenes: boolean): Project {
@@ -135,6 +169,40 @@ export const fallbackApi: DesktopApi = {
       language: "Русский",
       mode: "standard"
     }, true);
+    projects.unshift(project);
+    return clone(project);
+  },
+  async analyzeReference(input) {
+    try {
+      return clone(analyzeReference(input.url, input.instructions));
+    } catch {
+      throw new Error("Укажите полную ссылку на ролик");
+    }
+  },
+  async refineReferenceAnalysis(analysis, instructions) {
+    const hook = instructions.toLowerCase().includes("хук")
+      ? "Ты уверен, что делаешь всё правильно? За минуту покажу ошибку, которая меняет весь результат."
+      : analysis.hook;
+    return clone({
+      ...analysis,
+      hook,
+      instructions: [analysis.instructions, instructions].filter(Boolean).join("\n"),
+      suggestedAngle: `${analysis.suggestedAngle}. Пожелание: ${instructions}`,
+      improvements: [...analysis.improvements, `Учесть пожелание: ${instructions}`],
+      scenes: analysis.scenes.map((scene, index) => index === 0 ? { ...scene, narration: hook } : scene)
+    });
+  },
+  async createReferenceProject(input) {
+    const project = makeProject({
+      title: input.analysis.suggestedTitle,
+      topic: input.analysis.suggestedAngle,
+      aspectRatio: input.aspectRatio,
+      language: input.analysis.language,
+      mode: input.mode
+    }, false);
+    project.scenes = clone(input.analysis.scenes);
+    project.referenceAnalysis = clone(input.analysis);
+    project.status = "ready";
     projects.unshift(project);
     return clone(project);
   },

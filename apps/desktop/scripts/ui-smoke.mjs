@@ -201,6 +201,40 @@ async function run() {
   if (!directorControlsReady) fail("кнопки AI-генератора не работают");
   await trace("director-controls-ready");
 
+  const referenceSent = await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector(".chat-composer input");
+    const send = document.querySelector(".chat-composer .send");
+    if (!input || !send) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "https://youtube.com/watch?v=smoke сделай сильный хук");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  if (!referenceSent) fail("поле ссылки на референс не найдено");
+  await wait(100);
+  await window.webContents.executeJavaScript("document.querySelector('.chat-composer .send')?.click()");
+  await wait(350);
+  const referenceReady = await window.webContents.executeJavaScript(`(() => {
+    const card = document.querySelector(".reference-analysis");
+    return Boolean(card?.textContent?.includes("УЛУЧШЕННЫЙ ХУК") && card?.textContent?.includes("6 сцен"));
+  })()`);
+  if (!referenceReady) fail("разбор ссылки на ролик не появился");
+  await trace("reference-analysis-ready");
+
+  const referenceProjectCreated = await window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => item.textContent?.includes("Создать проект"));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!referenceProjectCreated) fail("кнопка создания проекта из разбора не найдена");
+  await wait(350);
+  const referenceScenarioReady = await window.webContents.executeJavaScript(`(() => {
+    const text = document.body.innerText;
+    return text.includes("Редактор сценария") && document.querySelectorAll(".scene-list-item").length === 6;
+  })()`);
+  if (!referenceScenarioReady) fail("проект из разбора не создался");
+  await trace("reference-project-ready");
+
   await window.webContents.executeJavaScript("document.querySelector('.settings-link')?.click()");
   await wait(250);
   const settingsTabClicked = await window.webContents.executeJavaScript(`(() => {
