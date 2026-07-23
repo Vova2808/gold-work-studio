@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import type { AnyModelSettings, SaveAnyModelSettingsInput } from "@gold-work/shared";
 
 const defaults: Omit<AnyModelSettings, "configured"> = {
-  baseUrl: "https://anymodel.org",
+  baseUrl: "https://anymodel.org/v1",
   textModel: "cc/claude-sonnet-4-6",
   imageModel: "gpt-image-2",
   videoModel: "xai/grok-imagine-video"
@@ -32,7 +32,7 @@ export class AnyModelStore {
   async save(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings> {
     const current = await this.read();
     const next: StoredSettings = {
-      baseUrl: input.baseUrl.replace(/\/+$/, ""),
+      baseUrl: input.baseUrl.replace(/\/+$/, "").replace(/\/v1\/v1$/i, "/v1"),
       textModel: input.textModel.trim(),
       imageModel: input.imageModel.trim(),
       videoModel: input.videoModel.trim(),

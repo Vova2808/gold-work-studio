@@ -142,6 +142,9 @@ function registerIpc(): void {
   handleIpc("anymodel:save-settings", (_event, input: SaveAnyModelSettingsInput) => anyModelStore.save(input));
   handleIpc("anymodel:clear-key", () => anyModelStore.clearKey());
   handleIpc("anymodel:test", () => anyModelClient.test());
+  handleIpc("anymodel:chat", (_event, messages: Parameters<AnyModelClient["chatMessage"]>[0]) =>
+    anyModelClient.chatMessage(messages)
+  );
   handleIpc("app:info", () => ({
     version: app.getVersion(),
     dataPath,

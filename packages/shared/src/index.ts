@@ -121,6 +121,11 @@ export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "confi
   apiKey?: string;
 }
 
+export interface AiChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -195,6 +200,7 @@ export interface DesktopApi {
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
   clearAnyModelKey(): Promise<AnyModelSettings>;
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
+  chatWithAnyModel(messages: AiChatMessage[]): Promise<string>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   duplicateProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AnalyzeReferenceInput, ReferenceAnalysis, Scene } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 
@@ -18,6 +18,14 @@ export class AnyModelClient {
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  async chatMessage(messages: AiChatMessage[]): Promise<string> {
+    const settings = await this.store.publicSettings();
+    return this.chat(settings.textModel, [
+      { role: "system", content: "Ты AI-режиссёр Gold Work Studio. Помогай создавать оригинальные ролики: анализируй нишу, улучшай хук, сценарий, структуру и удержание. Отвечай на языке пользователя." },
+      ...messages
+    ]);
   }
 
   async analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
@@ -94,7 +102,11 @@ export class AnyModelClient {
     const settings = await this.store.publicSettings();
     const key = await this.store.apiKey();
     if (!key) throw new Error("Сначала сохраните новый API-ключ AnyModel в настройках");
-    return fetch(`${settings.baseUrl}${path}`, { ...init, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers } });
+    const base = settings.baseUrl.replace(/\/+$/, "");
+    const normalizedPath = base.toLowerCase().endsWith("/v1") && path.toLowerCase().startsWith("/v1/")
+      ? path.slice(3)
+      : path;
+    return fetch(`${base}${normalizedPath}`, { ...init, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers } });
   }
 
   private async error(response: Response): Promise<string> {

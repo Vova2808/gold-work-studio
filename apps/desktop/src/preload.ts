@@ -13,6 +13,7 @@ const api: DesktopApi = {
   saveAnyModelSettings: (input) => ipcRenderer.invoke("anymodel:save-settings", input),
   clearAnyModelKey: () => ipcRenderer.invoke("anymodel:clear-key"),
   testAnyModelConnection: () => ipcRenderer.invoke("anymodel:test"),
+  chatWithAnyModel: (messages) => ipcRenderer.invoke("anymodel:chat", messages),
   updateProject: (id: string, input: UpdateProjectInput) => ipcRenderer.invoke("projects:update", id, input),
   duplicateProject: (id: string) => ipcRenderer.invoke("projects:duplicate", id),
   deleteProject: (id: string) => ipcRenderer.invoke("projects:delete", id),

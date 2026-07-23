@@ -1205,11 +1205,20 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
         setAnalysis(refined);
         setMessages((current) => [...current, { role: "assistant", text: `Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.` }]);
       } else {
-        setMessages((current) => [...current, { role: "assistant", text: "Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; реальный провайдер подключится через API." }]);
+        const provider = await api.getAnyModelSettings();
+        if (provider.configured) {
+          const answer = await api.chatWithAnyModel([
+            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
+            { role: "user", content: text },
+          ]);
+          setMessages((current) => [...current, { role: "assistant", text: answer }]);
+        } else {
+          setMessages((current) => [...current, { role: "assistant", text: "Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; добавьте AnyModel API в настройках для настоящего диалога." }]);
+        }
       }
     } catch (reason) {
       const message = errorMessage(reason);
-      setMessages((current) => [...current, { role: "assistant", text: `Не удалось разобрать ссылку: ${message}` }]);
+      setMessages((current) => [...current, { role: "assistant", text: `Ошибка AI-провайдера: ${message}` }]);
     } finally {
       setAnalyzing(false);
     }
@@ -1629,7 +1638,7 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
-  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" });
   const [apiKey, setApiKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => { void api.getAnyModelSettings().then(setAnyModel); }, []);
