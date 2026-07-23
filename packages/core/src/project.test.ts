@@ -127,3 +127,21 @@ test("concurrent patches are merged and active generation locks scene structure"
     /Нельзя менять состав сцен/
   );
 });
+
+test("project keeps the saved director chat topic link", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const project = await service.create(
+    { title: "Из чата", topic: "Черновик", aspectRatio: "16:9", language: "Русский", mode: "standard" },
+    true
+  );
+
+  const updated = await service.update(project.id, {
+    chatTopicId: "topic-42",
+    topic: "Сценарий из сохранённого разговора",
+    scenes: project.scenes
+  });
+
+  assert.equal(updated.chatTopicId, "topic-42");
+  assert.equal((await service.get(project.id))?.chatTopicId, "topic-42");
+  assert.equal(updated.status, "ready");
+});

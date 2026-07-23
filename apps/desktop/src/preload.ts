@@ -25,6 +25,12 @@ const api: DesktopApi = {
       ipcRenderer.removeListener(channel, listener);
     }
   },
+  listChatTopics: () => ipcRenderer.invoke("chat-topics:list"),
+  getChatTopic: (id) => ipcRenderer.invoke("chat-topics:get", id),
+  createChatTopic: (title) => ipcRenderer.invoke("chat-topics:create", title),
+  appendChatMessage: (topicId, message) => ipcRenderer.invoke("chat-topics:append", topicId, message),
+  deleteChatTopic: (id) => ipcRenderer.invoke("chat-topics:delete", id),
+  applyChatTopicToProject: (projectId, topicId) => ipcRenderer.invoke("projects:apply-chat-topic", projectId, topicId),
   updateProject: (id: string, input: UpdateProjectInput) => ipcRenderer.invoke("projects:update", id, input),
   duplicateProject: (id: string) => ipcRenderer.invoke("projects:duplicate", id),
   deleteProject: (id: string) => ipcRenderer.invoke("projects:delete", id),

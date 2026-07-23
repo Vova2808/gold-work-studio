@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
-import { MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { AnalyzeReferenceInput, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, UpdateProjectInput } from "@gold-work/shared";
+import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
+import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -13,6 +13,7 @@ import { StandardRenderer } from "./standard-renderer.js";
 import { TextFileLogger } from "./text-file-logger.js";
 import { AnyModelStore } from "./anymodel-store.js";
 import { AnyModelClient } from "./anymodel-client.js";
+import { ChatTopicRepository } from "./chat-topic-repository.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let projectService: ProjectService;
@@ -23,6 +24,7 @@ let logger: TextFileLogger;
 let dataPath: string;
 let anyModelStore: AnyModelStore;
 let anyModelClient: AnyModelClient;
+let chatTopics: ChatTopicRepository;
 let realtimeHttpServer: HttpServer;
 let realtimeServer: SocketServer;
 let realtimeUrl: string;
@@ -153,6 +155,29 @@ function registerIpc(): void {
   handleIpc("anymodel:chat-stream", (event, requestId: string, messages: Parameters<AnyModelClient["streamChatMessage"]>[0]) =>
     anyModelClient.streamChatMessage(messages, (chunk) => event.sender.send(`anymodel:chat-chunk:${requestId}`, chunk))
   );
+  handleIpc("chat-topics:list", () => chatTopics.list());
+  handleIpc("chat-topics:get", (_event, id: string) => chatTopics.get(id));
+  handleIpc("chat-topics:create", (_event, title?: string) => chatTopics.create(title));
+  handleIpc("chat-topics:append", (_event, topicId: string, message: AiChatMessage) => chatTopics.append(topicId, message));
+  handleIpc("chat-topics:delete", (_event, id: string) => chatTopics.delete(id));
+  handleIpc("projects:apply-chat-topic", async (_event, projectId: string, topicId: string) => {
+    const project = await projectService.get(projectId);
+    if (!project) throw new Error("Проект не найден");
+    const topic = chatTopics.get(topicId);
+    if (!topic) throw new Error("Тема чата не найдена");
+    const plan = await createPlanFromTopic(topic, project.language);
+    const durationSeconds = plan.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
+    return projectService.update(projectId, {
+      title: plan.title,
+      topic: plan.topic,
+      chatTopicId: topicId,
+      scenes: plan.scenes,
+      settings: {
+        ...project.settings,
+        durationMinutes: Math.max(1, Math.ceil(durationSeconds / 60))
+      }
+    });
+  });
   handleIpc("app:info", () => ({
     version: app.getVersion(),
     dataPath,
@@ -246,10 +271,38 @@ async function mutateQueue<TResult>(mutation: () => TResult | Promise<TResult>):
   return result;
 }
 
+async function createPlanFromTopic(topic: ChatTopic, language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
+  const messages = topic.messages.map(({ role, content }) => ({ role, content }));
+  if (await anyModelClient.configured()) return anyModelClient.createProjectPlanFromChat(messages, language);
+  const userText = topic.messages.filter((message) => message.role === "user").map((message) => message.content).join(" ");
+  const sentences = userText.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
+  const beats = [
+    { title: "Хук", narration: sentences[0] || `Почему тема «${topic.title}» важнее, чем кажется?` },
+    { title: "Развитие", narration: sentences.slice(1, -1).join(" ") || `Разбираем главную идею темы «${topic.title}» на понятном примере.` },
+    { title: "Финал", narration: sentences.at(-1) || "Подводим итог и даём зрителю ясный следующий шаг." }
+  ];
+  return {
+    title: topic.title,
+    topic: userText.slice(0, 500) || topic.title,
+    scenes: beats.map((beat, order) => ({
+      id: createId("scene"),
+      order,
+      title: beat.title,
+      narration: beat.narration,
+      imagePrompt: `${beat.narration}. Единый визуальный стиль, выразительная композиция, без текста в кадре`,
+      animationPrompt: "Плавное движение камеры и естественное движение объектов",
+      durationSeconds: 8,
+      status: "draft"
+    }))
+  };
+}
+
 app.whenReady().then(async () => {
   dataPath = resolveDataPath();
   anyModelStore = new AnyModelStore(join(dataPath, "credentials", "anymodel.json"));
   anyModelClient = new AnyModelClient(anyModelStore);
+  chatTopics = new ChatTopicRepository(join(dataPath, "database", "gold-work-studio.sqlite"));
+  await chatTopics.initialize();
   logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"));
   await logger.initialize();
   process.on("uncaughtExceptionMonitor", (error) => void logger.write("error", "process.uncaught_exception", { error }));
@@ -290,6 +343,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  chatTopics?.close();
   realtimeServer?.close();
   realtimeHttpServer?.close();
   if (logger) void logger.write("info", "app.before_quit");

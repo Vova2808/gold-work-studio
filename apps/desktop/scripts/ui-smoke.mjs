@@ -245,6 +245,16 @@ async function run() {
   if (!streamFinished) fail("потоковый ответ не завершился");
   await trace("director-stream-ready");
   await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll("button")].find((item) => item.textContent?.includes("История"))?.click();
+  })()`);
+  await wait(80);
+  const savedTopicReady = await window.webContents.executeJavaScript(`(() => {
+    const panel = document.querySelector(".chat-history-panel");
+    return Boolean(panel && panel.querySelectorAll(":scope > div").length === 1 && panel.textContent?.includes("сообщ."));
+  })()`);
+  if (!savedTopicReady) fail("director chat topic was not saved in history");
+  await trace("chat-topic-history-ready");
+  await window.webContents.executeJavaScript(`(() => {
     [...document.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Новый")?.click();
   })()`);
   await wait(100);
@@ -296,6 +306,29 @@ async function run() {
   })()`);
   if (!referenceScenarioReady) fail("проект из разбора не создался");
   await trace("reference-project-ready");
+
+  await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll(".nav-item")].find((item) => item.textContent?.trim() === "Проект")?.click();
+  })()`);
+  await wait(180);
+  const chatTopicSelected = await window.webContents.executeJavaScript(`(() => {
+    const select = document.querySelector(".chat-topic-source select");
+    const option = select?.querySelector("option:not([value=''])");
+    if (!select || !option) return false;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(select, option.value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  if (!chatTopicSelected) fail("saved chat topic is not available in project");
+  await wait(60);
+  await window.webContents.executeJavaScript("document.querySelector('.chat-topic-source .generate-button')?.click()");
+  await wait(300);
+  const topicGenerationStarted = await window.webContents.executeJavaScript(`(() => {
+    const text = document.body.innerText;
+    return text.includes("Локальный конвейер") && text.includes("Сборка Final.mp4");
+  })()`);
+  if (!topicGenerationStarted) fail("generation did not start from saved chat topic");
+  await trace("chat-topic-generation-ready");
 
   await window.webContents.executeJavaScript("document.querySelector('.settings-link')?.click()");
   await wait(250);

@@ -63,6 +63,41 @@ export class AnyModelClient {
     return this.analyzeReference({ url: analysis.sourceUrl, language: analysis.language, instructions: `${analysis.instructions || ""}\nТекущий разбор: ${JSON.stringify(analysis)}\nИзмени по просьбе: ${instructions}` });
   }
 
+  async createProjectPlanFromChat(messages: AiChatMessage[], language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
+    const settings = await this.store.publicSettings();
+    const content = await this.chat(settings.textModel, [
+      {
+        role: "system",
+        content: "Ты AI-режиссёр. Преврати сохранённый разговор в готовый оригинальный сценарный пресет. Верни только валидный JSON без markdown: title, topic, scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]. Не копируй чужой текст дословно."
+      },
+      {
+        role: "user",
+        content: `Язык проекта: ${language}\nСохранённый разговор:\n${messages.map((message) => `${message.role}: ${message.content}`).join("\n\n")}`
+      }
+    ]);
+    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as {
+      title?: string;
+      topic?: string;
+      scenes?: Array<Partial<Scene>>;
+    };
+    const scenes = (parsed.scenes ?? []).map((scene, order) => ({
+      id: createId("scene"),
+      order,
+      title: scene.title || `Сцена ${order + 1}`,
+      narration: scene.narration || "",
+      imagePrompt: scene.imagePrompt || "",
+      animationPrompt: scene.animationPrompt || "",
+      durationSeconds: Math.max(3, Number(scene.durationSeconds) || 8),
+      status: "draft" as const
+    }));
+    if (scenes.length === 0) throw new Error("Модель не вернула сцены для темы чата");
+    return {
+      title: parsed.title?.trim() || "Проект из темы чата",
+      topic: parsed.topic?.trim() || [...messages].reverse().find((message) => message.role === "user")?.content || "Сценарий из сохранённого диалога",
+      scenes
+    };
+  }
+
   async generateImage(prompt: string, size: string): Promise<Buffer> {
     const settings = await this.store.publicSettings();
     const response = await this.request("/v1/images/generations", { method: "POST", body: JSON.stringify({ model: settings.imageModel, prompt, n: 1, size, quality: "high", output_format: "png", response_format: "b64_json" }) });

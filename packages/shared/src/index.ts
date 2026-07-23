@@ -126,6 +126,19 @@ export interface AiChatMessage {
   content: string;
 }
 
+export interface ChatTopicSummary {
+  id: string;
+  title: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export interface ChatTopic extends ChatTopicSummary {
+  messages: Array<AiChatMessage & { id: number; createdAt: string }>;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -138,6 +151,7 @@ export interface Project {
   updatedAt: string;
   scenes: Scene[];
   settings: ProjectSettings;
+  chatTopicId?: string;
   referenceAnalysis?: ReferenceAnalysis;
   outputPath?: string;
 }
@@ -179,6 +193,7 @@ export interface UpdateProjectInput {
   status?: ProjectStatus;
   scenes?: Scene[];
   settings?: ProjectSettings;
+  chatTopicId?: string;
   outputPath?: string;
 }
 
@@ -202,6 +217,12 @@ export interface DesktopApi {
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
   chatWithAnyModel(messages: AiChatMessage[]): Promise<string>;
   streamChatWithAnyModel(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string>;
+  listChatTopics(): Promise<ChatTopicSummary[]>;
+  getChatTopic(id: string): Promise<ChatTopic | undefined>;
+  createChatTopic(title?: string): Promise<ChatTopic>;
+  appendChatMessage(topicId: string, message: AiChatMessage): Promise<ChatTopic>;
+  deleteChatTopic(id: string): Promise<void>;
+  applyChatTopicToProject(projectId: string, topicId: string): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   duplicateProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;

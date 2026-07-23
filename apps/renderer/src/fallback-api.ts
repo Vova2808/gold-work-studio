@@ -1,6 +1,7 @@
 import {
   createDefaultProjectSettings,
   type CreateProjectInput,
+  type ChatTopic,
   type DesktopApi,
   type Project,
   type QueueTask,
@@ -14,6 +15,7 @@ const createId = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${Mat
 const clone = <T,>(value: T): T => structuredClone(value);
 let projects: Project[] = [];
 let tasks: QueueTask[] = [];
+let chatTopics: ChatTopic[] = [];
 let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "gpt-image-2", videoModel: "xai/grok-imagine-video" };
 
 function demoScenes(topic: string): Scene[] {
@@ -232,12 +234,71 @@ export const fallbackApi: DesktopApi = {
     }
     return answer;
   },
+  async listChatTopics() {
+    return clone(chatTopics.map(({ messages: _messages, ...topic }) => topic).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  },
+  async getChatTopic(id) {
+    const topic = chatTopics.find((item) => item.id === id);
+    return topic ? clone(topic) : undefined;
+  },
+  async createChatTopic(title = "Новая тема") {
+    const now = new Date().toISOString();
+    const topic: ChatTopic = {
+      id: createId("topic"),
+      title: title.trim().slice(0, 70) || "Новая тема",
+      preview: "",
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+      messages: []
+    };
+    chatTopics.unshift(topic);
+    return clone(topic);
+  },
+  async appendChatMessage(topicId, message) {
+    const topic = chatTopics.find((item) => item.id === topicId);
+    if (!topic) throw new Error("Тема чата не найдена");
+    const content = message.content.trim();
+    const now = new Date().toISOString();
+    if (topic.messages.every((item) => item.role !== "user") && message.role === "user") topic.title = content.replace(/\s+/g, " ").slice(0, 70);
+    topic.messages.push({ ...message, content, id: topic.messages.length + 1, createdAt: now });
+    topic.preview = content.replace(/\s+/g, " ").slice(0, 180);
+    topic.updatedAt = now;
+    topic.messageCount = topic.messages.length;
+    return clone(topic);
+  },
+  async deleteChatTopic(id) {
+    chatTopics = chatTopics.filter((item) => item.id !== id);
+  },
+  async applyChatTopicToProject(projectId, topicId) {
+    const project = requireProject(projectId);
+    const chatTopic = chatTopics.find((item) => item.id === topicId);
+    if (!chatTopic) throw new Error("Тема чата не найдена");
+    const source = chatTopic.messages.filter((message) => message.role === "user").map((message) => message.content).join(" ");
+    const beats = [
+      ["Хук", source.split(/(?<=[.!?])\s+/)[0] || `Почему тема «${chatTopic.title}» важнее, чем кажется?`],
+      ["Развитие", `Разбираем идею «${chatTopic.title}» на понятном примере.`],
+      ["Финал", "Подводим итог и даём зрителю ясный следующий шаг."]
+    ];
+    project.title = chatTopic.title;
+    project.topic = source.slice(0, 500) || chatTopic.title;
+    project.chatTopicId = topicId;
+    project.scenes = beats.map(([title, narration], order) => ({
+      id: createId("scene"), order, title: title!, narration: narration!,
+      imagePrompt: `${narration}. Единый визуальный стиль, без текста`,
+      animationPrompt: "Плавное движение камеры",
+      durationSeconds: 8, status: "draft"
+    }));
+    project.status = "ready";
+    project.updatedAt = new Date().toISOString();
+    return clone(project);
+  },
   async updateProject(id: string, input: UpdateProjectInput) {
     const project = requireProject(id);
     if (input.scenes && (project.status === "generating" || project.status === "paused")) {
       throw new Error("Нельзя менять состав сцен во время активной генерации. Сначала остановите очередь.");
     }
-    const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined;
+    const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined;
     const active = project.status === "generating" || project.status === "paused";
     Object.assign(project, input, {
       id: project.id,

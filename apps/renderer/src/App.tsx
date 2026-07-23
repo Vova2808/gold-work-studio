@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, type AnyModelSettings, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
+import { createDefaultProjectSettings, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -229,6 +229,18 @@ export function App() {
     }
   }
 
+  async function applyChatTopic(projectId: string, topicId: string) {
+    setError(null);
+    try {
+      const project = await api.applyChatTopicToProject(projectId, topicId);
+      upsertProject(project);
+      return project;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
   async function duplicateProject(id: string) {
     try {
       upsertProject(await api.duplicateProject(id));
@@ -313,7 +325,7 @@ export function App() {
         <section className="work-area">
           <div className="page-scroll" ref={pageScrollRef}>
             {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onOpenFolder={(id) => void openProjectFolder(id)} />}
-            {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
+            {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
             {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createReferenceProject(analysis)} onInfo={setNotice} />}
@@ -601,11 +613,20 @@ function Dashboard({ projects, selectedId, busy, onCreate, onOpen, onDelete, onP
   );
 }
 
-function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, onInfo }: { project?: Project; busy: boolean; onBack: () => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void; onInfo: (message: string) => void }) {
+function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGenerate, onNavigate, onInfo }: { project?: Project; busy: boolean; onBack: () => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onApplyChatTopic: (projectId: string, topicId: string) => Promise<Project>; onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void; onInfo: (message: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [draft, setDraft] = useState<Project | null>(project ? structuredClone(project) : null);
   const [saving, setSaving] = useState(false);
-  useEffect(() => setDraft(project ? structuredClone(project) : null), [project?.id]);
+  const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
+  const [selectedTopicId, setSelectedTopicId] = useState(project?.chatTopicId ?? "");
+  const [applyingTopic, setApplyingTopic] = useState(false);
+  useEffect(() => {
+    setDraft(project ? structuredClone(project) : null);
+    setSelectedTopicId(project?.chatTopicId ?? "");
+  }, [project?.id, project?.chatTopicId]);
+  useEffect(() => {
+    void api.listChatTopics().then(setChatTopics).catch(() => setChatTopics([]));
+  }, []);
   if (!draft) return <EmptyState icon={<Clapperboard size={34} />} title="Проект не выбран" text="Создайте проект на Dashboard или выберите его в списке." action="Вернуться на Dashboard" onAction={onBack} />;
   const settings = draft.settings ?? createDefaultProjectSettings();
   const setSettings = (patch: Partial<ProjectSettings>) => setDraft((current) => (current ? { ...current, settings: { ...current.settings, ...patch } } : current));
@@ -619,6 +640,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
         aspectRatio: draft.aspectRatio,
         mode: draft.mode,
         settings: draft.settings,
+        chatTopicId: draft.chatTopicId,
       });
     } catch {
       // Корневой компонент уже показывает понятное сообщение об ошибке.
@@ -657,6 +679,18 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
     setSettings({ music: { ...settings.music, path } });
     onInfo("Фоновая музыка добавлена в проект.");
   };
+  const applyTopic = async (startGeneration: boolean) => {
+    if (!selectedTopicId) return;
+    setApplyingTopic(true);
+    try {
+      const updated = await onApplyChatTopic(draft.id, selectedTopicId);
+      setDraft(structuredClone(updated));
+      onInfo(`Тема чата применена: создано сцен ${updated.scenes.length}.`);
+      if (startGeneration) onGenerate(updated.id);
+    } finally {
+      setApplyingTopic(false);
+    }
+  };
   return (
     <div className="project-page page-with-actionbar">
       <PageHeading
@@ -679,6 +713,26 @@ function ProjectEditor({ project, busy, onBack, onSave, onGenerate, onNavigate, 
         </button>
         <button title="Сохранить" onClick={() => void save()}>
           <Save size={16} />
+        </button>
+      </div>
+      <div className="chat-topic-source">
+        <div>
+          <FileText size={16} />
+          <span>Тема из чата режиссёра</span>
+          <select value={selectedTopicId} onChange={(event) => setSelectedTopicId(event.target.value)}>
+            <option value="">Выберите сохранённый диалог...</option>
+            {chatTopics.map((topic) => (
+              <option key={topic.id} value={topic.id}>{topic.title} · {topic.messageCount} сообщ.</option>
+            ))}
+          </select>
+        </div>
+        <button className="outline-button small" disabled={!selectedTopicId || applyingTopic || busy} onClick={() => void applyTopic(false)}>
+          <WandSparkles size={14} />
+          {applyingTopic ? "Строим..." : "Построить пресет"}
+        </button>
+        <button className="generate-button compact" disabled={!selectedTopicId || applyingTopic || busy} onClick={() => void applyTopic(true)}>
+          <Zap size={14} />
+          Создать и запустить
         </button>
       </div>
       <div className="editor-grid">
@@ -1244,6 +1298,17 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [streamingText, setStreamingText] = useState<string | null>(null);
+  const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
+  const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  async function refreshChatTopics() {
+    setChatTopics(await api.listChatTopics());
+  }
+
+  useEffect(() => {
+    void refreshChatTopics().catch(() => setChatTopics([]));
+  }, []);
 
   async function sendPrompt() {
     const text = prompt.trim();
@@ -1251,17 +1316,30 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
     setMessages((current) => [...current, { role: "user", text }]);
     setPrompt("");
     setAnalyzing(true);
+    let topicId = currentTopicId;
     try {
+      if (!topicId) {
+        const created = await api.createChatTopic(text);
+        topicId = created.id;
+        setCurrentTopicId(created.id);
+      }
+      await api.appendChatMessage(topicId, { role: "user", content: text });
+      await refreshChatTopics();
+      const appendAssistant = async (answer: string) => {
+        setMessages((current) => [...current, { role: "assistant", text: answer }]);
+        await api.appendChatMessage(topicId!, { role: "assistant", content: answer });
+        await refreshChatTopics();
+      };
       const url = text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "");
       if (url) {
         const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
         setAnalysis(result);
-        setMessages((current) => [...current, { role: "assistant", text: `Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.` }]);
+        await appendAssistant(`Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.`);
         onInfo("Референс разобран. Можно уточнить хук или сразу создать проект.");
       } else if (analysis) {
         const refined = await api.refineReferenceAnalysis(analysis, text);
         setAnalysis(refined);
-        setMessages((current) => [...current, { role: "assistant", text: `Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.` }]);
+        await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
       } else {
         const provider = await api.getAnyModelSettings();
         if (provider.configured) {
@@ -1273,29 +1351,34 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
             streamed += chunk;
             setStreamingText(streamed);
           });
-          setMessages((current) => [...current, { role: "assistant", text: answer }]);
+          await appendAssistant(answer);
           setStreamingText(null);
         } else {
-          setMessages((current) => [...current, { role: "assistant", text: "Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; добавьте AnyModel API в настройках для настоящего диалога." }]);
+          await appendAssistant("Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; добавьте AnyModel API в настройках для настоящего диалога.");
         }
       }
     } catch (reason) {
       setStreamingText(null);
       const message = errorMessage(reason);
-      setMessages((current) => [...current, { role: "assistant", text: `Ошибка AI-провайдера: ${message}` }]);
+      const answer = `Ошибка AI-провайдера: ${message}`;
+      setMessages((current) => [...current, { role: "assistant", text: answer }]);
+      if (topicId) await api.appendChatMessage(topicId, { role: "assistant", content: answer }).catch(() => undefined);
     } finally {
       setAnalyzing(false);
     }
   }
 
-  function openRecent(text: string) {
-    setMessages([
-      { role: "user", text },
-      {
-        role: "assistant",
-        text: "Диалог восстановлен локально. После подключения AI здесь появятся полный сценарий, персонажи, локации и промпты для каждой сцены.",
-      },
-    ]);
+  async function openTopic(id: string) {
+    const topic = await api.getChatTopic(id);
+    if (!topic) return;
+    setCurrentTopicId(topic.id);
+    setMessages(topic.messages.filter((message) => message.role !== "system").map((message) => ({
+      role: message.role as "user" | "assistant",
+      text: message.content
+    })));
+    setAnalysis(null);
+    setHistoryOpen(false);
+    onInfo(`Открыта тема «${topic.title}»`);
   }
 
   async function attachFile(kind: "image" | "video") {
@@ -1320,7 +1403,7 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
             <button className="icon-button" title="Статус AI-провайдера" onClick={() => onInfo("Сейчас активен локальный mock-режим. Gemini или Claude подключатся через адаптер провайдера.")}>
               <Bot size={16} />
             </button>
-            <button className="ghost-button" onClick={() => onInfo(messages.length ? `В текущем локальном диалоге ${messages.length} сообщений` : "Сохранённых диалогов пока нет")}>
+            <button className={`ghost-button${historyOpen ? " active" : ""}`} onClick={() => setHistoryOpen((value) => !value)}>
               <RotateCcw size={15} />
               История
             </button>
@@ -1330,7 +1413,9 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
                 setMessages([]);
                 setPrompt("");
                 setAnalysis(null);
-                onInfo("Создан новый локальный диалог");
+                setCurrentTopicId(null);
+                setHistoryOpen(false);
+                onInfo("Создана новая тема чата");
               }}
             >
               <Plus size={15} />
@@ -1340,6 +1425,36 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
         }
       />
       <div className="chat-area">
+        {historyOpen && (
+          <aside className="chat-history-panel">
+            <header>
+              <div><RotateCcw size={15} /><strong>Темы чата</strong></div>
+              <span>{chatTopics.length}</span>
+            </header>
+            {chatTopics.length === 0 ? <p>Сохранённых диалогов пока нет.</p> : chatTopics.map((topic) => (
+              <div className={topic.id === currentTopicId ? "active" : ""} key={topic.id}>
+                <button onClick={() => void openTopic(topic.id)}>
+                  <strong>{topic.title}</strong>
+                  <span>{topic.preview || "Пустой диалог"}</span>
+                  <small>{new Date(topic.updatedAt).toLocaleString("ru-RU")} · {topic.messageCount} сообщ.</small>
+                </button>
+                <button
+                  className="delete-topic"
+                  title="Удалить тему"
+                  onClick={() => void api.deleteChatTopic(topic.id).then(async () => {
+                    if (currentTopicId === topic.id) {
+                      setCurrentTopicId(null);
+                      setMessages([]);
+                    }
+                    await refreshChatTopics();
+                  })}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </aside>
+        )}
         {messages.length === 0 ? (
           <div className="chat-empty">
             <WandSparkles size={38} />
@@ -1360,13 +1475,14 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
               </button>
             </div>
             <small>Недавние диалоги</small>
-            {["Мультфильм о космическом коте", "История для YouTube", "Первое видео канала"].map((text) => (
-              <button className="recent-chat" key={text} onClick={() => openRecent(text)}>
+            {chatTopics.slice(0, 3).map((topic) => (
+              <button className="recent-chat" key={topic.id} onClick={() => void openTopic(topic.id)}>
                 <FileText size={13} />
-                {text}
-                <span>сегодня</span>
+                {topic.title}
+                <span>{topic.messageCount} сообщ.</span>
               </button>
             ))}
+            {chatTopics.length === 0 && <p className="no-recent-chat">Первый диалог сохранится автоматически после отправки сообщения.</p>}
           </div>
         ) : (
           <div className="messages">
