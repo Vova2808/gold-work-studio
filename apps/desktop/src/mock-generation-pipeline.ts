@@ -1,5 +1,5 @@
 import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
-import type { Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
+import type { LogLevel, Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 
@@ -17,6 +17,14 @@ const taskStep: Record<TaskKind, number> = {
   assemble: 8
 };
 
+export interface PipelineLogEvent {
+  level: LogLevel;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export type PipelineEventSink = (event: PipelineLogEvent) => void;
+
 export class MockGenerationPipeline {
   private tasks: QueueTask[] = [];
   private initialization?: Promise<void>;
@@ -27,7 +35,8 @@ export class MockGenerationPipeline {
     private readonly projects: ProjectService,
     private readonly storage: LocalProjectStorage,
     private readonly renderer: StandardRenderer,
-    readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY
+    readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
+    private readonly eventSink: PipelineEventSink = () => undefined
   ) {}
 
   async initialize(): Promise<void> {
@@ -98,6 +107,7 @@ export class MockGenerationPipeline {
         }))
       }));
       await this.persist();
+      this.emit("info", "queue.project.started", { projectId, runId, tasks: created.length });
       return this.forProject(projectId);
     });
   }
@@ -179,6 +189,7 @@ export class MockGenerationPipeline {
       }));
       await this.storage.ensureProject(await this.requireProject(projectId));
       await this.persist();
+      this.emit("info", "queue.scene.regeneration.started", { projectId, sceneId, runId });
       return this.forProject(projectId);
     });
   }
@@ -202,6 +213,7 @@ export class MockGenerationPipeline {
       }
       await this.projects.update(projectId, { status: "paused" });
       await this.persist();
+      this.emit("info", "queue.project.paused", { projectId });
       return this.forProject(projectId);
     });
   }
@@ -225,6 +237,7 @@ export class MockGenerationPipeline {
       }
       await this.projects.update(projectId, { status: "generating" });
       await this.persist();
+      this.emit("info", "queue.project.resumed", { projectId });
       return this.forProject(projectId);
     });
   }
@@ -254,6 +267,7 @@ export class MockGenerationPipeline {
         )
       }));
       await this.persist();
+      this.emit("warn", "queue.project.stopped", { projectId });
       return this.forProject(projectId);
     });
   }
@@ -291,6 +305,11 @@ export class MockGenerationPipeline {
       }
       await this.projects.update(task.projectId, { status: "generating" });
       await this.persist();
+      this.emit("info", "queue.task.manual_retry", {
+        projectId: task.projectId,
+        taskId: task.id,
+        kind: task.kind
+      });
       return structuredClone(task);
     });
   }
@@ -305,6 +324,7 @@ export class MockGenerationPipeline {
       }));
       this.tasks = this.tasks.filter((task) => !removableRuns.has(task.runId));
       await this.persist();
+      this.emit("info", "queue.finished_runs.cleared", { runs: removableRuns.size });
       return structuredClone(this.tasks);
     });
   }
@@ -344,8 +364,10 @@ export class MockGenerationPipeline {
             const delay = this.policy.retryDelaysMs[Math.min(task.attempts - 1, this.policy.retryDelaysMs.length - 1)] ?? 1000;
             task.status = "retry_wait";
             task.nextAttemptAt = new Date(nowTime + delay).toISOString();
+            this.emit("warn", "queue.task.retry_scheduled", this.taskDetails(task));
           } else {
             task.status = "failed";
+            this.emit("error", "queue.task.failed", this.taskDetails(task));
           }
           continue;
         }
@@ -355,6 +377,7 @@ export class MockGenerationPipeline {
             task.status = "done";
             task.error = undefined;
             task.nextAttemptAt = undefined;
+            this.emit("info", "queue.task.completed", this.taskDetails(task));
           } catch (error) {
             this.scheduleFailure(task, error, nowTime);
           }
@@ -380,6 +403,7 @@ export class MockGenerationPipeline {
         task.updatedAt = now;
         running += 1;
         changed = true;
+        this.emit("info", "queue.task.started", this.taskDetails(task));
       }
 
       if (changed) {
@@ -467,10 +491,30 @@ export class MockGenerationPipeline {
       ] ?? 1000;
       task.status = "retry_wait";
       task.nextAttemptAt = new Date(nowTime + delay).toISOString();
+      this.emit("warn", "queue.task.retry_scheduled", this.taskDetails(task));
     } else {
       task.status = "failed";
       task.nextAttemptAt = undefined;
+      this.emit("error", "queue.task.failed", this.taskDetails(task));
     }
+  }
+
+  private taskDetails(task: QueueTask): Record<string, unknown> {
+    return {
+      projectId: task.projectId,
+      sceneId: task.sceneId,
+      taskId: task.id,
+      kind: task.kind,
+      status: task.status,
+      attempts: task.attempts,
+      maxAttempts: task.maxAttempts,
+      error: task.error,
+      resultPath: task.resultPath
+    };
+  }
+
+  private emit(level: LogLevel, message: string, details?: Record<string, unknown>): void {
+    this.eventSink({ level, message, details });
   }
 
   private async syncProjects(): Promise<void> {

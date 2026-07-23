@@ -10,8 +10,9 @@ import {
 } from "@gold-work/core";
 import type { Scene } from "@gold-work/shared";
 import { LocalProjectStorage } from "../src/local-project-storage.js";
-import { MockGenerationPipeline } from "../src/mock-generation-pipeline.js";
+import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "../src/mock-generation-pipeline.js";
 import { StandardRenderer } from "../src/standard-renderer.js";
+import { TextFileLogger } from "../src/text-file-logger.js";
 
 const root = await mkdtemp(join(tmpdir(), "gold-work-pipeline-"));
 
@@ -46,12 +47,16 @@ try {
 
   const storage = new LocalProjectStorage(join(root, "projects"));
   const renderer = new StandardRenderer(storage);
+  const logger = new TextFileLogger(join(root, "logs", "gold-work-studio-log.txt"));
+  await logger.initialize();
   assert.equal(renderer.isAvailable(), true, "FFmpeg должен быть доступен");
   const pipeline = new MockGenerationPipeline(
     new MemoryTaskRepository(),
     projectService,
     storage,
-    renderer
+    renderer,
+    DEFAULT_QUEUE_POLICY,
+    (event) => void logger.write(event.level, event.message, event.details)
   );
   await pipeline.initialize();
   await pipeline.start(project.id);
@@ -68,6 +73,14 @@ try {
   const regenerated = await projectService.get(project.id);
   assert.equal(regenerated?.status, "complete");
   assert.ok(regenerated?.outputPath && (await stat(regenerated.outputPath)).size > 1000);
+  await logger.write("info", "redaction.check", { apiKey: "must-not-leak" });
+  await logger.write("error", "token=raw-secret");
+  await logger.flush();
+  const log = await readFile(logger.path, "utf8");
+  assert.ok(log.includes("queue.task.completed"));
+  assert.ok(log.includes("[REDACTED]"));
+  assert.ok(!log.includes("must-not-leak"));
+  assert.ok(!log.includes("raw-secret"));
 
   console.log(`[pipeline-smoke] OK ${regenerated.outputPath}`);
 } finally {

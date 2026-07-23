@@ -175,6 +175,16 @@ async function run() {
   const previewImage = await window.webContents.capturePage();
   await writeFile(previewCapturePath, previewImage.toPNG());
   await trace("preview-capture-written");
+  await window.webContents.executeJavaScript("document.querySelector('.modal-close')?.click()");
+  await wait(150);
+  await window.webContents.executeJavaScript("document.querySelector('.settings-link')?.click()");
+  await wait(250);
+  const logControlsReady = await window.webContents.executeJavaScript(`(() => {
+    const text = document.body.innerText;
+    return text.includes("TXT-лог программы") && text.includes("Открыть TXT-лог");
+  })()`);
+  if (!logControlsReady) fail("путь и кнопка TXT-лога не появились в настройках");
+  await trace("log-controls-ready");
     console.log(`[ui-smoke] OK ${capturePath}`);
   } finally {
     window.destroy();

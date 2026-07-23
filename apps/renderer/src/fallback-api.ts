@@ -290,6 +290,8 @@ export const fallbackApi: DesktopApi = {
     return clone(tasks.filter((task) => task.projectId === projectId));
   },
   async openProjectFolder() {},
+  async writeLog() {},
+  async openLogFile() {},
   async minimizeWindow() {},
   async toggleMaximizeWindow() {},
   async closeWindow() {},
@@ -298,6 +300,7 @@ export const fallbackApi: DesktopApi = {
       version: "0.2.0",
       dataPath: "Режим браузерного предпросмотра",
       workspacePath: "Недоступно в браузерном предпросмотре",
+      logPath: "Недоступно в браузерном предпросмотре",
       mockMode: true,
       ffmpegAvailable: false,
       queuePolicy: { concurrency: 4, maxAttempts: 3, retryDelaysMs: [1000, 3000] }

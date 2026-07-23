@@ -1,19 +1,21 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MockDirectorProvider, ProjectService } from "@gold-work/core";
-import type { CreateProjectInput, DesktopApi, UpdateProjectInput } from "@gold-work/shared";
+import type { CreateProjectInput, DesktopApi, LogLevel, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
-import { MockGenerationPipeline } from "./mock-generation-pipeline.js";
+import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
+import { TextFileLogger } from "./text-file-logger.js";
 
 const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
 let projectService: ProjectService;
 let pipeline: MockGenerationPipeline;
 let projectStorage: LocalProjectStorage;
 let standardRenderer: StandardRenderer;
+let logger: TextFileLogger;
 let dataPath: string;
 
 function resolveDataPath(): string {
@@ -21,11 +23,42 @@ function resolveDataPath(): string {
   return portableDirectory ? join(portableDirectory, "workspace") : app.getPath("userData");
 }
 
+function summarizeArguments(args: unknown[]): unknown[] {
+  return args.map((argument) => {
+    if (argument === null || ["string", "number", "boolean"].includes(typeof argument)) return argument;
+    if (!argument || typeof argument !== "object") return typeof argument;
+    const value = argument as Record<string, unknown>;
+    return Object.fromEntries(
+      ["id", "projectId", "sceneId", "title", "mode", "status", "aspectRatio"]
+        .filter((key) => value[key] !== undefined)
+        .map((key) => [key, value[key]])
+    );
+  });
+}
+
+function handleIpc<TArgs extends unknown[], TResult>(
+  channel: string,
+  handler: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>
+): void {
+  ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+    const logRequest = !["projects:list", "queue:list", "app:info"].includes(channel);
+    if (logRequest) void logger.write("debug", "ipc.request", { channel, args: summarizeArguments(args) });
+    try {
+      const result = await handler(event, ...(args as TArgs));
+      if (logRequest) void logger.write("debug", "ipc.success", { channel });
+      return result;
+    } catch (error) {
+      void logger.write("error", "ipc.failed", { channel, error });
+      throw error;
+    }
+  });
+}
+
 function registerIpc(): void {
-  ipcMain.handle("projects:list", () => projectService.list());
-  ipcMain.handle("projects:get", (_event, id: string) => projectService.get(id));
-  ipcMain.handle("projects:create", (_event, input: CreateProjectInput) => projectService.create(input));
-  ipcMain.handle("projects:create-demo", () =>
+  handleIpc("projects:list", () => projectService.list());
+  handleIpc("projects:get", (_event, id: string) => projectService.get(id));
+  handleIpc("projects:create", (_event, input: CreateProjectInput) => projectService.create(input));
+  handleIpc("projects:create-demo", () =>
     projectService.create(
       {
         title: "Барсик — космический кот",
@@ -37,13 +70,13 @@ function registerIpc(): void {
       true
     )
   );
-  ipcMain.handle("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
-  ipcMain.handle("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
-  ipcMain.handle("projects:delete", async (_event, id: string) => {
+  handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
+  handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
+  handleIpc("projects:delete", async (_event, id: string) => {
     await pipeline.removeProject(id);
     await projectService.delete(id);
   });
-  ipcMain.handle("projects:open-folder", async (_event, id: string) => {
+  handleIpc("projects:open-folder", async (_event, id: string) => {
     const project = await projectService.get(id);
     if (!project) throw new Error("Проект не найден");
     const directory = await projectStorage.ensureProject(project);
@@ -51,28 +84,38 @@ function registerIpc(): void {
     if (error) throw new Error(error);
   });
 
-  ipcMain.handle("queue:list", () => pipeline.list());
-  ipcMain.handle("queue:start", (_event, projectId: string) => pipeline.start(projectId));
-  ipcMain.handle("queue:pause", (_event, projectId: string) => pipeline.pause(projectId));
-  ipcMain.handle("queue:resume", (_event, projectId: string) => pipeline.resume(projectId));
-  ipcMain.handle("queue:stop", (_event, projectId: string) => pipeline.stop(projectId));
-  ipcMain.handle("queue:retry", (_event, taskId: string) => pipeline.retry(taskId));
-  ipcMain.handle("queue:regenerate-scene", (_event, projectId: string, sceneId: string) =>
+  handleIpc("queue:list", () => pipeline.list());
+  handleIpc("queue:start", (_event, projectId: string) => pipeline.start(projectId));
+  handleIpc("queue:pause", (_event, projectId: string) => pipeline.pause(projectId));
+  handleIpc("queue:resume", (_event, projectId: string) => pipeline.resume(projectId));
+  handleIpc("queue:stop", (_event, projectId: string) => pipeline.stop(projectId));
+  handleIpc("queue:retry", (_event, taskId: string) => pipeline.retry(taskId));
+  handleIpc("queue:regenerate-scene", (_event, projectId: string, sceneId: string) =>
     pipeline.regenerateScene(projectId, sceneId)
   );
-  ipcMain.handle("queue:clear-finished", () => pipeline.clearFinished());
-  ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
-  ipcMain.handle("window:toggle-maximize", (event) => {
+  handleIpc("queue:clear-finished", () => pipeline.clearFinished());
+  handleIpc("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
+  handleIpc("window:toggle-maximize", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window) return;
     if (window.isMaximized()) window.unmaximize();
     else window.maximize();
   });
-  ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
-  ipcMain.handle("app:info", () => ({
+  handleIpc("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
+  ipcMain.handle("app:write-log", (_event, level: LogLevel, message: string, details?: Record<string, unknown>) => {
+    const safeLevel: LogLevel = ["debug", "info", "warn", "error"].includes(level) ? level : "info";
+    return logger.write(safeLevel, `renderer.${message}`, details);
+  });
+  handleIpc("app:open-log", async () => {
+    await logger.flush();
+    const error = await shell.openPath(logger.path);
+    if (error) throw new Error(error);
+  });
+  handleIpc("app:info", () => ({
     version: app.getVersion(),
     dataPath,
     workspacePath: projectStorage.rootPath,
+    logPath: logger.path,
     mockMode: true,
     ffmpegAvailable: standardRenderer.isAvailable(),
     queuePolicy: pipeline.policy
@@ -98,11 +141,19 @@ async function createWindow(): Promise<void> {
   });
 
   window.webContents.on("did-fail-load", (_event, code, description, url) => {
-    console.error(`[renderer] failed to load ${url}: ${code} ${description}`);
+    void logger.write("error", "renderer.load.failed", { code, description, url });
   });
   window.webContents.on("render-process-gone", (_event, details) => {
-    console.error(`[renderer] process gone: ${details.reason}`);
+    void logger.write("error", "renderer.process.gone", { reason: details.reason, exitCode: details.exitCode });
   });
+  window.webContents.on("did-finish-load", () => {
+    void logger.write("info", "renderer.load.completed");
+  });
+  window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    const logLevel: LogLevel = level >= 3 ? "error" : level === 2 ? "warn" : level === 0 ? "debug" : "info";
+    void logger.write(logLevel, "renderer.console", { message, line, sourceId });
+  });
+  window.on("closed", () => void logger.write("info", "window.closed"));
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) {
     const loopbackUrl = devUrl.replace("localhost", "127.0.0.1");
@@ -123,6 +174,11 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   dataPath = resolveDataPath();
+  logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"));
+  await logger.initialize();
+  process.on("uncaughtExceptionMonitor", (error) => void logger.write("error", "process.uncaught_exception", { error }));
+  process.on("unhandledRejection", (reason) => void logger.write("error", "process.unhandled_rejection", { reason }));
+  void logger.write("info", "app.ready", { version: app.getVersion(), dataPath });
   projectService = new ProjectService(
     new FileProjectRepository(join(dataPath, "projects.json")),
     new MockDirectorProvider()
@@ -133,10 +189,15 @@ app.whenReady().then(async () => {
     new FileTaskRepository(join(dataPath, "queue.json")),
     projectService,
     projectStorage,
-    standardRenderer
+    standardRenderer,
+    DEFAULT_QUEUE_POLICY,
+    (event) => void logger.write(event.level, event.message, event.details)
   );
   await pipeline.initialize();
-  setInterval(() => void pipeline.tick().catch((error: unknown) => console.error("[queue]", error)), 500);
+  setInterval(
+    () => void pipeline.tick().catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
+    500
+  );
   registerIpc();
   await createWindow();
   app.on("activate", async () => {
@@ -146,4 +207,8 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  if (logger) void logger.write("info", "app.before_quit");
 });

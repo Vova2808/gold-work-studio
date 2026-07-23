@@ -4,6 +4,7 @@ export type SceneStatus = "draft" | "queued" | "generating" | "ready" | "failed"
 export type TaskStatus = "pending" | "running" | "retry_wait" | "paused" | "blocked" | "done" | "failed" | "cancelled";
 export type TaskKind = "director" | "image" | "video" | "speech" | "assemble";
 export type AspectRatio = "9:16" | "16:9" | "1:1";
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface SubtitleSettings {
   enabled: boolean;
@@ -156,6 +157,8 @@ export interface DesktopApi {
   clearFinishedTasks(): Promise<QueueTask[]>;
   regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]>;
   openProjectFolder(projectId: string): Promise<void>;
+  writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
+  openLogFile(): Promise<void>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
@@ -163,6 +166,7 @@ export interface DesktopApi {
     version: string;
     dataPath: string;
     workspacePath: string;
+    logPath: string;
     mockMode: boolean;
     ffmpegAvailable: boolean;
     queuePolicy: QueuePolicy;

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CreateProjectInput, DesktopApi, UpdateProjectInput } from "@gold-work/shared";
+import type { CreateProjectInput, DesktopApi, LogLevel, UpdateProjectInput } from "@gold-work/shared";
 
 const api: DesktopApi = {
   listProjects: () => ipcRenderer.invoke("projects:list"),
@@ -19,6 +19,9 @@ const api: DesktopApi = {
   regenerateScene: (projectId: string, sceneId: string) =>
     ipcRenderer.invoke("queue:regenerate-scene", projectId, sceneId),
   openProjectFolder: (projectId: string) => ipcRenderer.invoke("projects:open-folder", projectId),
+  writeLog: (level: LogLevel, message: string, details?: Record<string, unknown>) =>
+    ipcRenderer.invoke("app:write-log", level, message, details),
+  openLogFile: () => ipcRenderer.invoke("app:open-log"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),

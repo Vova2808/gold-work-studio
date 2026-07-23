@@ -149,6 +149,36 @@ export function App() {
     if (pageScrollRef.current) pageScrollRef.current.scrollTop = 0;
   }, [activeSection]);
 
+  useEffect(() => {
+    const reportError = (event: ErrorEvent) => {
+      void api.writeLog("error", "window.error", {
+        message: event.message,
+        filename: event.filename,
+        line: event.lineno,
+        column: event.colno,
+        stack: event.error instanceof Error ? event.error.stack : undefined
+      });
+    };
+    const reportRejection = (event: PromiseRejectionEvent) => {
+      void api.writeLog("error", "window.unhandled_rejection", {
+        reason: event.reason instanceof Error
+          ? { message: event.reason.message, stack: event.reason.stack }
+          : String(event.reason)
+      });
+    };
+    window.addEventListener("error", reportError);
+    window.addEventListener("unhandledrejection", reportRejection);
+    void api.writeLog("info", "ui.mounted");
+    return () => {
+      window.removeEventListener("error", reportError);
+      window.removeEventListener("unhandledrejection", reportRejection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (error) void api.writeLog("error", "ui.operation_failed", { message: error });
+  }, [error]);
+
   function upsertProject(project: Project) {
     setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
     setSelectedProjectId(project.id);
@@ -464,7 +494,39 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 }
 
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
-  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Локальная сборка Standard уже работает. Внешние нейросети пока работают через безопасные mock-адаптеры и не расходуют деньги.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Провайдеры нейросетей" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="FFmpeg" value={appInfo?.ffmpegAvailable ? "Готов к сборке MP4" : "Недоступен"} /><InfoRow label="Папка проектов" value={appInfo?.workspacePath ?? "Загрузка..."} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} /><InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} /><InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} /></section></div></div>;
+  const api = window.goldWork ?? fallbackApi;
+  return (
+    <div>
+      <PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" />
+      <div className="settings-layout">
+        <section className="settings-menu">
+          <button className="active">Общие</button>
+          <button>AI и сценарии</button>
+          <button>Изображения</button>
+          <button>Озвучка</button>
+          <button>Видео</button>
+          <button>Папки и хранение</button>
+        </section>
+        <section className="settings-content">
+          <h2>Состояние приложения</h2>
+          <p>Локальная сборка Standard уже работает. Внешние нейросети пока работают через безопасные mock-адаптеры и не расходуют деньги.</p>
+          <InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} />
+          <InfoRow label="Провайдеры нейросетей" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} />
+          <InfoRow label="FFmpeg" value={appInfo?.ffmpegAvailable ? "Готов к сборке MP4" : "Недоступен"} />
+          <InfoRow label="Папка проектов" value={appInfo?.workspacePath ?? "Загрузка..."} />
+          <InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} />
+          <InfoRow label="TXT-лог программы" value={appInfo?.logPath ?? "Загрузка..."} />
+          <button className="outline-button small" disabled={!appInfo} onClick={() => void api.openLogFile()}>
+            <FileText size={15} />Открыть TXT-лог
+          </button>
+          <h2>Очередь</h2>
+          <InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} />
+          <InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} />
+          <InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} />
+        </section>
+      </div>
+    </div>
+  );
 }
 
 function ToolPage({ section }: { section: SectionKey }) {
