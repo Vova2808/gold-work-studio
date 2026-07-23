@@ -858,6 +858,14 @@ input[type="range"] {
   border-color: #49402a;
   background: #1a1710;
 }
+.thinking-message { display: flex; align-items: center; gap: 5px; color: #a9a394; }
+.thinking-message i { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); animation: thinking-pulse 1.05s ease-in-out infinite; }
+.thinking-message i:nth-of-type(2) { animation-delay: .15s; }
+.thinking-message i:nth-of-type(3) { animation-delay: .3s; }
+.streaming-message { white-space: pre-wrap; }
+.stream-caret { color: var(--gold); animation: caret-blink .7s steps(1) infinite; }
+@keyframes thinking-pulse { 0%, 70%, 100% { opacity: .25; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-3px); } }
+@keyframes caret-blink { 50% { opacity: 0; } }
 .message-files {
   display: flex;
   gap: 5px;

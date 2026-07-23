@@ -187,6 +187,55 @@ async function run() {
     "document.body.innerText.includes('AI Генератор пресетов')",
   );
   if (!directorOpened) fail("AI-генератор не открылся");
+
+  await window.webContents.executeJavaScript("document.querySelector('.settings-link')?.click()");
+  await wait(100);
+  await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll(".settings-menu button")].find((item) => item.textContent?.includes("AI и сценарии"))?.click();
+  })()`);
+  await wait(100);
+  const mockProviderConfigured = await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('.settings-content input[type="password"]');
+    if (!input) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "ui-smoke-key");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  if (!mockProviderConfigured) fail("поле ключа провайдера не найдено");
+  await wait(50);
+  await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll(".settings-content button")].find((item) => item.textContent?.includes("Сохранить"))?.click();
+  })()`);
+  await wait(100);
+  await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll(".nav-item")].find((item) => item.textContent?.includes("AI Генератор"))?.click();
+  })()`);
+  await wait(100);
+  const streamPromptReady = await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector(".chat-composer input");
+    if (!input) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "Проверка потокового ответа");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  if (!streamPromptReady) fail("поле потокового чата не найдено");
+  await wait(50);
+  await window.webContents.executeJavaScript("document.querySelector('.chat-composer .send')?.click()");
+  await wait(10);
+  const thinkingVisible = await window.webContents.executeJavaScript("Boolean(document.querySelector('.thinking-message'))");
+  if (!thinkingVisible) fail("индикатор «Нейронка думает» не появился");
+  await wait(55);
+  const streamStarted = await window.webContents.executeJavaScript("Boolean(document.querySelector('.streaming-message')?.textContent)");
+  if (!streamStarted) fail("потоковый ответ не начал появляться");
+  await wait(160);
+  const streamFinished = await window.webContents.executeJavaScript("document.body.innerText.includes('Браузерный потоковый mock-ответ.')");
+  if (!streamFinished) fail("потоковый ответ не завершился");
+  await trace("director-stream-ready");
+  await window.webContents.executeJavaScript(`(() => {
+    [...document.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Новый")?.click();
+  })()`);
+  await wait(100);
+
   const nicheClicked = await window.webContents.executeJavaScript(`(() => {
     const niche = [...document.querySelectorAll("button")].find((item) => item.textContent?.includes("Анализ ниши"));
     if (!niche) return false;

@@ -28,6 +28,14 @@ export class AnyModelClient {
     ]);
   }
 
+  async streamChatMessage(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string> {
+    const settings = await this.store.publicSettings();
+    return this.streamChat(settings.textModel, [
+      { role: "system", content: "Ты AI-режиссёр Gold Work Studio. Помогай создавать оригинальные ролики: анализируй нишу, улучшай хук, сценарий, структуру и удержание. Отвечай на языке пользователя." },
+      ...messages
+    ], onChunk);
+  }
+
   async analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
     const metadata = await this.referenceMetadata(input.url);
@@ -96,6 +104,36 @@ export class AnyModelClient {
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error("AnyModel вернул пустой ответ");
     return content;
+  }
+
+  private async streamChat(model: string, messages: Array<{ role: string; content: string }>, onChunk: (chunk: string) => void): Promise<string> {
+    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, stream: true, reasoning_effort: "high", temperature: 0.4 }) });
+    if (!response.ok) throw new Error(await this.error(response));
+    if (!response.body) throw new Error("AnyModel не вернул поток ответа");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let answer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        const event = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string | Array<{ text?: string }> } }> };
+        const content = event.choices?.[0]?.delta?.content;
+        const chunk = typeof content === "string" ? content : Array.isArray(content) ? content.map((part) => part.text ?? "").join("") : "";
+        if (!chunk) continue;
+        answer += chunk;
+        onChunk(chunk);
+      }
+      if (done) break;
+    }
+    if (!answer) throw new Error("AnyModel вернул пустой поток");
+    return answer;
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {

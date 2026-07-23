@@ -1186,6 +1186,7 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [streamingText, setStreamingText] = useState<string | null>(null);
 
   async function sendPrompt() {
     const text = prompt.trim();
@@ -1207,16 +1208,22 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
       } else {
         const provider = await api.getAnyModelSettings();
         if (provider.configured) {
-          const answer = await api.chatWithAnyModel([
+          let streamed = "";
+          const answer = await api.streamChatWithAnyModel([
             ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
             { role: "user", content: text },
-          ]);
+          ], (chunk) => {
+            streamed += chunk;
+            setStreamingText(streamed);
+          });
           setMessages((current) => [...current, { role: "assistant", text: answer }]);
+          setStreamingText(null);
         } else {
           setMessages((current) => [...current, { role: "assistant", text: "Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; добавьте AnyModel API в настройках для настоящего диалога." }]);
         }
       }
     } catch (reason) {
+      setStreamingText(null);
       const message = errorMessage(reason);
       setMessages((current) => [...current, { role: "assistant", text: `Ошибка AI-провайдера: ${message}` }]);
     } finally {
@@ -1318,7 +1325,17 @@ function Director({ busy, onCreate, onCreateFromReference, onInfo }: { busy: boo
                 )}
               </article>
             ))}
-            {analyzing && <article className="message assistant">Анализирую нишу, хук, структуру и удержание…</article>}
+            {analyzing && streamingText === null && (
+              <article className="message assistant thinking-message">
+                <span>Нейронка думает</span>
+                <i /><i /><i />
+              </article>
+            )}
+            {streamingText !== null && (
+              <article className="message assistant streaming-message">
+                {streamingText || <span className="stream-caret">▋</span>}
+              </article>
+            )}
             {analysis && (
               <article className="reference-analysis">
                 <header>

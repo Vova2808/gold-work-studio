@@ -145,6 +145,9 @@ function registerIpc(): void {
   handleIpc("anymodel:chat", (_event, messages: Parameters<AnyModelClient["chatMessage"]>[0]) =>
     anyModelClient.chatMessage(messages)
   );
+  handleIpc("anymodel:chat-stream", (event, requestId: string, messages: Parameters<AnyModelClient["streamChatMessage"]>[0]) =>
+    anyModelClient.streamChatMessage(messages, (chunk) => event.sender.send(`anymodel:chat-chunk:${requestId}`, chunk))
+  );
   handleIpc("app:info", () => ({
     version: app.getVersion(),
     dataPath,

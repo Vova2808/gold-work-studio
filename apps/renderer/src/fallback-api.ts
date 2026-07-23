@@ -222,6 +222,16 @@ export const fallbackApi: DesktopApi = {
   async chatWithAnyModel() {
     return "Браузерный mock-ответ. Настоящий AnyModel-чат работает в Electron.";
   },
+  async streamChatWithAnyModel(_messages, onChunk) {
+    const chunks = ["Браузерный ", "потоковый ", "mock-ответ."];
+    let answer = "";
+    for (const chunk of chunks) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      answer += chunk;
+      onChunk(chunk);
+    }
+    return answer;
+  },
   async updateProject(id: string, input: UpdateProjectInput) {
     const project = requireProject(id);
     if (input.scenes && (project.status === "generating" || project.status === "paused")) {

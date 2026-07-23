@@ -14,6 +14,17 @@ const api: DesktopApi = {
   clearAnyModelKey: () => ipcRenderer.invoke("anymodel:clear-key"),
   testAnyModelConnection: () => ipcRenderer.invoke("anymodel:test"),
   chatWithAnyModel: (messages) => ipcRenderer.invoke("anymodel:chat", messages),
+  streamChatWithAnyModel: async (messages, onChunk) => {
+    const requestId = crypto.randomUUID();
+    const channel = `anymodel:chat-chunk:${requestId}`;
+    const listener = (_event: Electron.IpcRendererEvent, chunk: string) => onChunk(chunk);
+    ipcRenderer.on(channel, listener);
+    try {
+      return await ipcRenderer.invoke("anymodel:chat-stream", requestId, messages);
+    } finally {
+      ipcRenderer.removeListener(channel, listener);
+    }
+  },
   updateProject: (id: string, input: UpdateProjectInput) => ipcRenderer.invoke("projects:update", id, input),
   duplicateProject: (id: string) => ipcRenderer.invoke("projects:duplicate", id),
   deleteProject: (id: string) => ipcRenderer.invoke("projects:delete", id),

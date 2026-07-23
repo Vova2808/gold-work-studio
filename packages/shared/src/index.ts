@@ -201,6 +201,7 @@ export interface DesktopApi {
   clearAnyModelKey(): Promise<AnyModelSettings>;
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
   chatWithAnyModel(messages: AiChatMessage[]): Promise<string>;
+  streamChatWithAnyModel(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;
   duplicateProject(id: string): Promise<Project>;
   deleteProject(id: string): Promise<void>;
