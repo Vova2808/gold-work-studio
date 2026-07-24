@@ -188,6 +188,7 @@ function registerIpc(): void {
   handleIpc("chat-topics:get", (_event, id: string) => chatTopics.get(id));
   handleIpc("chat-topics:create", (_event, title?: string) => chatTopics.create(title));
   handleIpc("chat-topics:append", (_event, topicId: string, message: AiChatMessage) => chatTopics.append(topicId, message));
+  handleIpc("chat-topics:save-analysis", (_event, topicId: string, analysis: ReferenceAnalysis | null) => chatTopics.saveAnalysis(topicId, analysis));
   handleIpc("chat-topics:delete", (_event, id: string) => chatTopics.delete(id));
   handleIpc("projects:apply-chat-topic", async (_event, projectId: string, topicId: string) => {
     const project = await projectService.get(projectId);

@@ -33,6 +33,7 @@ const api: DesktopApi = {
   getChatTopic: (id) => ipcRenderer.invoke("chat-topics:get", id),
   createChatTopic: (title) => ipcRenderer.invoke("chat-topics:create", title),
   appendChatMessage: (topicId, message) => ipcRenderer.invoke("chat-topics:append", topicId, message),
+  saveChatTopicAnalysis: (topicId, analysis) => ipcRenderer.invoke("chat-topics:save-analysis", topicId, analysis),
   deleteChatTopic: (id) => ipcRenderer.invoke("chat-topics:delete", id),
   applyChatTopicToProject: (projectId, topicId) => ipcRenderer.invoke("projects:apply-chat-topic", projectId, topicId),
   updateProject: (id: string, input: UpdateProjectInput) => ipcRenderer.invoke("projects:update", id, input),

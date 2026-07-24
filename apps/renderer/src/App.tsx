@@ -1352,11 +1352,13 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       if (url) {
         const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
         setAnalysis(result);
+        await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
         await appendAssistant(`Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.`);
         onInfo("Референс разобран. Можно уточнить хук или сразу создать проект.");
       } else if (analysis) {
         const refined = await api.refineReferenceAnalysis(analysis, text);
         setAnalysis(refined);
+        await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
         await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
       } else {
         const provider = await api.getAnyModelSettings();
@@ -1394,7 +1396,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       role: message.role as "user" | "assistant",
       text: message.content
     })));
-    setAnalysis(null);
+    setAnalysis(topic.analysis ?? null);
     setHistoryOpen(false);
     onInfo(`Открыта тема «${topic.title}»`);
   }

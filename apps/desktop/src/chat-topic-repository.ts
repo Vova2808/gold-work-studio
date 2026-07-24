@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AiChatMessage, ChatTopic, ChatTopicSummary } from "@gold-work/shared";
+import type { AiChatMessage, ChatTopic, ChatTopicSummary, ReferenceAnalysis } from "@gold-work/shared";
 
 interface TopicRow {
   id: string;
@@ -11,6 +11,7 @@ interface TopicRow {
   created_at: string;
   updated_at: string;
   message_count: number;
+  analysis?: string | null;
 }
 
 interface MessageRow {
@@ -50,6 +51,11 @@ export class ChatTopicRepository {
       );
       CREATE INDEX IF NOT EXISTS chat_messages_topic_id ON chat_messages(topic_id, id);
     `);
+    // Миграция: колонка для сохранённого разбора темы (чтобы карточка не пропадала при повторном открытии).
+    const columns = this.database.prepare("PRAGMA table_info(chat_topics)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "analysis")) {
+      this.database.exec("ALTER TABLE chat_topics ADD COLUMN analysis TEXT");
+    }
   }
 
   close(): void {
@@ -70,7 +76,7 @@ export class ChatTopicRepository {
 
   get(id: string): ChatTopic | undefined {
     const row = this.db().prepare(`
-      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, COUNT(m.id) AS message_count
+      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, t.analysis, COUNT(m.id) AS message_count
       FROM chat_topics t
       LEFT JOIN chat_messages m ON m.topic_id = t.id
       WHERE t.id = ?
@@ -87,8 +93,16 @@ export class ChatTopicRepository {
         role: message.role,
         content: message.content,
         createdAt: message.created_at
-      }))
+      })),
+      analysis: parseAnalysis(row.analysis)
     };
+  }
+
+  saveAnalysis(topicId: string, analysis: ReferenceAnalysis | null): ChatTopic {
+    if (!this.get(topicId)) throw new Error("Тема чата не найдена");
+    this.db().prepare("UPDATE chat_topics SET analysis = ?, updated_at = ? WHERE id = ?")
+      .run(analysis ? JSON.stringify(analysis) : null, new Date().toISOString(), topicId);
+    return this.get(topicId)!;
   }
 
   create(title = "Новая тема"): ChatTopic {
@@ -150,4 +164,13 @@ function mapSummary(row: TopicRow): ChatTopicSummary {
 function normalizeTitle(value: string): string {
   const title = value.replace(/\s+/g, " ").trim();
   return title.slice(0, 70) || "Новая тема";
+}
+
+function parseAnalysis(value?: string | null): ReferenceAnalysis | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as ReferenceAnalysis;
+  } catch {
+    return undefined;
+  }
 }

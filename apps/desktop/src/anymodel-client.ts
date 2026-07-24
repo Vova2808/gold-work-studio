@@ -70,6 +70,7 @@ export class AnyModelClient {
         title: context.title,
         description: context.description.slice(0, 8_000),
         publishedAt: context.publishedAt,
+        durationSeconds: context.durationSeconds,
         views: context.views,
         likes: context.likes,
         comments: context.commentCount
@@ -85,6 +86,15 @@ export class AnyModelClient {
       transcriptSource: context.transcriptSource,
       transcript
     };
+    // Длина улучшенного ролика = длина оригинала + ~1.5 мин; сцены по 5 секунд (число сцен от реального тайминга).
+    const sceneDurationSeconds = 5;
+    const targetDurationSeconds = context.durationSeconds > 0 ? context.durationSeconds + 90 : 0;
+    const targetScenes = targetDurationSeconds > 0
+      ? Math.min(200, Math.max(6, Math.round(targetDurationSeconds / sceneDurationSeconds)))
+      : 0;
+    const sceneInstruction = targetScenes > 0
+      ? `Длина улучшенного ролика — примерно ${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты). Разбей сценарий РОВНО на ${targetScenes} сцен, каждая длится ${sceneDurationSeconds} секунд: одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt. Верни компактно scenes[{narration,imagePrompt}] без лишних полей.`
+      : "Разбей сценарий на 8–12 осмысленных сцен. Верни scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}].";
     const content = await this.chat(settings.textModel, [
       {
         role: "system",
@@ -92,9 +102,9 @@ export class AnyModelClient {
       },
       {
         role: "user",
-        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]`
+        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${sceneInstruction}\nВерни JSON: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[...]`
       }
-    ]);
+    ], targetScenes > 0 ? 32_000 : undefined);
     const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
     const scenes = (parsed.scenes ?? []).map((scene, order) => ({
       id: createId("scene"),
@@ -102,8 +112,8 @@ export class AnyModelClient {
       title: scene.title || `Сцена ${order + 1}`,
       narration: scene.narration || "",
       imagePrompt: scene.imagePrompt || "",
-      animationPrompt: scene.animationPrompt || "",
-      durationSeconds: Math.max(3, Number(scene.durationSeconds) || 8),
+      animationPrompt: scene.animationPrompt || "Плавное движение камеры и естественное движение объектов",
+      durationSeconds: targetScenes > 0 ? sceneDurationSeconds : Math.max(3, Number(scene.durationSeconds) || 8),
       status: "draft" as const
     }));
     if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
@@ -118,7 +128,7 @@ export class AnyModelClient {
       improvements: parsed.improvements || [],
       suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
       suggestedTitle: parsed.suggestedTitle || `Новый ролик: ${context.title}`,
-      recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
+      recommendedDurationSeconds: targetScenes > 0 ? scenes.length * sceneDurationSeconds : (parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0)),
       language: input.language || "Русский",
       instructions: input.instructions,
       scenes,
@@ -235,8 +245,8 @@ export class AnyModelClient {
     throw new Error("Истекло время ожидания видео");
   }
 
-  private async chat(model: string, messages: Array<{ role: string; content: string }>): Promise<string> {
-    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, reasoning_effort: "high", temperature: 0.4 }) });
+  private async chat(model: string, messages: Array<{ role: string; content: string }>, maxTokens?: number): Promise<string> {
+    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, reasoning_effort: "high", temperature: 0.4, ...(maxTokens ? { max_tokens: maxTokens } : {}) }) });
     if (!response.ok) throw new Error(await this.error(response));
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;

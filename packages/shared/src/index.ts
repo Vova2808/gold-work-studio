@@ -145,6 +145,7 @@ export interface YouTubeAnalysisContext {
   title: string;
   description: string;
   publishedAt: string;
+  durationSeconds: number;
   channelId: string;
   channelTitle: string;
   views: number;
@@ -181,6 +182,7 @@ export interface ChatTopicSummary {
 
 export interface ChatTopic extends ChatTopicSummary {
   messages: Array<AiChatMessage & { id: number; createdAt: string }>;
+  analysis?: ReferenceAnalysis;
 }
 
 export interface Project {
@@ -269,6 +271,7 @@ export interface DesktopApi {
   getChatTopic(id: string): Promise<ChatTopic | undefined>;
   createChatTopic(title?: string): Promise<ChatTopic>;
   appendChatMessage(topicId: string, message: AiChatMessage): Promise<ChatTopic>;
+  saveChatTopicAnalysis(topicId: string, analysis: ReferenceAnalysis | null): Promise<ChatTopic>;
   deleteChatTopic(id: string): Promise<void>;
   applyChatTopicToProject(projectId: string, topicId: string): Promise<Project>;
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>;

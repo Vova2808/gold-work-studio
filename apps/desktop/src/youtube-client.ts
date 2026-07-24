@@ -45,6 +45,7 @@ export class YouTubeClient {
       title: video.snippet.title,
       description: video.snippet.description ?? "",
       publishedAt: video.snippet.publishedAt,
+      durationSeconds: parseIsoDurationSeconds(video.contentDetails?.duration),
       channelId,
       channelTitle: video.snippet.channelTitle,
       views: number(video.statistics.viewCount),
@@ -303,6 +304,17 @@ function vttSeconds(value: string): number {
   return parts.reduce((seconds, part) => seconds * 60 + part, 0);
 }
 
+/** Разбирает длительность YouTube (ISO 8601, напр. "PT9M3S") в секунды. Неизвестно → 0. */
+function parseIsoDurationSeconds(iso?: string): number {
+  if (!iso) return 0;
+  const match = /^P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso);
+  if (!match) return 0;
+  const hours = Number(match[1] ?? 0);
+  const minutes = Number(match[2] ?? 0);
+  const seconds = Number(match[3] ?? 0);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 /** Проверяет свободное место в рабочей папке. Если определить не удалось — не блокируем запуск. */
 async function assertEnoughSpace(base: string): Promise<void> {
   let availableBytes: number;
@@ -389,6 +401,7 @@ interface YouTubeVideo {
   id: string;
   snippet: { title: string; description?: string; publishedAt: string; channelId: string; channelTitle: string };
   statistics: { viewCount?: string; likeCount?: string; commentCount?: string };
+  contentDetails?: { duration?: string };
 }
 
 interface YouTubeChannel {

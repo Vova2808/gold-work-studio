@@ -51,6 +51,7 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     title: "Демонстрационный YouTube-ролик",
     description: "Mock-контекст для проверки интерфейса",
     publishedAt: new Date().toISOString(),
+    durationSeconds: 543,
     channelId: "channel-smoke",
     channelTitle: "Тестовый канал",
     views: 125000,
@@ -307,6 +308,13 @@ export const fallbackApi: DesktopApi = {
     topic.preview = content.replace(/\s+/g, " ").slice(0, 180);
     topic.updatedAt = now;
     topic.messageCount = topic.messages.length;
+    return clone(topic);
+  },
+  async saveChatTopicAnalysis(topicId, analysis) {
+    const topic = chatTopics.find((item) => item.id === topicId);
+    if (!topic) throw new Error("Тема чата не найдена");
+    topic.analysis = analysis ?? undefined;
+    topic.updatedAt = new Date().toISOString();
     return clone(topic);
   },
   async deleteChatTopic(id) {
