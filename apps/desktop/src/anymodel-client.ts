@@ -92,43 +92,90 @@ export class AnyModelClient {
     const targetScenes = targetDurationSeconds > 0
       ? Math.min(200, Math.max(6, Math.round(targetDurationSeconds / sceneDurationSeconds)))
       : 0;
-    const sceneInstruction = targetScenes > 0
-      ? `Длина улучшенного ролика — примерно ${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты). Разбей сценарий РОВНО на ${targetScenes} сцен, каждая длится ${sceneDurationSeconds} секунд: одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt. Верни компактно scenes[{narration,imagePrompt}] без лишних полей.`
-      : "Разбей сценарий на 8–12 осмысленных сцен. Верни scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}].";
-    const content = await this.chat(settings.textModel, [
+
+    // Шаг 1: лёгкий запрос — только анализ и план (без сцен), чтобы не перегружать провайдера тяжёлым ответом.
+    const planContent = await this.chat(settings.textModel, [
       {
         role: "system",
-        content: "Ты YouTube-аналитик и сценарный режиссёр. Верни только JSON без markdown. На основе транскрипта с таймкодами, официальной статистики и комментариев объясни, почему ролик работает, что зрителям нравится и что улучшить. Создай новый самостоятельный сценарий — не копируй оригинальный текст, персонажей или брендинг. Визуальные кадры не анализировались, не утверждай обратное."
+        content: "Ты YouTube-аналитик и сценарный режиссёр. Верни только JSON без markdown. На основе статистики, комментариев и (если есть) транскрипта объясни, почему ролик работает и что улучшить, и предложи самостоятельный улучшенный замысел. Не копируй чужой текст, персонажей или брендинг. Визуальные кадры не анализировались, не утверждай обратное."
       },
       {
         role: "user",
-        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${sceneInstruction}\nВерни JSON: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[...]`
+        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds`
       }
-    ], targetScenes > 0 ? 32_000 : undefined);
-    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
-    const scenes = (parsed.scenes ?? []).map((scene, order) => ({
-      id: createId("scene"),
-      order,
-      title: scene.title || `Сцена ${order + 1}`,
-      narration: scene.narration || "",
-      imagePrompt: scene.imagePrompt || "",
-      animationPrompt: scene.animationPrompt || "Плавное движение камеры и естественное движение объектов",
-      durationSeconds: targetScenes > 0 ? sceneDurationSeconds : Math.max(3, Number(scene.durationSeconds) || 8),
-      status: "draft" as const
-    }));
+    ], 4_000);
+    const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis>;
+
+    // Шаг 2: сцены порциями (батчами) — каждый запрос лёгкий и надёжный.
+    const scenes: Scene[] = [];
+    const pushScene = (scene: { narration?: string; imagePrompt?: string; durationSeconds?: number }, duration: number): void => {
+      scenes.push({
+        id: createId("scene"),
+        order: scenes.length,
+        title: `Сцена ${scenes.length + 1}`,
+        narration: scene.narration || "",
+        imagePrompt: scene.imagePrompt || "",
+        animationPrompt: "Плавное движение камеры и естественное движение объектов",
+        durationSeconds: duration,
+        status: "draft"
+      });
+    };
+    const planBrief = {
+      suggestedTitle: plan.suggestedTitle,
+      suggestedAngle: plan.suggestedAngle || input.instructions,
+      hook: plan.hook,
+      niche: plan.niche,
+      targetAudience: plan.targetAudience,
+      structure: plan.structure
+    };
+    if (targetScenes > 0) {
+      const batchSize = 30;
+      const maxBatches = Math.ceil(targetScenes / batchSize) + 2;
+      for (let batch = 0; batch < maxBatches && scenes.length < targetScenes; batch += 1) {
+        const from = scenes.length + 1;
+        const count = Math.min(batchSize, targetScenes - scenes.length);
+        const last = scenes.at(-1)?.narration ?? "";
+        let batchContent: string;
+        try {
+          batchContent = await this.chat(settings.textModel, [
+            { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown и без пояснений." },
+            {
+              role: "user",
+              content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${input.language || "Русский"}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
+            }
+          ], 6_000);
+        } catch (error) {
+          if (scenes.length > 0) break; // частичный сценарий лучше полного отказа
+          throw error;
+        }
+        const batchScenes = parseSceneArray(batchContent);
+        if (batchScenes.length === 0) break;
+        for (const scene of batchScenes) {
+          if (scenes.length >= targetScenes) break;
+          pushScene(scene, sceneDurationSeconds);
+        }
+      }
+    } else {
+      // Длительность неизвестна — один лёгкий запрос за сценами.
+      const fallbackContent = await this.chat(settings.textModel, [
+        { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown." },
+        { role: "user", content: `План: ${JSON.stringify(planBrief)}\nЯзык: ${input.language || "Русский"}\nРазбей на 8–12 сцен. Верни JSON-массив [{"narration":"...","imagePrompt":"...","durationSeconds":8}]` }
+      ], 6_000);
+      for (const scene of parseSceneArray(fallbackContent)) pushScene(scene, Math.max(3, Number(scene.durationSeconds) || 8));
+    }
     if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
     return {
       sourceUrl: input.url,
       sourceTitle: context.title,
-      niche: parsed.niche || "YouTube-контент",
-      targetAudience: parsed.targetAudience || "Аудитория исходного канала",
-      hook: parsed.hook || scenes[0]!.narration,
-      structure: parsed.structure || [],
-      strengths: parsed.strengths || [],
-      improvements: parsed.improvements || [],
-      suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
-      suggestedTitle: parsed.suggestedTitle || `Новый ролик: ${context.title}`,
-      recommendedDurationSeconds: targetScenes > 0 ? scenes.length * sceneDurationSeconds : (parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0)),
+      niche: plan.niche || "YouTube-контент",
+      targetAudience: plan.targetAudience || "Аудитория исходного канала",
+      hook: plan.hook || scenes[0]!.narration,
+      structure: plan.structure || [],
+      strengths: plan.strengths || [],
+      improvements: plan.improvements || [],
+      suggestedAngle: plan.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
+      suggestedTitle: plan.suggestedTitle || `Новый ролик: ${context.title}`,
+      recommendedDurationSeconds: scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
       language: input.language || "Русский",
       instructions: input.instructions,
       scenes,
@@ -355,4 +402,23 @@ function retryAfterMs(response: Response, bodyText: string, attempt: number): nu
   const match = /"retry_after_seconds"\s*:\s*(\d+)/.exec(bodyText);
   if (match) return Math.min(20_000, Number(match[1]) * 1_000);
   return backoffMs(attempt);
+}
+
+/** Разбирает ответ модели в массив сцен: принимает и голый JSON-массив, и объект { scenes: [...] }, и массив внутри текста. */
+function parseSceneArray(content: string): Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> {
+  const cleaned = content.replace(/^```json\s*|```$/g, "").trim();
+  const attempts = [cleaned, cleaned.match(/\[[\s\S]*\]/)?.[0] ?? ""];
+  for (const candidate of attempts) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (Array.isArray(parsed)) return parsed as Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }>;
+      if (parsed && typeof parsed === "object" && Array.isArray((parsed as { scenes?: unknown[] }).scenes)) {
+        return (parsed as { scenes: Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> }).scenes;
+      }
+    } catch {
+      // пробуем следующий вариант
+    }
+  }
+  return [];
 }
