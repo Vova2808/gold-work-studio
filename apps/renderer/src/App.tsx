@@ -1575,7 +1575,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                       </section>
                       <section>
                         <small>ЧТО ВЫСТРЕЛИЛО НА КАНАЛЕ</small>
-                        {analysis.youtubeContext.recentVideos.slice(0, 5).map((video) => (
+                        {analysis.youtubeContext.topVideos.slice(0, 5).map((video) => (
                           <p key={video.id}><b>{video.views.toLocaleString("ru-RU")}</b>{video.title}</p>
                         ))}
                       </section>

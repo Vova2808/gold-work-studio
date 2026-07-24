@@ -65,7 +65,7 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     ],
     transcriptSource: "captions" as const,
     topComments: [{ author: "Зритель", text: "Полезно и без длинного вступления", likes: 125, publishedAt: new Date().toISOString() }],
-    recentVideos: [{ id: "recent-1", title: "Успешная тема канала", publishedAt: new Date().toISOString(), views: 210000, likes: 11000, commentCount: 700 }],
+    topVideos: [{ id: "top-1", title: "Успешная тема канала", publishedAt: new Date().toISOString(), views: 210000, likes: 11000, commentCount: 700 }],
     visualAnalysisIncluded: false as const
   } : undefined;
   return {

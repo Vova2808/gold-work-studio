@@ -81,7 +81,7 @@ export class AnyModelClient {
         videos: context.channelVideoCount
       },
       topComments: context.topComments,
-      recentVideos: context.recentVideos,
+      topChannelVideosByViews: context.topVideos,
       transcriptSource: context.transcriptSource,
       transcript
     };

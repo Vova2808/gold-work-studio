@@ -32,10 +32,10 @@ export class YouTubeClient {
     const video = asItems(videoResponse)[0] as YouTubeVideo | undefined;
     if (!video) throw new Error("YouTube не вернул данные ролика. Проверьте ссылку и доступ к видео.");
     const channelId = video.snippet.channelId;
-    const [channelResponse, comments, recentVideos, transcriptResult] = await Promise.all([
+    const [channelResponse, comments, topVideos, transcriptResult] = await Promise.all([
       this.api("channels", { part: "snippet,statistics", id: channelId }, key),
       this.comments(videoId, key),
-      this.recent(channelId, key),
+      this.topVideos(channelId, key),
       this.safeTranscript(url, videoId)
     ]);
     const channel = asItems(channelResponse)[0] as YouTubeChannel | undefined;
@@ -57,7 +57,7 @@ export class YouTubeClient {
       transcriptSource: transcriptResult.source,
       transcriptionAudioMegabytes: transcriptResult.audioMegabytes,
       topComments: comments,
-      recentVideos,
+      topVideos,
       visualAnalysisIncluded: false
     };
   }
@@ -86,12 +86,13 @@ export class YouTubeClient {
     }
   }
 
-  private async recent(channelId: string, key: string): Promise<YouTubeAnalysisContext["recentVideos"]> {
+  private async topVideos(channelId: string, key: string): Promise<YouTubeAnalysisContext["topVideos"]> {
+    // Топ-ролики канала по просмотрам (реальные хиты), а не только последние загрузки.
     const search = await this.api("search", {
       part: "snippet",
       channelId,
       maxResults: "10",
-      order: "date",
+      order: "viewCount",
       type: "video"
     }, key);
     const ids = asItems(search).map((item) => (item as SearchResult).id.videoId).filter(Boolean);

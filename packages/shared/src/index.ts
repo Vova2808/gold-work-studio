@@ -157,7 +157,7 @@ export interface YouTubeAnalysisContext {
   transcriptSource: "captions" | "yt-dlp-captions" | "gemini-audio" | "none";
   transcriptionAudioMegabytes?: number;
   topComments: Array<{ author: string; text: string; likes: number; publishedAt: string }>;
-  recentVideos: Array<{ id: string; title: string; publishedAt: string; views: number; likes: number; commentCount: number }>;
+  topVideos: Array<{ id: string; title: string; publishedAt: string; views: number; likes: number; commentCount: number }>;
   visualAnalysisIncluded: false;
 }
 
