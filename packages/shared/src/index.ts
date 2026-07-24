@@ -449,6 +449,25 @@ export function parseDurationSeconds(text: string): number | null {
   return null;
 }
 
+/** Сопоставляет язык проекта коду для TTS (google-tts/<code>). По умолчанию — ru. */
+export function ttsLanguageCode(language: string): string {
+  const value = language.trim().toLowerCase();
+  const map: Record<string, string> = {
+    "русский": "ru", russian: "ru", ру: "ru", ru: "ru",
+    english: "en", английский: "en", en: "en",
+    "español": "es", espanol: "es", испанский: "es", spanish: "es", es: "es",
+    deutsch: "de", немецкий: "de", german: "de", de: "de",
+    "français": "fr", francais: "fr", французский: "fr", french: "fr", fr: "fr",
+    italiano: "it", итальянский: "it", italian: "it", it: "it",
+    "português": "pt", portugues: "pt", португальский: "pt", portuguese: "pt", pt: "pt",
+    "українська": "uk", украинский: "uk", ukrainian: "uk", uk: "uk",
+    китайский: "zh-CN", chinese: "zh-CN"
+  };
+  if (map[value]) return map[value]!;
+  if (/^[a-z]{2}(-[a-z]{2})?$/i.test(language.trim())) return language.trim();
+  return "ru";
+}
+
 /** Человекочитаемый размер (Б/КБ/МБ/ГБ/ТБ). */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 Б";

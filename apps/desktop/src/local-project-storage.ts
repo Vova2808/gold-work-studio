@@ -94,6 +94,17 @@ export class LocalProjectStorage {
     return path;
   }
 
+  async saveGeneratedAudio(project: Project, scene: Scene, data: Buffer): Promise<string> {
+    await this.ensureProject(project);
+    const directory = this.sceneDirectory(project, scene);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "voice.mp3");
+    await writeAtomic(path, data);
+    await writeAtomic(join(directory, "narration.txt"), scene.narration);
+    await this.writeSceneManifest(project, scene);
+    return path;
+  }
+
   async saveGeneratedVideo(project: Project, scene: Scene, data: Buffer): Promise<string> {
     await this.ensureProject(project);
     const path = this.sceneVideoPath(project, scene);

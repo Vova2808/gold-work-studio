@@ -1,5 +1,5 @@
 import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
-import type { LogLevel, Project, QueuePolicy, QueueTask, Scene, TaskKind } from "@gold-work/shared";
+import { ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type QueueTask, type Scene, type TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 import { AnyModelClient } from "./anymodel-client.js";
@@ -490,7 +490,13 @@ export class MockGenerationPipeline {
       return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(scene.imagePrompt, size));
     }
     if (task.kind === "image") return this.storage.createPlaceholderImage(project, scene);
-    if (task.kind === "speech") return this.storage.createPlaceholderAudio(project, scene);
+    if (task.kind === "speech") {
+      if (this.anyModel && (await this.anyModel.configured()) && scene.narration.trim().length > 0) {
+        const audio = await this.anyModel.textToSpeech(scene.narration, ttsLanguageCode(project.language));
+        return this.storage.saveGeneratedAudio(project, scene, audio);
+      }
+      return this.storage.createPlaceholderAudio(project, scene);
+    }
     if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
       if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
       return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio));

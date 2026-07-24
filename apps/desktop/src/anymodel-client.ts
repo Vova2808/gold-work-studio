@@ -292,6 +292,26 @@ export class AnyModelClient {
     return Buffer.from(encoded, "base64");
   }
 
+  /** Озвучка текста через AnyModel google-tts. Возвращает MP3 (принимает и бинарный ответ, и JSON base64). */
+  async textToSpeech(text: string, languageCode: string): Promise<Buffer> {
+    const input = text.trim().slice(0, 5_000);
+    if (!input) throw new Error("Пустой текст для озвучки");
+    const response = await this.request("/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ model: `google-tts/${languageCode}`, input })
+    });
+    if (!response.ok) throw new Error(await this.error(response));
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const data = await response.json() as { audio?: string };
+      if (!data.audio) throw new Error("AnyModel не вернул аудио озвучки");
+      return Buffer.from(data.audio, "base64");
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength === 0) throw new Error("AnyModel вернул пустую озвучку");
+    return buffer;
+  }
+
   async generateVideo(prompt: string, duration: number, aspectRatio: string): Promise<Buffer> {
     const settings = await this.store.publicSettings();
     const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({ model: settings.videoModel, prompt, duration: [5, 8, 10, 15].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a), resolution: "720p", aspect_ratio: aspectRatio }) });

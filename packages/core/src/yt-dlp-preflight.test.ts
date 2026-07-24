@@ -6,6 +6,7 @@ import {
   evaluateFreeSpace,
   formatBytes,
   parseDurationSeconds,
+  ttsLanguageCode,
   validateCookiesContent
 } from "@gold-work/shared";
 
@@ -56,6 +57,15 @@ test("formatBytes renders human readable sizes", () => {
   assert.equal(formatBytes(1024), "1.0 КБ");
   assert.equal(formatBytes(512 * 1024 * 1024), "512.0 МБ");
   assert.equal(formatBytes(-5), "0 Б");
+});
+
+test("ttsLanguageCode maps project languages to TTS codes", () => {
+  assert.equal(ttsLanguageCode("Русский"), "ru");
+  assert.equal(ttsLanguageCode("English"), "en");
+  assert.equal(ttsLanguageCode("Español"), "es");
+  assert.equal(ttsLanguageCode("en"), "en");
+  assert.equal(ttsLanguageCode("zh-CN"), "zh-CN");
+  assert.equal(ttsLanguageCode("что-то незнакомое"), "ru");
 });
 
 test("parseDurationSeconds understands common length inputs", () => {
