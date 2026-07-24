@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
@@ -122,6 +123,17 @@ function registerIpc(): void {
     const project = await projectService.get(id);
     if (!project) throw new Error("Проект не найден");
     const directory = await projectStorage.ensureProject(project);
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(error);
+  });
+  handleIpc("projects:open-scene-folder", async (_event, projectId: string, sceneId: string) => {
+    const project = await projectService.get(projectId);
+    if (!project) throw new Error("Проект не найден");
+    const scene = project.scenes.find((candidate) => candidate.id === sceneId);
+    if (!scene) throw new Error("Сцена не найдена");
+    await projectStorage.ensureProject(project);
+    const directory = projectStorage.sceneDirectory(project, scene);
+    await mkdir(directory, { recursive: true });
     const error = await shell.openPath(directory);
     if (error) throw new Error(error);
   });

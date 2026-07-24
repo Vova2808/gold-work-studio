@@ -514,6 +514,7 @@ export const fallbackApi: DesktopApi = {
     return clone(tasks.filter((task) => task.projectId === projectId));
   },
   async openProjectFolder() {},
+  async openSceneFolder() {},
   async writeLog() {},
   async openLogFile() {},
   async pickFiles() { return []; },

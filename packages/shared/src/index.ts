@@ -287,6 +287,7 @@ export interface DesktopApi {
   clearFinishedTasks(): Promise<QueueTask[]>;
   regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]>;
   openProjectFolder(projectId: string): Promise<void>;
+  openSceneFolder(projectId: string, sceneId: string): Promise<void>;
   writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
   openLogFile(): Promise<void>;
   pickFiles(kind: "image" | "audio" | "video" | "json" | "cookies", multiple?: boolean): Promise<string[]>;

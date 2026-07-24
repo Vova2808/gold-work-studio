@@ -50,6 +50,7 @@ const api: DesktopApi = {
   regenerateScene: (projectId: string, sceneId: string) =>
     ipcRenderer.invoke("queue:regenerate-scene", projectId, sceneId),
   openProjectFolder: (projectId: string) => ipcRenderer.invoke("projects:open-folder", projectId),
+  openSceneFolder: (projectId: string, sceneId: string) => ipcRenderer.invoke("projects:open-scene-folder", projectId, sceneId),
   writeLog: (level: LogLevel, message: string, details?: Record<string, unknown>) =>
     ipcRenderer.invoke("app:write-log", level, message, details),
   openLogFile: () => ipcRenderer.invoke("app:open-log"),

@@ -487,7 +487,9 @@ export class MockGenerationPipeline {
     if (task.kind === "image") {
       if (this.anyModel && (await this.anyModel.configured()) && scene.imagePrompt.trim().length > 0) {
         const size = project.aspectRatio === "9:16" ? "1024x1792" : project.aspectRatio === "1:1" ? "1024x1024" : "1792x1024";
-        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(scene.imagePrompt, size));
+        const style = project.settings.image.style.trim();
+        const prompt = style ? `${scene.imagePrompt}\nСтиль: ${style}` : scene.imagePrompt;
+        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(prompt, size));
       }
       return this.storage.createPlaceholderImage(project, scene);
     }

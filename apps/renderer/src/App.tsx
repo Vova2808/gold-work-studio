@@ -221,7 +221,16 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
-      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      // Если пользователь не задавал длину, в разборе лежит короткое превью сцен —
+      // собираем полный сценарий под длину оригинала (+ ~1.5 мин) перед созданием проекта.
+      let finalAnalysis = analysis;
+      const targetSeconds = (analysis.youtubeContext?.durationSeconds ?? 0) + 90;
+      const expectedScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+      if (targetSeconds > 90 && analysis.scenes.length < Math.min(expectedScenes, 9)) {
+        setNotice(`Собираю полный сценарий под длину оригинала (~${Math.round(targetSeconds / 60)} мин, ${expectedScenes} сцен)…`);
+        finalAnalysis = await api.regenerateReferenceScenes(analysis, targetSeconds);
+      }
+      const project = await api.createReferenceProject({ analysis: finalAnalysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
       await api.startGeneration(project.id);
       setSelectedProjectId(project.id);
@@ -1109,10 +1118,16 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
         title="Редактор сценария"
         subtitle={`${project.title} · ${scenes.length} сцен`}
         actions={
-          <button className="ghost-button" onClick={addScene}>
-            <Plus size={15} />
-            Добавить сцену
-          </button>
+          <>
+            <button className="ghost-button" onClick={() => void (window.goldWork ?? fallbackApi).openProjectFolder(project.id)}>
+              <FolderOpen size={15} />
+              Папка проекта
+            </button>
+            <button className="ghost-button" onClick={addScene}>
+              <Plus size={15} />
+              Добавить сцену
+            </button>
+          </>
         }
       />
       {scenes.length === 0 ? (
@@ -1160,6 +1175,10 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                   <small>ID: {selected.id}</small>
                 </div>
                 <div>
+                  <button className="ghost-button" onClick={() => void (window.goldWork ?? fallbackApi).openSceneFolder(project.id, selected.id)}>
+                    <FolderOpen size={14} />
+                    Папка сцены
+                  </button>
                   <button className="ghost-button" onClick={() => duplicateScene(selected)}>
                     <Copy size={14} />
                     Копировать
@@ -1316,6 +1335,16 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [streamingText, setStreamingText] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    if (!analyzing) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => clearInterval(timer);
+  }, [analyzing]);
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1344,6 +1373,13 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       await api.appendChatMessage(topicId, { role: "user", content: text });
       await refreshChatTopics();
       const appendAssistant = async (answer: string) => {
+        // Плавное появление ответа (эффект печати), затем фиксация сообщения.
+        const step = Math.max(6, Math.ceil(answer.length / 70));
+        for (let index = step; index < answer.length; index += step) {
+          setStreamingText(answer.slice(0, index));
+          await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        setStreamingText(null);
         setMessages((current) => [...current, { role: "assistant", text: answer }]);
         await api.appendChatMessage(topicId!, { role: "assistant", content: answer });
         await refreshChatTopics();
@@ -1536,13 +1572,14 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
             ))}
             {analyzing && streamingText === null && (
               <article className="message assistant thinking-message">
-                <span>Нейронка думает</span>
+                <span>Думаю над запросом · {elapsedSeconds} с</span>
                 <i /><i /><i />
               </article>
             )}
             {streamingText !== null && (
               <article className="message assistant streaming-message">
                 {streamingText || <span className="stream-caret">▋</span>}
+                {analyzing && <div className="message-files"><span>⏱ {elapsedSeconds} с</span></div>}
               </article>
             )}
             {analysis && (
