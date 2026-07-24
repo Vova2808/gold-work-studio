@@ -72,13 +72,15 @@ export class MockGenerationPipeline {
       const images: QueueTask[] = [];
 
       for (const [index, scene] of project.scenes.entries()) {
+        const imageDependencies: string[] = [];
         if (project.settings.voice.enabled) {
           const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${index + 1}`, [], now);
           created.push(speech);
+          imageDependencies.push(speech.id); // сначала озвучка сцены, потом её картинка
         }
 
         const previousImage = images[index - 1];
-        const imageDependencies = project.settings.image.sequential && previousImage ? [previousImage.id] : [];
+        if (project.settings.image.sequential && previousImage) imageDependencies.push(previousImage.id);
         const image = this.makeTask(runId, project, scene, "image", `Изображение · сцена ${index + 1}`, imageDependencies, now);
         images.push(image);
         created.push(image);
@@ -133,20 +135,24 @@ export class MockGenerationPipeline {
       const runTasks = this.tasks.filter((task) => task.projectId === projectId && task.runId === runId);
       const created: QueueTask[] = [];
 
+      const imageDependencies: string[] = [];
       if (project.settings.voice.enabled) {
-        created.push(this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now));
+        const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now);
+        created.push(speech);
+        imageDependencies.push(speech.id); // сначала озвучка сцены, потом её картинка
       }
       const previousScene = project.scenes.find((candidate) => candidate.order === scene.order - 1);
       const previousImage = project.settings.image.sequential && previousScene
         ? runTasks.find((task) => task.sceneId === previousScene.id && task.kind === "image")
         : undefined;
+      if (previousImage) imageDependencies.push(previousImage.id);
       const image = this.makeTask(
         runId,
         project,
         scene,
         "image",
         `Изображение · сцена ${scene.order + 1}`,
-        previousImage ? [previousImage.id] : [],
+        imageDependencies,
         now
       );
       created.push(image);
