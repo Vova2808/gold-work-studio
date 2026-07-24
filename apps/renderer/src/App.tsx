@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
+import { createDefaultProjectSettings, parseDurationSeconds, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -1353,13 +1353,22 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
         const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
         setAnalysis(result);
         await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
-        await appendAssistant(`Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.`);
-        onInfo("Референс разобран. Можно уточнить хук или сразу создать проект.");
+        await appendAssistant(`Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.\n\nНа какую длину сделать ролик? Напиши, например «5 минут» или «90 секунд» — пересоберу сцены под неё (по 5 секунд). Или сразу нажми «Согласен — запустить генерацию».`);
+        onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
       } else if (analysis) {
-        const refined = await api.refineReferenceAnalysis(analysis, text);
-        setAnalysis(refined);
-        await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
-        await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
+        const requestedSeconds = parseDurationSeconds(text);
+        if (requestedSeconds) {
+          const resized = await api.regenerateReferenceScenes(analysis, requestedSeconds);
+          setAnalysis(resized);
+          await api.saveChatTopicAnalysis(topicId!, resized).catch(() => undefined);
+          const minutes = Math.round((requestedSeconds / 60) * 10) / 10;
+          await appendAssistant(`Пересобрал сценарий под ~${minutes} мин: ${resized.scenes.length} сцен по 5 секунд. Можешь уточнить длину ещё раз, поправить хук или нажать «Согласен — запустить генерацию».`);
+        } else {
+          const refined = await api.refineReferenceAnalysis(analysis, text);
+          setAnalysis(refined);
+          await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
+          await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
+        }
       } else {
         const provider = await api.getAnyModelSettings();
         if (provider.configured) {

@@ -9,6 +9,7 @@ const api: DesktopApi = {
   analyzeReference: (input) => ipcRenderer.invoke("director:analyze-reference", input),
   refineReferenceAnalysis: (analysis, instructions) => ipcRenderer.invoke("director:refine-reference", analysis, instructions),
   createReferenceProject: (input) => ipcRenderer.invoke("projects:create-reference", input),
+  regenerateReferenceScenes: (analysis, targetSeconds) => ipcRenderer.invoke("director:regenerate-scenes", analysis, targetSeconds),
   getAnyModelSettings: () => ipcRenderer.invoke("anymodel:get-settings"),
   saveAnyModelSettings: (input) => ipcRenderer.invoke("anymodel:save-settings", input),
   clearAnyModelKey: () => ipcRenderer.invoke("anymodel:clear-key"),

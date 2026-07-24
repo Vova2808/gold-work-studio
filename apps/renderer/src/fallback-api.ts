@@ -220,6 +220,25 @@ export const fallbackApi: DesktopApi = {
       scenes: analysis.scenes.map((scene, index) => index === 0 ? { ...scene, narration: hook } : scene)
     });
   },
+  async regenerateReferenceScenes(analysis, targetSeconds) {
+    const sceneDurationSeconds = 5;
+    const count = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
+    const source = analysis.scenes.length > 0 ? analysis.scenes : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: sceneDurationSeconds, status: "draft" as const }];
+    const scenes = Array.from({ length: count }, (_unused, index) => {
+      const base = source[index % source.length]!;
+      return {
+        id: createId("scene"),
+        order: index,
+        title: `Сцена ${index + 1}`,
+        narration: base.narration,
+        imagePrompt: base.imagePrompt,
+        animationPrompt: base.animationPrompt || "Плавное движение камеры и естественное движение объектов",
+        durationSeconds: sceneDurationSeconds,
+        status: "draft" as const
+      };
+    });
+    return clone({ ...analysis, scenes, recommendedDurationSeconds: count * sceneDurationSeconds });
+  },
   async createReferenceProject(input) {
     const project = makeProject({
       title: input.analysis.suggestedTitle,

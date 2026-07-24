@@ -106,20 +106,7 @@ export class AnyModelClient {
     ], 4_000);
     const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis>;
 
-    // Шаг 2: сцены порциями (батчами) — каждый запрос лёгкий и надёжный.
-    const scenes: Scene[] = [];
-    const pushScene = (scene: { narration?: string; imagePrompt?: string; durationSeconds?: number }, duration: number): void => {
-      scenes.push({
-        id: createId("scene"),
-        order: scenes.length,
-        title: `Сцена ${scenes.length + 1}`,
-        narration: scene.narration || "",
-        imagePrompt: scene.imagePrompt || "",
-        animationPrompt: "Плавное движение камеры и естественное движение объектов",
-        durationSeconds: duration,
-        status: "draft"
-      });
-    };
+    // Шаг 2: сцены порциями (батчами) через переиспользуемый генератор.
     const planBrief = {
       suggestedTitle: plan.suggestedTitle,
       suggestedAngle: plan.suggestedAngle || input.instructions,
@@ -128,41 +115,7 @@ export class AnyModelClient {
       targetAudience: plan.targetAudience,
       structure: plan.structure
     };
-    if (targetScenes > 0) {
-      const batchSize = 30;
-      const maxBatches = Math.ceil(targetScenes / batchSize) + 2;
-      for (let batch = 0; batch < maxBatches && scenes.length < targetScenes; batch += 1) {
-        const from = scenes.length + 1;
-        const count = Math.min(batchSize, targetScenes - scenes.length);
-        const last = scenes.at(-1)?.narration ?? "";
-        let batchContent: string;
-        try {
-          batchContent = await this.chat(settings.textModel, [
-            { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown и без пояснений." },
-            {
-              role: "user",
-              content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${input.language || "Русский"}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
-            }
-          ], 6_000);
-        } catch (error) {
-          if (scenes.length > 0) break; // частичный сценарий лучше полного отказа
-          throw error;
-        }
-        const batchScenes = parseSceneArray(batchContent);
-        if (batchScenes.length === 0) break;
-        for (const scene of batchScenes) {
-          if (scenes.length >= targetScenes) break;
-          pushScene(scene, sceneDurationSeconds);
-        }
-      }
-    } else {
-      // Длительность неизвестна — один лёгкий запрос за сценами.
-      const fallbackContent = await this.chat(settings.textModel, [
-        { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown." },
-        { role: "user", content: `План: ${JSON.stringify(planBrief)}\nЯзык: ${input.language || "Русский"}\nРазбей на 8–12 сцен. Верни JSON-массив [{"narration":"...","imagePrompt":"...","durationSeconds":8}]` }
-      ], 6_000);
-      for (const scene of parseSceneArray(fallbackContent)) pushScene(scene, Math.max(3, Number(scene.durationSeconds) || 8));
-    }
+    const scenes = await this.buildScenes(planBrief, targetScenes, input.language || "Русский");
     if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
     return {
       sourceUrl: input.url,
@@ -182,6 +135,77 @@ export class AnyModelClient {
       provider: `anymodel:${settings.textModel}+youtube-data-v3`,
       youtubeContext: context
     };
+  }
+
+  /** Пересобирает сцены существующего разбора под заданную пользователем длину (сцены по 5 секунд). */
+  async regenerateScenes(analysis: ReferenceAnalysis, targetSeconds: number): Promise<ReferenceAnalysis> {
+    const sceneDurationSeconds = 5;
+    const targetScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
+    const planBrief = {
+      suggestedTitle: analysis.suggestedTitle,
+      suggestedAngle: analysis.suggestedAngle || analysis.instructions,
+      hook: analysis.hook,
+      niche: analysis.niche,
+      targetAudience: analysis.targetAudience,
+      structure: analysis.structure
+    };
+    const scenes = await this.buildScenes(planBrief, targetScenes, analysis.language || "Русский");
+    if (scenes.length === 0) throw new Error("Не удалось пересобрать сцены под заданную длину");
+    return { ...analysis, scenes, recommendedDurationSeconds: scenes.length * sceneDurationSeconds };
+  }
+
+  /** Генерация сцен батчами (targetScenes>0) или одним лёгким запросом (иначе). Каждая сцена ~5 секунд при батчах. */
+  private async buildScenes(planBrief: Record<string, unknown>, targetScenes: number, language: string): Promise<Scene[]> {
+    const settings = await this.store.publicSettings();
+    const sceneDurationSeconds = 5;
+    const scenes: Scene[] = [];
+    const push = (scene: { narration?: string; imagePrompt?: string; durationSeconds?: number }, duration: number): void => {
+      scenes.push({
+        id: createId("scene"),
+        order: scenes.length,
+        title: `Сцена ${scenes.length + 1}`,
+        narration: scene.narration || "",
+        imagePrompt: scene.imagePrompt || "",
+        animationPrompt: "Плавное движение камеры и естественное движение объектов",
+        durationSeconds: duration,
+        status: "draft"
+      });
+    };
+    if (targetScenes > 0) {
+      const batchSize = 30;
+      const maxBatches = Math.ceil(targetScenes / batchSize) + 2;
+      for (let batch = 0; batch < maxBatches && scenes.length < targetScenes; batch += 1) {
+        const from = scenes.length + 1;
+        const count = Math.min(batchSize, targetScenes - scenes.length);
+        const last = scenes.at(-1)?.narration ?? "";
+        let batchContent: string;
+        try {
+          batchContent = await this.chat(settings.textModel, [
+            { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown и без пояснений." },
+            {
+              role: "user",
+              content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
+            }
+          ], 6_000);
+        } catch (error) {
+          if (scenes.length > 0) break; // частичный сценарий лучше полного отказа
+          throw error;
+        }
+        const batchScenes = parseSceneArray(batchContent);
+        if (batchScenes.length === 0) break;
+        for (const scene of batchScenes) {
+          if (scenes.length >= targetScenes) break;
+          push(scene, sceneDurationSeconds);
+        }
+      }
+    } else {
+      const fallbackContent = await this.chat(settings.textModel, [
+        { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown." },
+        { role: "user", content: `План: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nРазбей на 8–12 сцен. Верни JSON-массив [{"narration":"...","imagePrompt":"...","durationSeconds":8}]` }
+      ], 6_000);
+      for (const scene of parseSceneArray(fallbackContent)) push(scene, Math.max(3, Number(scene.durationSeconds) || 8));
+    }
+    return scenes;
   }
 
   async transcribeAudio(audio: Buffer, format: string): Promise<TranscriptSegment[]> {

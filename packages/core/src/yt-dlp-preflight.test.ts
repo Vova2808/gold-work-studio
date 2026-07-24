@@ -5,6 +5,7 @@ import {
   describeCookiesProblem,
   evaluateFreeSpace,
   formatBytes,
+  parseDurationSeconds,
   validateCookiesContent
 } from "@gold-work/shared";
 
@@ -55,4 +56,15 @@ test("formatBytes renders human readable sizes", () => {
   assert.equal(formatBytes(1024), "1.0 КБ");
   assert.equal(formatBytes(512 * 1024 * 1024), "512.0 МБ");
   assert.equal(formatBytes(-5), "0 Б");
+});
+
+test("parseDurationSeconds understands common length inputs", () => {
+  assert.equal(parseDurationSeconds("5 минут"), 300);
+  assert.equal(parseDurationSeconds("7 мин"), 420);
+  assert.equal(parseDurationSeconds("90 секунд"), 90);
+  assert.equal(parseDurationSeconds("5:30"), 330);
+  assert.equal(parseDurationSeconds("5"), 300); // <=60 → минуты
+  assert.equal(parseDurationSeconds("300"), 300); // >60 → секунды
+  assert.equal(parseDurationSeconds("сделай хук жёстче"), null);
+  assert.equal(parseDurationSeconds("добавь 5 фактов"), null);
 });

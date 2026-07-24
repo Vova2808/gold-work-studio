@@ -257,6 +257,7 @@ export interface DesktopApi {
   analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis>;
   refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis>;
   createReferenceProject(input: CreateReferenceProjectInput): Promise<Project>;
+  regenerateReferenceScenes(analysis: ReferenceAnalysis, targetSeconds: number): Promise<ReferenceAnalysis>;
   getAnyModelSettings(): Promise<AnyModelSettings>;
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
   clearAnyModelKey(): Promise<AnyModelSettings>;
@@ -424,6 +425,28 @@ export interface FreeSpaceResult {
 /** Достаточно ли свободного места (по умолчанию — MIN_FREE_DISK_BYTES). */
 export function evaluateFreeSpace(availableBytes: number, requiredBytes: number = MIN_FREE_DISK_BYTES): FreeSpaceResult {
   return { ok: availableBytes >= requiredBytes, availableBytes, requiredBytes };
+}
+
+/**
+ * Разбирает пользовательский ввод длительности в секунды: «5 минут», «90 секунд», «7 мин», «5:30», «300».
+ * Голое число ≤ 60 считается минутами, > 60 — секундами. Возвращает null, если длительность не распознана.
+ */
+export function parseDurationSeconds(text: string): number | null {
+  const value = text.trim().toLowerCase().replace(",", ".");
+  if (!value) return null;
+  const clock = /^(\d{1,3}):([0-5]?\d)$/.exec(value);
+  if (clock) return Math.round(Number(clock[1]) * 60 + Number(clock[2]));
+  const unit = /(\d+(?:\.\d+)?)\s*(минут\w*|мин\w*|min\w*|m\b|м\b|секунд\w*|сек\w*|sec\w*|s\b|с\b)/.exec(value);
+  if (unit) {
+    const amount = Number(unit[1]);
+    const isSeconds = /^(?:с|s)|сек|sec/.test(unit[2]!);
+    return Math.round(isSeconds ? amount : amount * 60);
+  }
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const amount = Number(value);
+    return Math.round(amount <= 60 ? amount * 60 : amount);
+  }
+  return null;
 }
 
 /** Человекочитаемый размер (Б/КБ/МБ/ГБ/ТБ). */

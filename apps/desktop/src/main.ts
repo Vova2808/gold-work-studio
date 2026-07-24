@@ -107,6 +107,11 @@ function registerIpc(): void {
   handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
     projectService.createFromReference(input)
   );
+  handleIpc("director:regenerate-scenes", async (_event, analysis: ReferenceAnalysis, targetSeconds: number) =>
+    await anyModelClient.configured()
+      ? anyModelClient.regenerateScenes(analysis, targetSeconds)
+      : resizeScenesLocally(analysis, targetSeconds)
+  );
   handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
   handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
   handleIpc("projects:delete", async (_event, id: string) => {
@@ -299,6 +304,28 @@ async function mutateQueue<TResult>(mutation: () => TResult | Promise<TResult>):
   const result = await mutation();
   await publishQueue();
   return result;
+}
+
+function resizeScenesLocally(analysis: ReferenceAnalysis, targetSeconds: number): ReferenceAnalysis {
+  const sceneDurationSeconds = 5;
+  const count = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
+  const source = analysis.scenes.length > 0
+    ? analysis.scenes
+    : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: sceneDurationSeconds, status: "draft" as const }];
+  const scenes: Scene[] = Array.from({ length: count }, (_unused, index) => {
+    const base = source[index % source.length]!;
+    return {
+      id: createId("scene"),
+      order: index,
+      title: `Сцена ${index + 1}`,
+      narration: base.narration,
+      imagePrompt: base.imagePrompt,
+      animationPrompt: base.animationPrompt || "Плавное движение камеры и естественное движение объектов",
+      durationSeconds: sceneDurationSeconds,
+      status: "draft"
+    };
+  });
+  return { ...analysis, scenes, recommendedDurationSeconds: count * sceneDurationSeconds };
 }
 
 async function createPlanFromTopic(topic: ChatTopic, language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
