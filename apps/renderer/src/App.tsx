@@ -1551,8 +1551,8 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                   <section><small>НИША</small><p>{analysis.niche}</p></section>
                   <section><small>АУДИТОРИЯ</small><p>{analysis.targetAudience}</p></section>
                   <section className="wide"><small>УЛУЧШЕННЫЙ ХУК</small><p>{analysis.hook}</p></section>
-                  <section><small>СИЛЬНЫЕ СТОРОНЫ</small><ul>{analysis.strengths.map((item) => <li key={item}>{item}</li>)}</ul></section>
-                  <section><small>ЧТО УЛУЧШИТЬ</small><ul>{analysis.improvements.map((item) => <li key={item}>{item}</li>)}</ul></section>
+                  <section><small>СИЛЬНЫЕ СТОРОНЫ</small><ul>{analysis.strengths.map((item, index) => <li key={index}>{typeof item === "string" ? item : JSON.stringify(item)}</li>)}</ul></section>
+                  <section><small>ЧТО УЛУЧШИТЬ</small><ul>{analysis.improvements.map((item, index) => <li key={index}>{typeof item === "string" ? item : JSON.stringify(item)}</li>)}</ul></section>
                   <section className="wide"><small>НОВЫЙ УГОЛ ПОДАЧИ</small><p>{analysis.suggestedAngle}</p></section>
                 </div>
                 {analysis.youtubeContext && (

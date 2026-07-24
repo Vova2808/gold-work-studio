@@ -52,8 +52,8 @@ export class AnyModelClient {
     return {
       sourceUrl: input.url, sourceTitle: parsed.sourceTitle || metadata.title || "Референс",
       niche: parsed.niche || "Не определена", targetAudience: parsed.targetAudience || "Не определена",
-      hook: parsed.hook || scenes[0]!.narration, structure: parsed.structure || [], strengths: parsed.strengths || [],
-      improvements: parsed.improvements || [], suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельный ролик",
+      hook: parsed.hook || scenes[0]!.narration, structure: toStringList(parsed.structure), strengths: toStringList(parsed.strengths),
+      improvements: toStringList(parsed.improvements), suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельный ролик",
       suggestedTitle: parsed.suggestedTitle || "Новый ролик", recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
       language: input.language || "Русский", instructions: input.instructions, scenes, provider: `anymodel:${settings.textModel}`
     };
@@ -123,9 +123,9 @@ export class AnyModelClient {
       niche: plan.niche || "YouTube-контент",
       targetAudience: plan.targetAudience || "Аудитория исходного канала",
       hook: plan.hook || scenes[0]!.narration,
-      structure: plan.structure || [],
-      strengths: plan.strengths || [],
-      improvements: plan.improvements || [],
+      structure: toStringList(plan.structure),
+      strengths: toStringList(plan.strengths),
+      improvements: toStringList(plan.improvements),
       suggestedAngle: plan.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
       suggestedTitle: plan.suggestedTitle || `Новый ролик: ${context.title}`,
       recommendedDurationSeconds: scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
@@ -426,6 +426,22 @@ function retryAfterMs(response: Response, bodyText: string, attempt: number): nu
   const match = /"retry_after_seconds"\s*:\s*(\d+)/.exec(bodyText);
   if (match) return Math.min(20_000, Number(match[1]) * 1_000);
   return backoffMs(attempt);
+}
+
+/** Приводит поле-список (strengths/improvements/structure) к массиву строк, даже если модель вернула объекты. */
+function toStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        const parts = Object.values(item as Record<string, unknown>).filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+        return parts.join(" — ");
+      }
+      return item == null ? "" : String(item);
+    })
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 /** Разбирает ответ модели в массив сцен: принимает и голый JSON-массив, и объект { scenes: [...] }, и массив внутри текста. */
