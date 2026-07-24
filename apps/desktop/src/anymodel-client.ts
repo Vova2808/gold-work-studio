@@ -284,7 +284,10 @@ export class AnyModelClient {
     return answer;
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private static readonly RETRIABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+  private static readonly MAX_RETRIES = 3;
+
+  private async request(path: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
     const settings = await this.store.publicSettings();
     const key = await this.store.apiKey();
     if (!key) throw new Error("Сначала сохраните новый API-ключ AnyModel в настройках");
@@ -292,7 +295,26 @@ export class AnyModelClient {
     const normalizedPath = base.toLowerCase().endsWith("/v1") && path.toLowerCase().startsWith("/v1/")
       ? path.slice(3)
       : path;
-    return fetch(`${base}${normalizedPath}`, { ...init, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers } });
+    const url = `${base}${normalizedPath}`;
+    const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers };
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, headers });
+    } catch (networkError) {
+      // Сетевой сбой — тоже повторяем с бэкоффом.
+      if (attempt < AnyModelClient.MAX_RETRIES) {
+        await sleep(backoffMs(attempt));
+        return this.request(path, init, attempt + 1);
+      }
+      throw networkError;
+    }
+    // Временная недоступность провайдера — ждём и повторяем (учитываем retry_after).
+    if (AnyModelClient.RETRIABLE_STATUSES.has(response.status) && attempt < AnyModelClient.MAX_RETRIES) {
+      const bodyText = await response.text().catch(() => "");
+      await sleep(retryAfterMs(response, bodyText, attempt));
+      return this.request(path, init, attempt + 1);
+    }
+    return response;
   }
 
   private async error(response: Response): Promise<string> {
@@ -316,4 +338,21 @@ export class AnyModelClient {
 function clock(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(15_000, 1_000 * 2 ** attempt);
+}
+
+/** Пауза перед повтором: retry_after из заголовка или тела ответа, иначе экспоненциальный бэкофф (не больше 20с). */
+function retryAfterMs(response: Response, bodyText: string, attempt: number): number {
+  const header = Number(response.headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return Math.min(20_000, header * 1_000);
+  const match = /"retry_after_seconds"\s*:\s*(\d+)/.exec(bodyText);
+  if (match) return Math.min(20_000, Number(match[1]) * 1_000);
+  return backoffMs(attempt);
 }
