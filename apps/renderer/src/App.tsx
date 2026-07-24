@@ -1350,21 +1350,27 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       };
       const url = text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "");
       if (url) {
+        setStreamingText("Собираю данные ролика и канала, пишу разбор и превью сцен…");
         const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
+        setStreamingText(null);
         setAnalysis(result);
         await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
-        await appendAssistant(`Разбор готов. Я определил нишу, аудиторию, структуру, слабые места и подготовил ${result.scenes.length} улучшенных сцен. Это самостоятельный сценарий без прямого копирования исходного ролика.\n\nНа какую длину сделать ролик? Напиши, например «5 минут» или «90 секунд» — пересоберу сцены под неё (по 5 секунд). Или сразу нажми «Согласен — запустить генерацию».`);
+        await appendAssistant(`Разбор готов: ниша, аудитория, структура, слабые места и превью из ${result.scenes.length} сцен (для скорости). Это самостоятельный сценарий без копирования оригинала.\n\nНа какую длину сделать ролик? Напиши, например «5 минут» или «90 секунд» — соберу полный сценарий под неё (сцены по 5 секунд). Или сразу нажми «Согласен — запустить генерацию».`);
         onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
       } else if (analysis) {
         const requestedSeconds = parseDurationSeconds(text);
         if (requestedSeconds) {
+          setStreamingText(`Собираю сцены под ~${Math.round((requestedSeconds / 60) * 10) / 10} мин…`);
           const resized = await api.regenerateReferenceScenes(analysis, requestedSeconds);
+          setStreamingText(null);
           setAnalysis(resized);
           await api.saveChatTopicAnalysis(topicId!, resized).catch(() => undefined);
           const minutes = Math.round((requestedSeconds / 60) * 10) / 10;
           await appendAssistant(`Пересобрал сценарий под ~${minutes} мин: ${resized.scenes.length} сцен по 5 секунд. Можешь уточнить длину ещё раз, поправить хук или нажать «Согласен — запустить генерацию».`);
         } else {
+          setStreamingText("Обновляю разбор с учётом пожелания…");
           const refined = await api.refineReferenceAnalysis(analysis, text);
+          setStreamingText(null);
           setAnalysis(refined);
           await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
           await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
@@ -1394,6 +1400,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       if (topicId) await api.appendChatMessage(topicId, { role: "assistant", content: answer }).catch(() => undefined);
     } finally {
       setAnalyzing(false);
+      setStreamingText(null);
     }
   }
 

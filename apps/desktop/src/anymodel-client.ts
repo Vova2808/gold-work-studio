@@ -42,7 +42,7 @@ export class AnyModelClient {
     const content = await this.chat(settings.textModel, [
       { role: "system", content: "Ты сценарный аналитик. Верни только JSON без markdown. Не утверждай, что видел ролик, если дан только заголовок и описание. Создай самостоятельный сценарий, не копируй чужой текст или брендинг." },
       { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
-    ]);
+    ], undefined, "medium");
     const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
     const scenes = (parsed.scenes ?? []).map((scene, order) => ({
       id: createId("scene"), order, title: scene.title || `Сцена ${order + 1}`, narration: scene.narration || "",
@@ -103,7 +103,7 @@ export class AnyModelClient {
         role: "user",
         content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds`
       }
-    ], 4_000);
+    ], 4_000, "medium");
     const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis>;
 
     // Шаг 2: сцены порциями (батчами) через переиспользуемый генератор.
@@ -115,7 +115,9 @@ export class AnyModelClient {
       targetAudience: plan.targetAudience,
       structure: plan.structure
     };
-    const scenes = await this.buildScenes(planBrief, targetScenes, input.language || "Русский");
+    // При разборе собираем быстрый превью-набор сцен; полный набор под нужную длину соберётся после выбора длины (Шаг 1).
+    const previewSceneCount = Math.min(8, targetScenes > 0 ? targetScenes : 8);
+    const scenes = await this.buildScenes(planBrief, previewSceneCount, input.language || "Русский");
     if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
     return {
       sourceUrl: input.url,
@@ -186,7 +188,7 @@ export class AnyModelClient {
               role: "user",
               content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
             }
-          ], 6_000);
+          ], 6_000, "low");
         } catch (error) {
           if (scenes.length > 0) break; // частичный сценарий лучше полного отказа
           throw error;
@@ -202,7 +204,7 @@ export class AnyModelClient {
       const fallbackContent = await this.chat(settings.textModel, [
         { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown." },
         { role: "user", content: `План: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nРазбей на 8–12 сцен. Верни JSON-массив [{"narration":"...","imagePrompt":"...","durationSeconds":8}]` }
-      ], 6_000);
+      ], 6_000, "low");
       for (const scene of parseSceneArray(fallbackContent)) push(scene, Math.max(3, Number(scene.durationSeconds) || 8));
     }
     return scenes;
@@ -344,8 +346,8 @@ export class AnyModelClient {
     throw new Error("Истекло время ожидания видео");
   }
 
-  private async chat(model: string, messages: Array<{ role: string; content: string }>, maxTokens?: number): Promise<string> {
-    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, reasoning_effort: "high", temperature: 0.4, ...(maxTokens ? { max_tokens: maxTokens } : {}) }) });
+  private async chat(model: string, messages: Array<{ role: string; content: string }>, maxTokens?: number, reasoningEffort: "low" | "medium" | "high" = "high"): Promise<string> {
+    const response = await this.request("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model, messages, reasoning_effort: reasoningEffort, temperature: 0.4, ...(maxTokens ? { max_tokens: maxTokens } : {}) }) });
     if (!response.ok) throw new Error(await this.error(response));
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
