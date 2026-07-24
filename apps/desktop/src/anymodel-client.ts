@@ -284,12 +284,20 @@ export class AnyModelClient {
 
   async generateImage(prompt: string, size: string): Promise<Buffer> {
     const settings = await this.store.publicSettings();
-    const response = await this.request("/v1/images/generations", { method: "POST", body: JSON.stringify({ model: settings.imageModel, prompt, n: 1, size, quality: "high", output_format: "png", response_format: "b64_json" }) });
+    const response = await this.request("/v1/images/generations", {
+      method: "POST",
+      body: JSON.stringify({ model: settings.imageModel, prompt, n: 1, size, quality: "auto", background: "auto", image_detail: "high", output_format: "png" })
+    });
     if (!response.ok) throw new Error(await this.error(response));
-    const data = await response.json() as { data?: Array<{ b64_json?: string }> };
-    const encoded = data.data?.[0]?.b64_json;
-    if (!encoded) throw new Error("AnyModel не вернул изображение");
-    return Buffer.from(encoded, "base64");
+    const data = await response.json() as { data?: Array<{ b64_json?: string; url?: string }> };
+    const item = data.data?.[0];
+    if (item?.b64_json) return Buffer.from(item.b64_json, "base64");
+    if (item?.url) {
+      const image = await fetch(item.url);
+      if (!image.ok) throw new Error(`Не удалось скачать сгенерированное изображение: ${image.status}`);
+      return Buffer.from(await image.arrayBuffer());
+    }
+    throw new Error("AnyModel не вернул изображение");
   }
 
   /** Озвучка текста через AnyModel google-tts. Возвращает MP3 (принимает и бинарный ответ, и JSON base64). */

@@ -484,12 +484,13 @@ export class MockGenerationPipeline {
     if (task.kind === "director") return `local://${project.id}/scenario.json`;
     const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
     if (!scene) throw new Error("Сцена для задачи не найдена");
-    if (task.kind === "image" && project.settings.image.provider === "anymodel-image") {
-      if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
-      const size = project.aspectRatio === "9:16" ? "1024x1792" : project.aspectRatio === "1:1" ? "1024x1024" : "1792x1024";
-      return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(scene.imagePrompt, size));
+    if (task.kind === "image") {
+      if (this.anyModel && (await this.anyModel.configured()) && scene.imagePrompt.trim().length > 0) {
+        const size = project.aspectRatio === "9:16" ? "1024x1792" : project.aspectRatio === "1:1" ? "1024x1024" : "1792x1024";
+        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(scene.imagePrompt, size));
+      }
+      return this.storage.createPlaceholderImage(project, scene);
     }
-    if (task.kind === "image") return this.storage.createPlaceholderImage(project, scene);
     if (task.kind === "speech") {
       if (this.anyModel && (await this.anyModel.configured()) && scene.narration.trim().length > 0) {
         const audio = await this.anyModel.textToSpeech(scene.narration, ttsLanguageCode(project.language));

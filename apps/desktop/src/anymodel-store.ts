@@ -6,7 +6,7 @@ import type { AnyModelSettings, SaveAnyModelSettingsInput } from "@gold-work/sha
 const defaults: Omit<AnyModelSettings, "configured"> = {
   baseUrl: "https://anymodel.org/v1",
   textModel: "cc/claude-sonnet-4-6",
-  imageModel: "gpt-image-2",
+  imageModel: "ag/gemini-3.1-flash-image",
   videoModel: "xai/grok-imagine-video"
 };
 
