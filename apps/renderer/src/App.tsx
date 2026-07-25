@@ -208,8 +208,9 @@ export function App() {
     try {
       const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
-      setActiveSection("scenario");
-      setNotice("Проект создан по разбору референса. Проверьте и отредактируйте сцены.");
+      setSelectedProjectId(project.id);
+      setActiveSection("project");
+      setNotice("Проект создан: сценарий подставлен. Проверьте настройки и нажмите «Генерировать видео».");
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -232,11 +233,10 @@ export function App() {
       }
       const project = await api.createReferenceProject({ analysis: finalAnalysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
-      await api.startGeneration(project.id);
       setSelectedProjectId(project.id);
-      setActiveSection("queue");
+      setActiveSection("project");
       await refresh();
-      setNotice("Разбор принят. Сценарий создан и генерация запущена.");
+      setNotice("Проект создан: сценарий подставлен. Проверьте настройки и запустите генерацию кнопкой в проекте.");
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -910,7 +910,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
             </select>
             <small>До четырёх задач одновременно.</small>
           </Field>
-          <ToggleRow label="Генерировать AI-видео" checked={settings.video.enabled} onChange={(enabled) => setSettings({ video: { ...settings.video, enabled } })} />
+          <ToggleRow label="Генерировать AI-видео (скоро)" checked={false} onChange={() => onInfo("Видео-генерация пока недоступна: финал собирается из картинок с эффектом Ken Burns и плавными переходами. Подключим позже.")} />
           {settings.video.enabled && (
             <>
               <Field label="ПРОВАЙДЕР ВИДЕО">
@@ -1447,7 +1447,9 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
     try {
       const originalSeconds = analysis.youtubeContext?.durationSeconds ?? 0;
       const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
-      setStreamingText(`Пишу полный сценарий по теме «${topic.title}» (~${Math.round(targetSeconds / 60)} мин, сцены по 5 секунд)…`);
+      setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }]);
+      onInfo(`Собираю сценарий по теме «${topic.title}» — это займёт минуту-две…`);
+      setStreamingText(`Пишу полный сценарий по теме «${topic.title}» (~${Math.round(targetSeconds / 60)} мин, сцены по 5 секунд, порциями по 30)…`);
       const withTopic = {
         ...analysis,
         suggestedTitle: topic.title,
@@ -1685,7 +1687,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                   <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
                   <button className="generate-button" disabled={busy || analyzing} onClick={() => analysis.youtubeContext ? onAcceptYouTube(analysis) : onCreateFromReference(analysis)}>
                     <WandSparkles size={15} />
-                    {analysis.youtubeContext ? "Согласен — запустить генерацию" : "Создать проект и сценарий"}
+                    {analysis.youtubeContext ? "Согласен — создать проект" : "Создать проект и сценарий"}
                   </button>
                 </footer>
               </article>
