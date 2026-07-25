@@ -1345,6 +1345,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
     const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
     return () => clearInterval(timer);
   }, [analyzing]);
+  useEffect(() => api.onDirectorProgress((stage) => setStreamingText(stage)), []);
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1391,7 +1392,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
         setStreamingText(null);
         setAnalysis(result);
         await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
-        await appendAssistant(`Разбор готов: ниша, аудитория, структура, слабые места и превью из ${result.scenes.length} сцен (для скорости). Это самостоятельный сценарий без копирования оригинала.\n\nНа какую длину сделать ролик? Напиши, например «5 минут» или «90 секунд» — соберу полный сценарий под неё (сцены по 5 секунд). Или сразу нажми «Согласен — запустить генерацию».`);
+        await appendAssistant(`Разбор готов: ниша, аудитория, сильные стороны, что улучшить — всё в карточке ниже.\n\nНа основе данных канала я предложил ${result.suggestedTopics?.length ?? 0} темы для нового ролика — выбери одну кнопкой в карточке, и я соберу полный сценарий и открою проект. Либо напиши свою длину («5 минут») или пожелание («сделай хук жёстче»).`);
         onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
       } else if (analysis) {
         const requestedSeconds = parseDurationSeconds(text);
@@ -1434,6 +1435,34 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
       const answer = `Ошибка AI-провайдера: ${message}`;
       setMessages((current) => [...current, { role: "assistant", text: answer }]);
       if (topicId) await api.appendChatMessage(topicId, { role: "assistant", content: answer }).catch(() => undefined);
+    } finally {
+      setAnalyzing(false);
+      setStreamingText(null);
+    }
+  }
+
+  async function pickTopic(topic: { title: string; hook: string; angle: string }) {
+    if (!analysis || analyzing) return;
+    setAnalyzing(true);
+    try {
+      const originalSeconds = analysis.youtubeContext?.durationSeconds ?? 0;
+      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
+      setStreamingText(`Пишу полный сценарий по теме «${topic.title}» (~${Math.round(targetSeconds / 60)} мин, сцены по 5 секунд)…`);
+      const withTopic = {
+        ...analysis,
+        suggestedTitle: topic.title,
+        hook: topic.hook || analysis.hook,
+        suggestedAngle: topic.angle || analysis.suggestedAngle
+      };
+      const full = await api.regenerateReferenceScenes(withTopic, targetSeconds);
+      setAnalysis(full);
+      if (currentTopicId) await api.saveChatTopicAnalysis(currentTopicId, full).catch(() => undefined);
+      setStreamingText(null);
+      setMessages((current) => [...current, { role: "assistant", text: `Сценарий по теме «${topic.title}» готов: ${full.scenes.length} сцен. Открываю проект — настрой параметры и запусти генерацию.` }]);
+      onCreateFromReference(full);
+    } catch (reason) {
+      setStreamingText(null);
+      setMessages((current) => [...current, { role: "assistant", text: `Не получилось собрать сценарий по теме: ${errorMessage(reason)}` }]);
     } finally {
       setAnalyzing(false);
       setStreamingText(null);
@@ -1589,7 +1618,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                     <strong>{analysis.sourceTitle}</strong>
                     <small>{analysis.provider === "mock-director" ? "Демонстрационный разбор — API ещё не подключён" : `Анализ: ${analysis.provider}`}</small>
                   </div>
-                  <span>{analysis.scenes.length} сцен</span>
+                  <span>{analysis.scenes.length > 0 ? `${analysis.scenes.length} сцен` : "выбери тему ниже"}</span>
                 </header>
                 <div className="analysis-grid">
                   <section><small>НИША</small><p>{analysis.niche}</p></section>
@@ -1639,6 +1668,17 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                       Кадры ролика не анализировались. Источник текста: {({ captions: "субтитры", "yt-dlp-captions": "субтитры (yt-dlp)", "gemini-audio": "аудио → Gemini", none: "недоступен (нужен вход/cookies)" } as const)[analysis.youtubeContext.transcriptSource]}.
                       {analysis.youtubeContext.transcriptionAudioMegabytes ? ` Аудио для Gemini: ${analysis.youtubeContext.transcriptionAudioMegabytes} МБ — расход токенов учитывается провайдером.` : " Транскрибация аудио не потребовалась, дополнительных токенов на неё нет."}
                     </p>
+                  </div>
+                )}
+                {analysis.suggestedTopics && analysis.suggestedTopics.length > 0 && (
+                  <div className="suggested-topics">
+                    <small>ТЕМЫ ДЛЯ НОВОГО РОЛИКА — НАЖМИ, ЧТОБЫ СОБРАТЬ СЦЕНАРИЙ И ОТКРЫТЬ ПРОЕКТ</small>
+                    {analysis.suggestedTopics.map((topic, index) => (
+                      <button key={index} className="suggested-topic" disabled={busy || analyzing} onClick={() => void pickTopic(topic)}>
+                        <strong>{index + 1}. {topic.title}</strong>
+                        <span>{topic.hook}</span>
+                      </button>
+                    ))}
                   </div>
                 )}
                 <footer>

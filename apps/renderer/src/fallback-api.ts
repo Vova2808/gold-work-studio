@@ -85,7 +85,12 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     instructions,
     scenes,
     provider: youtubeContext ? "mock-director+youtube-data-v3" : "mock-director",
-    youtubeContext
+    youtubeContext,
+    suggestedTopics: [
+      { title: "Главная ошибка новичков в этой нише", hook: "Вы делаете это каждый день и теряете результат.", angle: "Разбор ошибки с быстрым решением" },
+      { title: "7 приёмов, которые удерживают зрителя", hook: "Второй приём используют все топовые каналы.", angle: "Список с примерами из топ-роликов" },
+      { title: "Что будет, если сделать наоборот", hook: "Мы проверили противоположный подход — результат удивил.", angle: "Эксперимент с интригой" }
+    ]
   };
 }
 
@@ -220,6 +225,7 @@ export const fallbackApi: DesktopApi = {
       scenes: analysis.scenes.map((scene, index) => index === 0 ? { ...scene, narration: hook } : scene)
     });
   },
+  onDirectorProgress() { return () => undefined; },
   async regenerateReferenceScenes(analysis, targetSeconds) {
     const sceneDurationSeconds = 5;
     const count = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));

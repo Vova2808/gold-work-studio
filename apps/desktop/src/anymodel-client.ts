@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, TranscriptSegment, YouTubeAnalysisContext } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 
@@ -101,41 +101,39 @@ export class AnyModelClient {
       },
       {
         role: "user",
-        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds`
+        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nТакже предложи ровно 3 темы для НОВЫХ роликов этого направления, опираясь на топ-ролики канала и комментарии: для каждой — цепляющий заголовок, хук (1–2 предложения) и угол подачи.\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,topics[{title,hook,angle}]`
       }
-    ], 4_000, "medium");
-    const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis>;
+    ], 6_000, "medium");
+    const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> };
+    const suggestedTopics: SuggestedTopic[] = (Array.isArray(plan.topics) ? plan.topics : [])
+      .map((topic) => ({
+        title: typeof topic?.title === "string" ? topic.title : "",
+        hook: typeof topic?.hook === "string" ? topic.hook : "",
+        angle: typeof topic?.angle === "string" ? topic.angle : ""
+      }))
+      .filter((topic) => topic.title.trim().length > 0)
+      .slice(0, 3);
 
-    // Шаг 2: сцены порциями (батчами) через переиспользуемый генератор.
-    const planBrief = {
-      suggestedTitle: plan.suggestedTitle,
-      suggestedAngle: plan.suggestedAngle || input.instructions,
-      hook: plan.hook,
-      niche: plan.niche,
-      targetAudience: plan.targetAudience,
-      structure: plan.structure
-    };
-    // При разборе собираем быстрый превью-набор сцен; полный набор под нужную длину соберётся после выбора длины (Шаг 1).
-    const previewSceneCount = Math.min(8, targetScenes > 0 ? targetScenes : 8);
-    const scenes = await this.buildScenes(planBrief, previewSceneCount, input.language || "Русский");
-    if (scenes.length === 0) throw new Error("Модель не вернула сцены после YouTube-анализа");
+    // Сцены при разборе НЕ строим: сначала пользователь видит разбор и темы,
+    // полный сценарий собирается при выборе темы или подтверждении (regenerateScenes).
     return {
       sourceUrl: input.url,
       sourceTitle: context.title,
       niche: plan.niche || "YouTube-контент",
       targetAudience: plan.targetAudience || "Аудитория исходного канала",
-      hook: plan.hook || scenes[0]!.narration,
+      hook: plan.hook || "Сильный хук появится при сборке сценария",
       structure: toStringList(plan.structure),
       strengths: toStringList(plan.strengths),
       improvements: toStringList(plan.improvements),
       suggestedAngle: plan.suggestedAngle || input.instructions || "Самостоятельная улучшенная подача",
       suggestedTitle: plan.suggestedTitle || `Новый ролик: ${context.title}`,
-      recommendedDurationSeconds: scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
+      recommendedDurationSeconds: plan.recommendedDurationSeconds || targetDurationSeconds || 300,
       language: input.language || "Русский",
       instructions: input.instructions,
-      scenes,
+      scenes: [],
       provider: `anymodel:${settings.textModel}+youtube-data-v3`,
-      youtubeContext: context
+      youtubeContext: context,
+      suggestedTopics
     };
   }
 

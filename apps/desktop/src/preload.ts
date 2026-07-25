@@ -10,6 +10,11 @@ const api: DesktopApi = {
   refineReferenceAnalysis: (analysis, instructions) => ipcRenderer.invoke("director:refine-reference", analysis, instructions),
   createReferenceProject: (input) => ipcRenderer.invoke("projects:create-reference", input),
   regenerateReferenceScenes: (analysis, targetSeconds) => ipcRenderer.invoke("director:regenerate-scenes", analysis, targetSeconds),
+  onDirectorProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, stage: string) => listener(stage);
+    ipcRenderer.on("director:progress", handler);
+    return () => ipcRenderer.removeListener("director:progress", handler);
+  },
   getAnyModelSettings: () => ipcRenderer.invoke("anymodel:get-settings"),
   saveAnyModelSettings: (input) => ipcRenderer.invoke("anymodel:save-settings", input),
   clearAnyModelKey: () => ipcRenderer.invoke("anymodel:clear-key"),

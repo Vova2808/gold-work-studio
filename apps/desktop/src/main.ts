@@ -86,12 +86,16 @@ function registerIpc(): void {
       true
     )
   );
-  handleIpc("director:analyze-reference", async (_event, input: AnalyzeReferenceInput) => {
+  handleIpc("director:analyze-reference", async (event, input: AnalyzeReferenceInput) => {
+    const stage = (text: string) => event.sender.send("director:progress", text);
     if (/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(input.url)) {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
+      stage("Получаю данные ролика и канала через YouTube API: статистика, комментарии, топ-ролики…");
       const context = await youtubeClient.collect(input.url);
+      stage(`Данные получены: ${context.views.toLocaleString("ru-RU")} просмотров, ${context.topComments.length} комментариев, ${context.topVideos.length} топ-роликов. Анализирую и готовлю темы…`);
       return anyModelClient.analyzeYouTube(context, input);
     }
+    stage("Разбираю референс по ссылке…");
     return await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input);
   });
   handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
@@ -108,11 +112,13 @@ function registerIpc(): void {
   handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
     projectService.createFromReference(input)
   );
-  handleIpc("director:regenerate-scenes", async (_event, analysis: ReferenceAnalysis, targetSeconds: number) =>
-    await anyModelClient.configured()
+  handleIpc("director:regenerate-scenes", async (event, analysis: ReferenceAnalysis, targetSeconds: number) => {
+    const totalScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+    event.sender.send("director:progress", `Пишу сценарий: ~${totalScenes} сцен по 5 секунд (порциями по 30)…`);
+    return await anyModelClient.configured()
       ? anyModelClient.regenerateScenes(analysis, targetSeconds)
-      : resizeScenesLocally(analysis, targetSeconds)
-  );
+      : resizeScenesLocally(analysis, targetSeconds);
+  });
   handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
   handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
   handleIpc("projects:delete", async (_event, id: string) => {

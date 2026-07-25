@@ -2288,3 +2288,45 @@ button:disabled {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* Темы для нового ролика в карточке разбора */
+.suggested-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+.suggested-topics > small {
+  color: #b9a25a;
+  letter-spacing: 0.08em;
+  font-size: 10.5px;
+}
+.suggested-topic {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 200, 75, 0.35);
+  background: rgba(240, 200, 75, 0.06);
+  color: #f2f2f5;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.suggested-topic:hover:not(:disabled) {
+  background: rgba(240, 200, 75, 0.14);
+  border-color: rgba(240, 200, 75, 0.6);
+}
+.suggested-topic:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.suggested-topic strong {
+  font-size: 13.5px;
+}
+.suggested-topic span {
+  font-size: 12px;
+  color: #b9bac4;
+}

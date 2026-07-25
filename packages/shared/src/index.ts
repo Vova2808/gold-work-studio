@@ -79,6 +79,12 @@ export interface Scene {
   audioPath?: string;
 }
 
+export interface SuggestedTopic {
+  title: string;
+  hook: string;
+  angle: string;
+}
+
 export interface ReferenceAnalysis {
   sourceUrl: string;
   sourceTitle: string;
@@ -96,6 +102,7 @@ export interface ReferenceAnalysis {
   scenes: Scene[];
   provider: string;
   youtubeContext?: YouTubeAnalysisContext;
+  suggestedTopics?: SuggestedTopic[];
 }
 
 export interface AnalyzeReferenceInput {
@@ -258,6 +265,7 @@ export interface DesktopApi {
   refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis>;
   createReferenceProject(input: CreateReferenceProjectInput): Promise<Project>;
   regenerateReferenceScenes(analysis: ReferenceAnalysis, targetSeconds: number): Promise<ReferenceAnalysis>;
+  onDirectorProgress(listener: (stage: string) => void): () => void;
   getAnyModelSettings(): Promise<AnyModelSettings>;
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
   clearAnyModelKey(): Promise<AnyModelSettings>;
