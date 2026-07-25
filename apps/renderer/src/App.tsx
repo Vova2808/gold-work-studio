@@ -82,7 +82,16 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [uiLog, setUiLog] = useState<Array<{ time: string; level: string; text: string }>>([]);
   const pageScrollRef = useRef<HTMLDivElement>(null);
+
+  /** Пишет действие в Console Output и в лог-файл приложения. */
+  function logAction(text: string, level: "UI" | "INFO" | "ERROR" = "UI") {
+    setUiLog((current) => [...current.slice(-199), { time: new Date().toLocaleTimeString("ru-RU"), level, text }]);
+    void api.writeLog(level === "ERROR" ? "error" : "info", "ui.action", { text }).catch(() => undefined);
+  }
+  useEffect(() => { if (notice) logAction(notice, "INFO"); }, [notice]);
+  useEffect(() => { if (error) logAction(error, "ERROR"); }, [error]);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const overlayProject = overlay ? projects.find((project) => project.id === overlay.projectId) : undefined;
@@ -244,6 +253,36 @@ export function App() {
     }
   }
 
+  /** Выбор темы в AI-генераторе: проект открывается СРАЗУ, сценарий собирается в фоне и подставляется автоматически. */
+  async function createProjectFromTopic(analysis: ReferenceAnalysis) {
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await api.createReferenceProject({ analysis: { ...analysis, scenes: [] }, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      setSelectedProjectId(project.id);
+      setActiveSection("project");
+      logAction(`Проект «${project.title}» создан по теме — сценарий собирается в фоне`);
+      setNotice("Проект открыт. Сценарий собирается в фоне — сцены подставятся автоматически через минуту-две.");
+      const originalSeconds = analysis.youtubeContext?.durationSeconds ?? 0;
+      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
+      void (async () => {
+        try {
+          const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
+          const updated = await api.updateProject(project.id, { scenes: full.scenes, status: "ready" });
+          upsertProject(updated);
+          setNotice(`Сценарий готов: ${updated.scenes.length} сцен по 5 секунд. Можно запускать генерацию.`);
+        } catch (reason) {
+          setError(`Не удалось собрать сценарий в фоне: ${errorMessage(reason)}`);
+        }
+      })();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveProject(id: string, input: UpdateProjectInput) {
     setError(null);
     try {
@@ -295,6 +334,7 @@ export function App() {
 
   async function startGeneration(id: string) {
     setBusy(true);
+    logAction(`Запуск генерации проекта ${id}`);
     try {
       await api.startGeneration(id);
       setSelectedProjectId(id);
@@ -340,6 +380,7 @@ export function App() {
   }
 
   function navigate(section: SectionKey) {
+    logAction(`Переход: ${section}`);
     setActiveSection(section);
     if (section === "settings") void api.getAppInfo().then(setAppInfo);
   }
@@ -355,7 +396,7 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createReferenceProject(analysis)} onAcceptYouTube={(analysis) => void acceptYouTubeAnalysis(analysis)} onInfo={setNotice} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createProjectFromTopic(analysis)} onAcceptYouTube={(analysis) => void createProjectFromTopic(analysis)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />}
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -371,7 +412,7 @@ export function App() {
               setActiveSection("queue");
             }}
           />
-          <ConsoleDock open={consoleOpen} queue={queue} onToggle={() => setConsoleOpen((value) => !value)} />
+          <ConsoleDock open={consoleOpen} queue={queue} log={uiLog} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
       {overlay && overlayProject && <ProjectPreviewModal project={overlayProject} initialMode={overlay.type} onClose={() => setOverlay(null)} onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)} onOpenFolder={() => void openProjectFolder(overlayProject.id)} />}
@@ -1328,7 +1369,7 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onInfo }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onAcceptYouTube: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void }) {
+function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onAcceptYouTube: (analysis: ReferenceAnalysis) => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -1441,34 +1482,17 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
     }
   }
 
-  async function pickTopic(topic: { title: string; hook: string; angle: string }) {
-    if (!analysis || analyzing) return;
-    setAnalyzing(true);
-    try {
-      const originalSeconds = analysis.youtubeContext?.durationSeconds ?? 0;
-      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
-      setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }]);
-      onInfo(`Собираю сценарий по теме «${topic.title}» — это займёт минуту-две…`);
-      setStreamingText(`Пишу полный сценарий по теме «${topic.title}» (~${Math.round(targetSeconds / 60)} мин, сцены по 5 секунд, порциями по 30)…`);
-      const withTopic = {
-        ...analysis,
-        suggestedTitle: topic.title,
-        hook: topic.hook || analysis.hook,
-        suggestedAngle: topic.angle || analysis.suggestedAngle
-      };
-      const full = await api.regenerateReferenceScenes(withTopic, targetSeconds);
-      setAnalysis(full);
-      if (currentTopicId) await api.saveChatTopicAnalysis(currentTopicId, full).catch(() => undefined);
-      setStreamingText(null);
-      setMessages((current) => [...current, { role: "assistant", text: `Сценарий по теме «${topic.title}» готов: ${full.scenes.length} сцен. Открываю проект — настрой параметры и запусти генерацию.` }]);
-      onCreateFromReference(full);
-    } catch (reason) {
-      setStreamingText(null);
-      setMessages((current) => [...current, { role: "assistant", text: `Не получилось собрать сценарий по теме: ${errorMessage(reason)}` }]);
-    } finally {
-      setAnalyzing(false);
-      setStreamingText(null);
-    }
+  function pickTopic(topic: { title: string; hook: string; angle: string }) {
+    if (!analysis) return;
+    onLog(`Выбрана тема: ${topic.title}`);
+    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }, { role: "assistant", text: `Открываю проект по теме «${topic.title}». Сценарий соберётся в фоне и подставится в проект автоматически.` }]);
+    const withTopic: ReferenceAnalysis = {
+      ...analysis,
+      suggestedTitle: topic.title,
+      hook: topic.hook || analysis.hook,
+      suggestedAngle: topic.angle || analysis.suggestedAngle
+    };
+    onPickTopic(withTopic);
   }
 
   async function openTopic(id: string) {
@@ -1676,7 +1700,7 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onIn
                   <div className="suggested-topics">
                     <small>ТЕМЫ ДЛЯ НОВОГО РОЛИКА — НАЖМИ, ЧТОБЫ СОБРАТЬ СЦЕНАРИЙ И ОТКРЫТЬ ПРОЕКТ</small>
                     {analysis.suggestedTopics.map((topic, index) => (
-                      <button key={index} className="suggested-topic" disabled={busy || analyzing} onClick={() => void pickTopic(topic)}>
+                      <button key={index} className="suggested-topic" disabled={busy || analyzing} onClick={() => pickTopic(topic)}>
                         <strong>{index + 1}. {topic.title}</strong>
                         <span>{topic.hook}</span>
                       </button>
@@ -2206,32 +2230,35 @@ function ToolPage({ section, onAction }: { section: SectionKey; onAction: () => 
   );
 }
 
-function ConsoleDock({ open, queue, onToggle }: { open: boolean; queue: QueueTask[]; onToggle: () => void }) {
+function ConsoleDock({ open, queue, log, onToggle }: { open: boolean; queue: QueueTask[]; log: Array<{ time: string; level: string; text: string }>; onToggle: () => void }) {
   const running = queue.filter((task) => task.status === "running").length;
+  const linesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open && linesRef.current) linesRef.current.scrollTop = linesRef.current.scrollHeight;
+  }, [log, open]);
   return (
     <div className={`console-dock${open ? " open" : ""}`}>
       <button className="console-head" onClick={onToggle}>
         <span>
           <SquareTerminal size={14} />
-          CONSOLE OUTPUT <em>{queue.length}</em>
+          CONSOLE OUTPUT <em>{log.length}</em>
         </span>
         <span>
-          <Search size={13} />
-          <Copy size={13} />
-          <Save size={13} />
+          <b style={{ opacity: 0.7 }}>очередь: {running}/{queue.length}</b>
           {open ? "⌄" : "⌃"}
         </span>
       </button>
       {open && (
-        <div className="console-lines">
-          <p>
-            <time>{new Date().toLocaleTimeString("ru-RU")}</time>
-            <b>INFO</b> Интерфейс GoldWork Studio запущен
-          </p>
-          <p>
-            <time>{new Date().toLocaleTimeString("ru-RU")}</time>
-            <b>QUEUE</b> В работе: {running} · всего задач: {queue.length}
-          </p>
+        <div className="console-lines" ref={linesRef}>
+          {log.length === 0 && (
+            <p><time>{new Date().toLocaleTimeString("ru-RU")}</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p>
+          )}
+          {log.map((line, index) => (
+            <p key={index}>
+              <time>{line.time}</time>
+              <b>{line.level}</b> {line.text}
+            </p>
+          ))}
         </div>
       )}
     </div>
