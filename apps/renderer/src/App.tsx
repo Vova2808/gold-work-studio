@@ -1983,7 +1983,7 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
-  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video" });
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video" });
   const [apiKey, setApiKey] = useState("");
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");

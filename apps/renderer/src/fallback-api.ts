@@ -16,7 +16,7 @@ const clone = <T,>(value: T): T => structuredClone(value);
 let projects: Project[] = [];
 let tasks: QueueTask[] = [];
 let chatTopics: ChatTopic[] = [];
-let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-4-6", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video" };
+let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video" };
 let youtubeSettings = { configured: false, cookiesFileConfigured: false, cookiesFileName: undefined as string | undefined, workDirConfigured: false, workDirPath: undefined as string | undefined };
 
 function demoScenes(topic: string): Scene[] {
