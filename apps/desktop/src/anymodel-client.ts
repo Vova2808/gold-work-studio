@@ -138,7 +138,7 @@ export class AnyModelClient {
   }
 
   /** Пересобирает сцены существующего разбора под заданную пользователем длину (сцены по 5 секунд). */
-  async regenerateScenes(analysis: ReferenceAnalysis, targetSeconds: number): Promise<ReferenceAnalysis> {
+  async regenerateScenes(analysis: ReferenceAnalysis, targetSeconds: number, onProgress?: (done: number, total: number) => void): Promise<ReferenceAnalysis> {
     const sceneDurationSeconds = 5;
     const targetScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
     const planBrief = {
@@ -149,13 +149,13 @@ export class AnyModelClient {
       targetAudience: analysis.targetAudience,
       structure: analysis.structure
     };
-    const scenes = await this.buildScenes(planBrief, targetScenes, analysis.language || "Русский");
-    if (scenes.length === 0) throw new Error("Не удалось пересобрать сцены под заданную длину");
+    const scenes = await this.buildScenes(planBrief, targetScenes, analysis.language || "Русский", onProgress);
+    if (scenes.length === 0) throw new Error("Не удалось собрать сцены сценария");
     return { ...analysis, scenes, recommendedDurationSeconds: scenes.length * sceneDurationSeconds };
   }
 
   /** Генерация сцен батчами (targetScenes>0) или одним лёгким запросом (иначе). Каждая сцена ~5 секунд при батчах. */
-  private async buildScenes(planBrief: Record<string, unknown>, targetScenes: number, language: string): Promise<Scene[]> {
+  private async buildScenes(planBrief: Record<string, unknown>, targetScenes: number, language: string, onProgress?: (done: number, total: number) => void): Promise<Scene[]> {
     const settings = await this.store.publicSettings();
     const sceneDurationSeconds = 5;
     const scenes: Scene[] = [];
@@ -197,6 +197,7 @@ export class AnyModelClient {
           if (scenes.length >= targetScenes) break;
           push(scene, sceneDurationSeconds);
         }
+        onProgress?.(scenes.length, targetScenes);
       }
     } else {
       const fallbackContent = await this.chat(settings.textModel, [

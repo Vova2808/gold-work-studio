@@ -253,40 +253,17 @@ export function App() {
     }
   }
 
-  /** Выбор темы в AI-генераторе: проект открывается СРАЗУ, сценарий собирается в фоне и подставляется автоматически. */
+  /** Создаёт проект по готовому разбору (сцены уже собраны в чате) и открывает страницу проекта. */
   async function createProjectFromTopic(analysis: ReferenceAnalysis) {
     setBusy(true);
     setError(null);
     try {
-      const project = await api.createReferenceProject({ analysis: { ...analysis, scenes: [] }, aspectRatio: "16:9", mode: "standard" });
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
       setSelectedProjectId(project.id);
       setActiveSection("project");
-      logAction(`Проект «${project.title}» создан по теме — сценарий собирается в фоне`);
-      setNotice("Проект открыт. Сценарий собирается в фоне — сцены подставятся автоматически через минуту-две.");
-      const originalSeconds = analysis.youtubeContext?.durationSeconds ?? 0;
-      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
-      void (async () => {
-        try {
-          const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
-          // Подставляем сцены с ретраями: проект может быть временно занят (например, идёт генерация).
-          let updated: Project | undefined;
-          let lastReason: unknown;
-          for (let attempt = 0; attempt < 5 && !updated; attempt += 1) {
-            try {
-              updated = await api.updateProject(project.id, { scenes: full.scenes, status: "ready" });
-            } catch (reason) {
-              lastReason = reason;
-              await new Promise((resolve) => setTimeout(resolve, 4_000));
-            }
-          }
-          if (!updated) throw lastReason;
-          upsertProject(updated);
-          setNotice(`Сценарий готов: ${updated.scenes.length} сцен по 5 секунд. Можно запускать генерацию.`);
-        } catch (reason) {
-          setError(`Не удалось собрать сценарий в фоне: ${errorMessage(reason)}`);
-        }
-      })();
+      logAction(`Проект «${project.title}» создан (${analysis.scenes.length} сцен)`);
+      setNotice(`Проект открыт: ${analysis.scenes.length} сцен. Проверьте настройки и нажмите «Генерировать видео».`);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -407,7 +384,7 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onCreateFromReference={(analysis) => void createProjectFromTopic(analysis)} onAcceptYouTube={(analysis) => void createProjectFromTopic(analysis)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />}
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -1380,7 +1357,7 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onCreateFromReference: (analysis: ReferenceAnalysis) => void; onAcceptYouTube: (analysis: ReferenceAnalysis) => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
+function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -1501,17 +1478,37 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPi
     }
   }
 
+  async function buildAndOpen(base: ReferenceAnalysis, label: string) {
+    if (analyzing) return;
+    setAnalyzing(true);
+    onLog(`Пишу сценарий: ${label}`);
+    setMessages((current) => [...current, { role: "assistant", text: `Пишу сценарий по теме «${label}» на модели cc/claude-sonnet-5. Прогресс — ниже.` }]);
+    setStreamingText("Пишу сценарий: подготовка…");
+    try {
+      const originalSeconds = base.youtubeContext?.durationSeconds ?? 0;
+      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
+      const full = await api.regenerateReferenceScenes(base, targetSeconds);
+      setStreamingText(null);
+      setMessages((current) => [...current, { role: "assistant", text: `Сценарий готов: ${full.scenes.length} сцен (у каждой — текст озвучки и промпт для картинки). Открываю проект.` }]);
+      onPickTopic(full);
+    } catch (reason) {
+      setStreamingText(null);
+      setMessages((current) => [...current, { role: "assistant", text: `Не удалось собрать сценарий: ${errorMessage(reason)}` }]);
+    } finally {
+      setAnalyzing(false);
+      setStreamingText(null);
+    }
+  }
+
   function pickTopic(topic: { title: string; hook: string; angle: string }) {
     if (!analysis) return;
-    onLog(`Выбрана тема: ${topic.title}`);
-    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }, { role: "assistant", text: `Открываю проект по теме «${topic.title}». Сценарий соберётся в фоне и подставится в проект автоматически.` }]);
-    const withTopic: ReferenceAnalysis = {
+    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }]);
+    void buildAndOpen({
       ...analysis,
       suggestedTitle: topic.title,
       hook: topic.hook || analysis.hook,
       suggestedAngle: topic.angle || analysis.suggestedAngle
-    };
-    onPickTopic(withTopic);
+    }, topic.title);
   }
 
   async function openTopic(id: string) {
@@ -1650,12 +1647,21 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPi
                 <i /><i /><i />
               </article>
             )}
-            {streamingText !== null && (
-              <article className="message assistant streaming-message">
-                {streamingText || <span className="stream-caret">▋</span>}
-                {analyzing && <div className="message-files"><span>⏱ {elapsedSeconds} с</span></div>}
-              </article>
-            )}
+            {streamingText !== null && (() => {
+              const match = /(\d+)\s*из\s*(\d+)/.exec(streamingText);
+              const percent = match ? Math.min(100, Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100)) : null;
+              return (
+                <article className="message assistant streaming-message">
+                  {streamingText || <span className="stream-caret">▋</span>}
+                  <div className="script-progress">
+                    <div className="script-progress-bar">
+                      <span className={percent === null ? "indeterminate" : ""} style={percent === null ? undefined : { width: `${percent}%` }} />
+                    </div>
+                    <small>{percent === null ? `⏱ ${elapsedSeconds} с` : `${percent}% · ⏱ ${elapsedSeconds} с`}</small>
+                  </div>
+                </article>
+              );
+            })()}
             {analysis && (
               <article className="reference-analysis">
                 <header>
@@ -1728,9 +1734,9 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPi
                 )}
                 <footer>
                   <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
-                  <button className="generate-button" disabled={busy || analyzing} onClick={() => analysis.youtubeContext ? onAcceptYouTube(analysis) : onCreateFromReference(analysis)}>
+                  <button className="generate-button" disabled={busy || analyzing} onClick={() => void buildAndOpen(analysis, analysis.suggestedTitle || "улучшенный ролик")}>
                     <WandSparkles size={15} />
-                    {analysis.youtubeContext ? "Согласен — создать проект" : "Создать проект и сценарий"}
+                    Написать сценарий и создать проект
                   </button>
                 </footer>
               </article>

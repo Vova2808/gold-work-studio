@@ -2330,3 +2330,36 @@ button:disabled {
   font-size: 12px;
   color: #b9bac4;
 }
+
+/* Прогресс-бар генерации сценария */
+.script-progress {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.script-progress-bar {
+  height: 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.script-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #f0c84b, #ffe08a);
+  transition: width 0.4s ease;
+}
+.script-progress-bar > span.indeterminate {
+  width: 40%;
+  animation: script-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes script-progress-slide {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+.script-progress > small {
+  color: #b9bac4;
+  font-size: 11px;
+}

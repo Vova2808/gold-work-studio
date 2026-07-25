@@ -114,9 +114,10 @@ function registerIpc(): void {
   );
   handleIpc("director:regenerate-scenes", async (event, analysis: ReferenceAnalysis, targetSeconds: number) => {
     const totalScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
-    event.sender.send("director:progress", `Пишу сценарий: ~${totalScenes} сцен по 5 секунд (порциями по 30)…`);
+    event.sender.send("director:progress", `Пишу сценарий: 0 из ${totalScenes} сцен`);
+    const onProgress = (done: number, total: number) => event.sender.send("director:progress", `Пишу сценарий: ${done} из ${total} сцен`);
     return await anyModelClient.configured()
-      ? anyModelClient.regenerateScenes(analysis, targetSeconds)
+      ? anyModelClient.regenerateScenes(analysis, targetSeconds, onProgress)
       : resizeScenesLocally(analysis, targetSeconds);
   });
   handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
