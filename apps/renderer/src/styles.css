@@ -2363,3 +2363,32 @@ button:disabled {
   color: #b9bac4;
   font-size: 11px;
 }
+
+/* Поля выбора длины и языка перед сборкой сценария */
+.build-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin: 14px 0 4px;
+}
+.build-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.build-options label > span {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: #b9bac4;
+}
+.build-options input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: #f2f2f5;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.build-options input[type="number"] { width: 120px; }
+.build-options > small { flex-basis: 100%; color: #8a8b95; font-size: 11px; }

@@ -433,8 +433,13 @@ export class MockGenerationPipeline {
         return runId;
       })(),
       label: task.label || task.kind,
-      status: task.status === "running" ? "pending" : task.status,
-      pausedFrom: task.status === "running" ? "running" : task.pausedFrom,
+      // При перезапуске незавершённые задачи ставим на ПАУЗУ — прогресс сохранён,
+      // но генерация не возобновляется сама, только по кнопке пользователя.
+      status: task.status === "pending" || task.status === "running" || task.status === "retry_wait" ? "paused" : task.status,
+      pausedFrom: task.status === "running" ? "running"
+        : task.status === "pending" ? "pending"
+        : task.status === "retry_wait" ? "retry_wait"
+        : task.pausedFrom,
       dependsOn: task.dependsOn ?? [],
       createdAt: task.createdAt ?? now,
       updatedAt: task.updatedAt ?? now,

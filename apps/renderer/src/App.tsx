@@ -1378,6 +1378,14 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [targetMinutes, setTargetMinutes] = useState(5);
+  const [language, setLanguage] = useState("Русский");
+  useEffect(() => {
+    if (!analysis) return;
+    const seconds = analysis.youtubeContext?.durationSeconds ?? 0;
+    if (seconds > 0) setTargetMinutes(Math.max(1, Math.round((seconds + 90) / 60)));
+    if (analysis.language) setLanguage(analysis.language);
+  }, [analysis?.sourceUrl]);
 
   async function refreshChatTopics() {
     setChatTopics(await api.listChatTopics());
@@ -1485,9 +1493,8 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     setMessages((current) => [...current, { role: "assistant", text: `Пишу сценарий по теме «${label}» на модели cc/claude-sonnet-5. Прогресс — ниже.` }]);
     setStreamingText("Пишу сценарий: подготовка…");
     try {
-      const originalSeconds = base.youtubeContext?.durationSeconds ?? 0;
-      const targetSeconds = originalSeconds > 0 ? originalSeconds + 90 : 300;
-      const full = await api.regenerateReferenceScenes(base, targetSeconds);
+      const targetSeconds = Math.max(30, Math.round(targetMinutes * 60));
+      const full = await api.regenerateReferenceScenes({ ...base, language }, targetSeconds);
       setStreamingText(null);
       setMessages((current) => [...current, { role: "assistant", text: `Сценарий готов: ${full.scenes.length} сцен (у каждой — текст озвучки и промпт для картинки). Открываю проект.` }]);
       onPickTopic(full);
@@ -1721,6 +1728,17 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                     </p>
                   </div>
                 )}
+                <div className="build-options">
+                  <label>
+                    <span>ДЛИНА РОЛИКА (МИН)</span>
+                    <input type="number" min={1} max={60} value={targetMinutes} disabled={analyzing} onChange={(event) => setTargetMinutes(Math.max(1, Math.min(60, Number(event.target.value) || 1)))} />
+                  </label>
+                  <label>
+                    <span>ЯЗЫК</span>
+                    <input value={language} disabled={analyzing} onChange={(event) => setLanguage(event.target.value)} placeholder="Русский" />
+                  </label>
+                  <small>Сценарий соберётся под эту длину (сцены по 5 сек) и на этом языке. Ничего не запускается без твоей кнопки.</small>
+                </div>
                 {analysis.suggestedTopics && analysis.suggestedTopics.length > 0 && (
                   <div className="suggested-topics">
                     <small>ТЕМЫ ДЛЯ НОВОГО РОЛИКА — НАЖМИ, ЧТОБЫ СОБРАТЬ СЦЕНАРИЙ И ОТКРЫТЬ ПРОЕКТ</small>
