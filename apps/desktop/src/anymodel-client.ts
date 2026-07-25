@@ -397,16 +397,22 @@ export class AnyModelClient {
       : path;
     const url = `${base}${normalizedPath}`;
     const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...init.headers };
+    const host = (() => { try { return new URL(base).host; } catch { return "anymodel.org"; } })();
     let response: Response;
     try {
       response = await fetch(url, { ...init, headers });
     } catch (networkError) {
-      // Сетевой сбой — тоже повторяем с бэкоффом.
+      // Сетевой сбой — повторяем с бэкоффом.
       if (attempt < AnyModelClient.MAX_RETRIES) {
         await sleep(backoffMs(attempt));
         return this.request(path, init, attempt + 1);
       }
-      throw networkError;
+      const cause = (networkError as { cause?: { code?: string } })?.cause;
+      const code = cause?.code ?? "";
+      if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+        throw new Error(`Не удалось найти сервер ${host} (DNS). Проверьте интернет — в некоторых сетях он открывается только через VPN.`);
+      }
+      throw new Error(`Нет соединения с ${host} после ${AnyModelClient.MAX_RETRIES + 1} попыток. Проверьте интернет/VPN и повторите.`);
     }
     // Временная недоступность провайдера — ждём и повторяем (учитываем retry_after).
     if (AnyModelClient.RETRIABLE_STATUSES.has(response.status) && attempt < AnyModelClient.MAX_RETRIES) {
