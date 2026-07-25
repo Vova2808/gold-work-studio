@@ -418,6 +418,16 @@ export class AnyModelClient {
 
   private async error(response: Response): Promise<string> {
     const text = await response.text();
+    if (/model_not_found|The selected model is unavailable/i.test(text)) {
+      const settings = await this.store.publicSettings().catch(() => undefined);
+      return `Модель «${settings?.textModel ?? "выбранная"}» недоступна на вашем ключе AnyModel. Откройте Настройки → AI и сценарии и укажите модель из вашего каталога AnyModel (например ag/claude-sonnet-4-6 или cc/claude-opus-4-8), затем нажмите «Проверить подключение».`;
+    }
+    if (response.status === 401 || response.status === 403) {
+      return "AnyModel отклонил ключ API. Проверьте ключ в Настройки → AI и сценарии (возможно, он был отозван) и сохраните новый.";
+    }
+    if (/insufficient|balance|quota|credit/i.test(text)) {
+      return "На балансе AnyModel недостаточно средств для запроса. Пополните баланс и повторите.";
+    }
     return `AnyModel ${response.status}: ${text.slice(0, 300)}`;
   }
 
