@@ -1,7 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { TaskRepository } from "@gold-work/core";
 import type { QueueTask } from "@gold-work/shared";
+import { atomicWrite } from "./fs-utils.js";
 
 export class FileTaskRepository implements TaskRepository {
   constructor(private readonly filePath: string) {}
@@ -17,9 +17,6 @@ export class FileTaskRepository implements TaskRepository {
   }
 
   async replace(tasks: QueueTask[]): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    await writeFile(temporaryPath, JSON.stringify(tasks, null, 2), "utf8");
-    await rename(temporaryPath, this.filePath);
+    await atomicWrite(this.filePath, JSON.stringify(tasks, null, 2));
   }
 }

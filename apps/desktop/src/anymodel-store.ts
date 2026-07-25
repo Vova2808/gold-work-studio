@@ -1,6 +1,6 @@
 import { safeStorage } from "electron";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { atomicWrite } from "./fs-utils.js";
 import type { AnyModelSettings, SaveAnyModelSettingsInput } from "@gold-work/shared";
 
 const defaults: Omit<AnyModelSettings, "configured"> = {
@@ -63,9 +63,6 @@ export class AnyModelStore {
   }
 
   private async write(value: StoredSettings): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify(value, null, 2), "utf8");
-    await rename(temporary, this.path);
+    await atomicWrite(this.path, JSON.stringify(value, null, 2));
   }
 }

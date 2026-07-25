@@ -1,7 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { ProjectRepository } from "@gold-work/core";
 import type { Project } from "@gold-work/shared";
+import { atomicWrite } from "./fs-utils.js";
 
 export class FileProjectRepository implements ProjectRepository {
   private mutation: Promise<void> = Promise.resolve();
@@ -61,9 +61,6 @@ export class FileProjectRepository implements ProjectRepository {
   }
 
   private async write(projects: Project[]): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    await writeFile(temporaryPath, JSON.stringify(projects, null, 2), "utf8");
-    await rename(temporaryPath, this.filePath);
+    await atomicWrite(this.filePath, JSON.stringify(projects, null, 2));
   }
 }

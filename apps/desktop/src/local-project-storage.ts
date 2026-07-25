@@ -1,17 +1,13 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { atomicWrite } from "./fs-utils.js";
 import type { Project, Scene } from "@gold-work/shared";
 
 function safeSegment(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 80) || "untitled";
 }
 
-async function writeAtomic(path: string, data: string | Buffer): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporaryPath, data);
-  await rename(temporaryPath, path);
-}
+const writeAtomic = atomicWrite;
 
 function createBmp(width: number, height: number, seed: number): Buffer {
   const rowSize = Math.ceil((width * 3) / 4) * 4;

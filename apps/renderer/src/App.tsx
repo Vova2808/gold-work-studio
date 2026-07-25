@@ -269,7 +269,18 @@ export function App() {
       void (async () => {
         try {
           const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
-          const updated = await api.updateProject(project.id, { scenes: full.scenes, status: "ready" });
+          // Подставляем сцены с ретраями: проект может быть временно занят (например, идёт генерация).
+          let updated: Project | undefined;
+          let lastReason: unknown;
+          for (let attempt = 0; attempt < 5 && !updated; attempt += 1) {
+            try {
+              updated = await api.updateProject(project.id, { scenes: full.scenes, status: "ready" });
+            } catch (reason) {
+              lastReason = reason;
+              await new Promise((resolve) => setTimeout(resolve, 4_000));
+            }
+          }
+          if (!updated) throw lastReason;
           upsertProject(updated);
           setNotice(`Сценарий готов: ${updated.scenes.length} сцен по 5 секунд. Можно запускать генерацию.`);
         } catch (reason) {
@@ -691,7 +702,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
     setSelectedTopicId(project?.chatTopicId ?? "");
-  }, [project?.id, project?.chatTopicId]);
+  }, [project?.id, project?.chatTopicId, project?.updatedAt]);
   useEffect(() => {
     void api.listChatTopics().then(setChatTopics).catch(() => setChatTopics([]));
   }, []);
@@ -1044,15 +1055,15 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
         </SettingsPanel>
       </div>
       <div className="sticky-actions editor-actions">
-        <span>{draft.scenes.length} сцен · данные сохраняются локально</span>
+        <span>{draft.scenes.length > 0 ? `${draft.scenes.length} сцен · данные сохраняются локально` : "Сценарий собирается в фоне — сцены появятся автоматически"}</span>
         <div>
           <button className="outline-button" disabled={saving} onClick={() => void save()}>
             <Save size={16} />
             {saving ? "Сохраняем..." : "Сохранить"}
           </button>
-          <button className="generate-button" disabled={busy || saving} onClick={() => void generate()}>
+          <button className="generate-button" disabled={busy || saving || draft.scenes.length === 0} onClick={() => void generate()}>
             <Zap size={17} />
-            Генерировать видео
+            {draft.scenes.length === 0 ? "Сценарий собирается…" : "Генерировать видео"}
           </button>
         </div>
       </div>
@@ -1412,7 +1423,15 @@ function Director({ busy, onCreate, onCreateFromReference, onAcceptYouTube, onPi
         topicId = created.id;
         setCurrentTopicId(created.id);
       }
-      await api.appendChatMessage(topicId, { role: "user", content: text });
+      try {
+        await api.appendChatMessage(topicId, { role: "user", content: text });
+      } catch {
+        // Тема могла быть удалена — создаём новую и продолжаем, не роняя запрос.
+        const created = await api.createChatTopic(text);
+        topicId = created.id;
+        setCurrentTopicId(created.id);
+        await api.appendChatMessage(topicId, { role: "user", content: text });
+      }
       await refreshChatTopics();
       const appendAssistant = async (answer: string) => {
         // Плавное появление ответа (эффект печати), затем фиксация сообщения.

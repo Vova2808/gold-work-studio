@@ -1,7 +1,8 @@
 import { safeStorage } from "electron";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { access, readFile, stat } from "node:fs/promises";
+import { basename } from "node:path";
+import { atomicWrite } from "./fs-utils.js";
 import { describeCookiesProblem, validateCookiesContent, type SaveYouTubeSettingsInput, type YouTubeSettings } from "@gold-work/shared";
 
 interface StoredYouTubeSettings {
@@ -122,9 +123,6 @@ export class YouTubeStore {
   }
 
   private async write(value: StoredYouTubeSettings): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify(value, null, 2), "utf8");
-    await rename(temporary, this.path);
+    await atomicWrite(this.path, JSON.stringify(value, null, 2));
   }
 }

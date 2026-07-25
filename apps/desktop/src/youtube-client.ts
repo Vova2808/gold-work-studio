@@ -237,7 +237,24 @@ export class YouTubeClient {
 
   private async api(resource: string, parameters: Record<string, string>, key: string): Promise<ApiResponse> {
     const query = new URLSearchParams({ ...parameters, key });
-    const response = await fetch(`https://www.googleapis.com/youtube/v3/${resource}?${query}`);
+    const url = `https://www.googleapis.com/youtube/v3/${resource}?${query}`;
+    let response: Response | undefined;
+    let lastNetworkError: unknown;
+    // До 3 попыток с таймаутом 12с: googleapis.com может быть недоступен (сеть/блокировки) — не висим минутами.
+    for (let attempt = 0; attempt < 3 && !response; attempt += 1) {
+      try {
+        response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+      } catch (error) {
+        lastNetworkError = error;
+        await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
+      }
+    }
+    if (!response) {
+      void lastNetworkError;
+      throw new Error(
+        "Нет соединения с YouTube API (googleapis.com): запрос не прошёл за 12 секунд после 3 попыток. Проверьте интернет — в некоторых сетях googleapis.com открывается только через VPN."
+      );
+    }
     const data = await response.json() as ApiResponse & { error?: { message?: string; errors?: Array<{ reason?: string }> } };
     if (!response.ok) {
       const reason = data.error?.errors?.[0]?.reason;
@@ -255,7 +272,8 @@ export class YouTubeClient {
 
 async function transcriptFromWatchPage(videoId: string): Promise<TranscriptSegment[]> {
   const response = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=ru`, {
-    headers: { "User-Agent": "Mozilla/5.0 GoldWorkStudio/0.2" }
+    headers: { "User-Agent": "Mozilla/5.0 GoldWorkStudio/0.2" },
+    signal: AbortSignal.timeout(12_000)
   });
   if (!response.ok) throw new Error(`YouTube watch ${response.status}`);
   const html = await response.text();
@@ -267,7 +285,7 @@ async function transcriptFromWatchPage(videoId: string): Promise<TranscriptSegme
     ?? tracks.find((item) => item.kind !== "asr")
     ?? tracks[0];
   if (!track) return [];
-  const captionsResponse = await fetch(`${track.baseUrl}&fmt=json3`);
+  const captionsResponse = await fetch(`${track.baseUrl}&fmt=json3`, { signal: AbortSignal.timeout(12_000) });
   if (!captionsResponse.ok) return [];
   const captions = await captionsResponse.json() as {
     events?: Array<{ tStartMs?: number; dDurationMs?: number; segs?: Array<{ utf8?: string }> }>;
