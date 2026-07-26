@@ -661,7 +661,10 @@ export class MockGenerationPipeline {
       if (!this.veo || !(await this.veo.configured())) {
         throw new Error("Движок Veo не настроен — добавьте ключ Google AI Studio в Настройки → AI и сценарии");
       }
-      const startFrame = scene.imagePath ? await readFile(scene.imagePath).catch(() => undefined) : undefined;
+      // Переключатель «Анимация от первого кадра» действует одинаково для обоих движков.
+      const startFrame = project.settings.video.startFrame && scene.imagePath
+        ? await readFile(scene.imagePath).catch(() => undefined)
+        : undefined;
       const prompt = scene.animationPrompt?.trim() || scene.imagePrompt;
       return this.storage.saveGeneratedVideo(project, scene, await this.veo.generateVideo(prompt, project.aspectRatio, startFrame));
     }
