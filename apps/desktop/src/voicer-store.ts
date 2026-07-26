@@ -4,7 +4,7 @@ import { atomicWrite } from "./fs-utils.js";
 import type { SaveVoicerSettingsInput, VoicerSettings } from "@gold-work/shared";
 
 const defaults: Omit<VoicerSettings, "configured"> = {
-  baseUrl: ""
+  baseUrl: "https://api.lumean.app/api/public"
 };
 
 interface StoredSettings extends Omit<VoicerSettings, "configured"> {

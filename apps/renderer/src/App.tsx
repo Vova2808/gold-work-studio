@@ -1132,21 +1132,21 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
                   }
                 >
                   <option value="edge-tts">Встроенная (Edge / Google)</option>
-                  <option value="elevenlabs">Voicer (ElevenLabs)</option>
+                  <option value="elevenlabs">Lumean (ElevenLabs)</option>
                 </select>
               </Field>
               {settings.voice.provider === "elevenlabs" ? (
-                <Field label="ШАБЛОН ГОЛОСА VOICER" hint="Шаблоны создаются в Telegram-боте Voicer. Пустой выбор — настройки по умолчанию.">
+                <Field label="ШАБЛОН ГОЛОСА LUMEAN" hint="Шаблон = голос + настройки. Создаётся в кабинете lumean.app; один уже создан этим приложением.">
                   <select
                     value={settings.voice.voice}
                     onChange={(event) => setSettings({ voice: { ...settings.voice, voice: event.target.value } })}
                   >
-                    <option value="">Шаблон по умолчанию</option>
+                    <option value="">Первый доступный шаблон</option>
                     {(voicerTemplates ?? []).map((template) => (
                       <option key={template.uuid} value={template.uuid}>{template.name}</option>
                     ))}
                   </select>
-                  <small>{voicerTemplates === null ? "Загружаю шаблоны…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — проверьте ключ Voicer в Настройках" : "Пример голоса генерируется один раз и кэшируется."}</small>
+                  <small>{voicerTemplates === null ? "Загружаю шаблоны…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — сохраните ключ Lumean в Настройках" : "Пример голоса генерируется один раз и кэшируется."}</small>
                 </Field>
               ) : (
                 <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">
@@ -2560,16 +2560,16 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                 <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.clearAnyModelKey().then(setAnyModel)}>Удалить ключ</button>
               </div>
               {connectionMessage && <p>{connectionMessage}</p>}
-              <h2>Voicer — премиум-озвучка (ElevenLabs)</h2>
-              <p>Голоса ElevenLabs через Voicer API. Шаблоны голосов создаются в Telegram-боте Voicer, а выбираются в настройках проекта (движок «Voicer»).</p>
-              <InfoRow label="Статус Voicer" value={voicer.configured ? "Ключ сохранён" : "Не настроен"} />
-              <Field label="BASE URL VOICER"><input value={voicer.baseUrl} onChange={(event) => setVoicer({ ...voicer, baseUrl: event.target.value })} placeholder="https://адрес-из-кабинета-voicer" /></Field>
-              <Field label="API-КЛЮЧ VOICER (X-API-KEY)">
-                <input type="password" value={voicerKey} onChange={(event) => setVoicerKey(event.target.value)} placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ Voicer"} />
+              <h2>Lumean — премиум-озвучка (ElevenLabs)</h2>
+              <p>Голоса ElevenLabs через Lumean API (lumean.app). Ключ создаётся в кабинете Lumean → API ключи; шаблоны голосов выбираются в настройках проекта (движок «Lumean»).</p>
+              <InfoRow label="Статус Lumean" value={voicer.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="BASE URL LUMEAN"><input value={voicer.baseUrl} onChange={(event) => setVoicer({ ...voicer, baseUrl: event.target.value })} placeholder="https://api.lumean.app/api/public" /></Field>
+              <Field label="API-КЛЮЧ LUMEAN (X-API-KEY)">
+                <input type="password" value={voicerKey} onChange={(event) => setVoicerKey(event.target.value)} placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ из кабинета Lumean"} />
               </Field>
               <div className="provider-actions">
-                <button className="generate-button" onClick={() => void saveVoicer()}><Save size={15} />Сохранить Voicer</button>
-                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.testVoicerConnection().then((result) => setConnectionMessage(result.message))}>Проверить Voicer</button>
+                <button className="generate-button" onClick={() => void saveVoicer()}><Save size={15} />Сохранить Lumean</button>
+                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.testVoicerConnection().then((result) => setConnectionMessage(result.message))}>Проверить Lumean</button>
                 <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.clearVoicerKey().then(setVoicer)}>Удалить ключ</button>
               </div>
               <h2>YouTube Data API v3 (BYOK)</h2>

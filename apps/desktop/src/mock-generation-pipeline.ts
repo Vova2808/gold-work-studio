@@ -583,7 +583,7 @@ export class MockGenerationPipeline {
       // Провайдер "elevenlabs" = Voicer API: голос задаётся шаблоном (uuid в settings.voice.voice).
       if (project.settings.voice.provider === "elevenlabs" && scene.narration.trim().length > 0) {
         if (!this.voicer || !(await this.voicer.configured())) {
-          throw new Error("В проекте выбран движок Voicer, но он не настроен. Добавьте Base URL и ключ в Настройки → AI и сценарии или переключите движок озвучки.");
+          throw new Error("В проекте выбран движок Lumean, но он не настроен. Добавьте ключ в Настройки → AI и сценарии или переключите движок озвучки.");
         }
         const templateUuid = project.settings.voice.voice?.trim() || undefined;
         const audio = await this.voicer.tts(scene.narration, templateUuid);
