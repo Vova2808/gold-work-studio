@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -43,7 +43,16 @@ try {
     title: "Вторая тестовая сцена",
     imagePrompt: "Холодный кинематографичный кадр"
   };
-  await projectService.update(project.id, { scenes: [scene, secondScene] });
+  const musicPath = join(root, "bgm.wav");
+  await writeFile(musicPath, silentWav(2));
+  await projectService.update(project.id, {
+    scenes: [scene, secondScene],
+    settings: {
+      ...project.settings,
+      subtitles: { ...project.settings.subtitles, enabled: true },
+      music: { path: musicPath, volume: 20 }
+    }
+  });
 
   const storage = new LocalProjectStorage(join(root, "projects"));
   const renderer = new StandardRenderer(storage);
@@ -67,6 +76,8 @@ try {
   assert.ok(completed?.outputPath);
   assert.ok((await stat(completed.outputPath)).size > 1000);
   assert.ok((await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "image-prompt.txt"), "utf8")).includes("кинематографичный"));
+  const assContent = await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "subtitles.ass"), "utf8");
+  assert.ok(assContent.includes("Dialogue:") && assContent.includes("Проверка локального конвейера"), "субтитры сцены должны содержать текст озвучки");
 
   await pipeline.regenerateScene(project.id, secondScene.id);
   await pipeline.drain();
@@ -85,4 +96,26 @@ try {
   console.log(`[pipeline-smoke] OK ${regenerated.outputPath}`);
 } finally {
   await rm(root, { recursive: true, force: true });
+}
+
+/** Минимальный тишина-WAV (16 кГц, моно, 16 бит) для проверки подмешивания фоновой музыки. */
+function silentWav(durationSeconds: number): Buffer {
+  const sampleRate = 16_000;
+  const samples = Math.ceil(durationSeconds * sampleRate);
+  const dataSize = samples * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8, "ascii");
+  buffer.write("fmt ", 12, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
 }
