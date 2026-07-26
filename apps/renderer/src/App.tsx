@@ -404,8 +404,9 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {/* Director всегда смонтирован (скрывается CSS): чат и разбор не пропадают при переключении вкладок. */}
-            <div className={activeSection === "director" ? undefined : "hidden-section"}>
+            {/* Director всегда смонтирован (скрывается CSS): чат и разбор не пропадают при переключении вкладок.
+                display:contents — обёртка не создаёт свой блок и не ломает растяжение чата по высоте. */}
+            <div className={activeSection === "director" ? "section-host" : "hidden-section"}>
               <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
             </div>
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
@@ -859,7 +860,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   useEffect(() => {
     if (draft?.settings.voice.provider !== "elevenlabs" || voicerTemplates !== null) return;
     api.listVoicerTemplates().then(setVoicerTemplates).catch(() => setVoicerTemplates([]));
-  }, [draft?.settings.voice.provider]);
+  }, [draft?.settings.voice.provider, voicerTemplates]);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -1088,6 +1089,20 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               {rebuilding ? "Пишу сценарий…" : draft.scenes.length === 0 ? "Собрать сценарий" : "Пересобрать сценарий под длину и язык"}
             </button>
           )}
+          {draft.scenes.length > 0 && (
+            <Field label={`ТЕКСТ СЦЕНАРИЯ (${draft.scenes.length} СЦЕН)`} hint="Текст озвучки каждой сцены. Полное редактирование — в разделе «Сценарий».">
+              <div className="scenario-preview">
+                {draft.scenes.slice(0, 6).map((scene) => (
+                  <p key={scene.id}><b>{scene.order + 1}.</b> {scene.narration || "— без текста —"}</p>
+                ))}
+                {draft.scenes.length > 6 && <p>…и ещё {draft.scenes.length - 6} сцен</p>}
+              </div>
+              <button className="outline-button small" onClick={() => void saveAndNavigate("scenario")}>
+                <FileText size={14} />
+                Открыть редактор сценария
+              </button>
+            </Field>
+          )}
           <Field label="СМЕНА КАДРОВ" hint="Как часто меняется кадр. Значение по умолчанию настроено под удержание внимания на YouTube.">
             <select
               value={settings.frameChange}
@@ -1136,17 +1151,28 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
                 </select>
               </Field>
               {settings.voice.provider === "elevenlabs" ? (
-                <Field label="ШАБЛОН ГОЛОСА LUMEAN" hint="Шаблон = голос + настройки. Создаётся в кабинете lumean.app; один уже создан этим приложением.">
-                  <select
-                    value={settings.voice.voice}
-                    onChange={(event) => setSettings({ voice: { ...settings.voice, voice: event.target.value } })}
-                  >
-                    <option value="">Первый доступный шаблон</option>
+                <Field label="ШАБЛОН ГОЛОСА LUMEAN" hint="Шаблон = голос + настройки из кабинета lumean.app. Кнопки подтягиваются с сервиса автоматически.">
+                  <div className="choice-row template-row">
+                    <button
+                      className={!settings.voice.voice ? "selected" : ""}
+                      onClick={() => setSettings({ voice: { ...settings.voice, voice: "" } })}
+                    >
+                      Первый доступный
+                    </button>
                     {(voicerTemplates ?? []).map((template) => (
-                      <option key={template.uuid} value={template.uuid}>{template.name}</option>
+                      <button
+                        key={template.uuid}
+                        className={settings.voice.voice === template.uuid ? "selected" : ""}
+                        onClick={() => setSettings({ voice: { ...settings.voice, voice: template.uuid } })}
+                      >
+                        {template.name}
+                      </button>
                     ))}
-                  </select>
-                  <small>{voicerTemplates === null ? "Загружаю шаблоны…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — сохраните ключ Lumean в Настройках" : "Пример голоса генерируется один раз и кэшируется."}</small>
+                    <button title="Обновить список шаблонов с Lumean" onClick={() => setVoicerTemplates(null)}>
+                      <RotateCcw size={12} />
+                    </button>
+                  </div>
+                  <small>{voicerTemplates === null ? "Загружаю шаблоны с Lumean…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — сохраните ключ Lumean в Настройках, и они появятся здесь" : "Ваши шаблоны с lumean.app. Пример генерируется один раз и кэшируется."}</small>
                 </Field>
               ) : (
                 <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">

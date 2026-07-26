@@ -50,7 +50,9 @@ export class VoicerStore {
 
   private async read(): Promise<StoredSettings> {
     try {
-      return { ...defaults, ...JSON.parse(await readFile(this.path, "utf8")) as StoredSettings };
+      // BOM срезаем: файл могли создать/править внешние инструменты (PowerShell пишет UTF-8 c BOM).
+      const raw = (await readFile(this.path, "utf8")).replace(/^﻿/, "");
+      return { ...defaults, ...JSON.parse(raw) as StoredSettings };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...defaults };
       throw error;

@@ -2525,3 +2525,22 @@ button:disabled {
   transition: width 300ms ease;
 }
 .language-row button { font-size: 12px; }
+
+/* --- Обёртка активной вкладки: не создаёт блок, чтобы не ломать высоту чата --- */
+.section-host { display: contents; }
+
+/* --- Превью текста сценария в проекте --- */
+.scenario-preview {
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  background: #0d0d0c;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c9c6ba;
+}
+.scenario-preview p { margin: 0 0 7px; }
+.scenario-preview b { color: #e1c668; }
+.template-row button { font-size: 12px; }
