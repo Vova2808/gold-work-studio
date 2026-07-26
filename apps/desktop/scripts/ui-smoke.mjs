@@ -316,6 +316,18 @@ async function run() {
     if (!referenceProjectCreated) await wait(300);
   }
   if (!referenceProjectCreated) fail("кнопка создания проекта из YouTube-разбора не активировалась");
+  await wait(300);
+  // Новый шаг: карточка подтверждения пресета перед сборкой сценария.
+  const confirmed = await window.webContents.executeJavaScript(`(() => {
+    const modal = document.querySelector(".topic-modal");
+    if (!modal) return false;
+    const button = [...modal.querySelectorAll("button")].find((item) => item.textContent?.includes("Согласен"));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!confirmed) fail("карточка подтверждения пресета не появилась");
+  await trace("preset-confirmed");
   await wait(1200);
   // Генерация больше не стартует сама: после выбора темы открывается проект с кнопкой запуска.
   await wait(1500);
