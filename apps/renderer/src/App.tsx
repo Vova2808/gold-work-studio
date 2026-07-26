@@ -2052,7 +2052,7 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
-  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video" });
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts" });
   const [apiKey, setApiKey] = useState("");
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
@@ -2133,6 +2133,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <Field label="МОДЕЛЬ СЦЕНАРИЯ"><input value={anyModel.textModel} onChange={(event) => setAnyModel({ ...anyModel, textModel: event.target.value })} /></Field>
               <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ"><input value={anyModel.imageModel} onChange={(event) => setAnyModel({ ...anyModel, imageModel: event.target.value })} /></Field>
               <Field label="МОДЕЛЬ ВИДЕО"><input value={anyModel.videoModel} onChange={(event) => setAnyModel({ ...anyModel, videoModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ОЗВУЧКИ"><input value={anyModel.ttsModel} onChange={(event) => setAnyModel({ ...anyModel, ttsModel: event.target.value })} placeholder="google-tts, edge-tts или edge-tts/ru-RU-DmitryNeural" /></Field>
               <div className="provider-actions">
                 <button className="generate-button" onClick={() => void saveAnyModel()}><Save size={15} />Сохранить</button>
                 <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.testAnyModelConnection().then((result) => setConnectionMessage(result.message))}>Проверить подключение</button>
@@ -2180,8 +2181,8 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
           {activeTab === "voice" && (
             <>
               <h2>Озвучка</h2>
-              <p>Озвучка создаётся по сценам, поэтому работу можно продолжить после перезапуска и повторить только проблемный фрагмент.</p>
-              <InfoRow label="Основной сервис" value="ElevenLabs" />
+              <p>Озвучка создаётся по сценам, поэтому работу можно продолжить после перезапуска и повторить только проблемный фрагмент. Модель меняется в «AI и сценарии»: google-tts (язык проекта подставится сам), edge-tts (нейроголос по языку) или полный id вида edge-tts/ru-RU-DmitryNeural.</p>
+              <InfoRow label="Текущая модель" value={anyModel.ttsModel} />
               <InfoRow label="Бесплатный вариант" value="Microsoft Edge TTS" />
               <InfoRow label="Выход" value="Отдельные аудиофайлы сцен" />
             </>

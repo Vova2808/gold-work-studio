@@ -301,13 +301,14 @@ export class AnyModelClient {
     throw new Error("AnyModel не вернул изображение");
   }
 
-  /** Озвучка текста через AnyModel google-tts. Возвращает MP3 (принимает и бинарный ответ, и JSON base64). */
+  /** Озвучка текста через AnyModel (google-tts/edge-tts/полный id из настроек). Возвращает MP3 (принимает и бинарный ответ, и JSON base64). */
   async textToSpeech(text: string, languageCode: string): Promise<Buffer> {
     const input = text.trim().slice(0, 5_000);
     if (!input) throw new Error("Пустой текст для озвучки");
+    const settings = await this.store.publicSettings();
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
-      body: JSON.stringify({ model: `google-tts/${languageCode}`, input })
+      body: JSON.stringify({ model: ttsModelId(settings.ttsModel, languageCode), input })
     });
     if (!response.ok) throw new Error(await this.error(response));
     const contentType = response.headers.get("content-type") ?? "";
@@ -449,6 +450,30 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+/** Нейроголоса Edge TTS по языкам проекта — используются, когда в настройках указан просто "edge-tts". */
+const EDGE_TTS_VOICES: Record<string, string> = {
+  ru: "ru-RU-DmitryNeural",
+  en: "en-US-ChristopherNeural",
+  uk: "uk-UA-OstapNeural",
+  de: "de-DE-ConradNeural",
+  es: "es-ES-AlvaroNeural",
+  fr: "fr-FR-HenriNeural",
+  it: "it-IT-DiegoNeural",
+  pt: "pt-BR-AntonioNeural"
+};
+
+/** Полный id модели озвучки: значение с "/" идёт как есть, "edge-tts" получает голос по языку, иначе провайдер+язык. */
+function ttsModelId(setting: string, languageCode: string): string {
+  const value = (setting || "google-tts").trim();
+  if (value.includes("/")) return value;
+  if (value === "edge-tts") {
+    const voice = EDGE_TTS_VOICES[languageCode.split("-")[0]?.toLowerCase() ?? ""];
+    if (voice) return `edge-tts/${voice}`;
+    return `google-tts/${languageCode}`;
+  }
+  return `${value}/${languageCode}`;
 }
 
 function clock(seconds: number): string {

@@ -7,7 +7,8 @@ const defaults: Omit<AnyModelSettings, "configured"> = {
   baseUrl: "https://anymodel.org/v1",
   textModel: "cc/claude-sonnet-5",
   imageModel: "ag/gemini-3.1-flash-image",
-  videoModel: "xai/grok-imagine-video"
+  videoModel: "xai/grok-imagine-video",
+  ttsModel: "google-tts"
 };
 
 interface StoredSettings extends Omit<AnyModelSettings, "configured"> {
@@ -36,6 +37,7 @@ export class AnyModelStore {
       textModel: input.textModel.trim(),
       imageModel: input.imageModel.trim(),
       videoModel: input.videoModel.trim(),
+      ttsModel: input.ttsModel?.trim() || defaults.ttsModel,
       encryptedApiKey: current.encryptedApiKey
     };
     if (input.apiKey?.trim()) {

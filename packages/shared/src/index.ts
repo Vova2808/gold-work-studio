@@ -123,6 +123,8 @@ export interface AnyModelSettings {
   textModel: string;
   imageModel: string;
   videoModel: string;
+  /** Провайдер озвучки: "google-tts"/"edge-tts" (язык проекта подставится сам) или полный id вида "edge-tts/ru-RU-DmitryNeural". */
+  ttsModel: string;
 }
 
 export interface YouTubeSettings {

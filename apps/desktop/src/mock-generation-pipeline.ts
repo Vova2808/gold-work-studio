@@ -30,6 +30,8 @@ export class MockGenerationPipeline {
   private tasks: QueueTask[] = [];
   private initialization?: Promise<void>;
   private mutation: Promise<void> = Promise.resolve();
+  /** Реально выполняющиеся задачи (API-вызовы, FFmpeg) — работают вне мьютекса состояния. */
+  private readonly executing = new Map<string, Promise<void>>();
 
   constructor(
     private readonly repository: TaskRepository,
@@ -43,7 +45,11 @@ export class MockGenerationPipeline {
 
   async initialize(): Promise<void> {
     if (!this.initialization) {
-      this.initialization = this.load();
+      // При ошибке загрузки не кэшируем отказ навсегда — следующий вызов попробует снова.
+      this.initialization = this.load().catch((error) => {
+        this.initialization = undefined;
+        throw error;
+      });
     }
     await this.initialization;
   }
@@ -233,8 +239,10 @@ export class MockGenerationPipeline {
       let changed = false;
       for (const task of this.tasks) {
         if (task.projectId === projectId && task.status === "paused") {
-          task.status = task.pausedFrom === "retry_wait" ? "retry_wait" : "pending";
-          if (task.pausedFrom !== "running") task.pausedFrom = undefined;
+          // Если реальное выполнение всё ещё идёт (пауза не прерывает начатый API-вызов) — возвращаем в running.
+          const inFlight = this.executing.has(task.id);
+          task.status = task.pausedFrom === "retry_wait" ? "retry_wait" : inFlight ? "running" : "pending";
+          if (task.pausedFrom !== "running" || inFlight) task.pausedFrom = undefined;
           task.updatedAt = now;
           changed = true;
         }
@@ -361,34 +369,13 @@ export class MockGenerationPipeline {
         }
       }
 
+      // Реальная работа идёт в beginExecution вне мьютекса; здесь только «сердцебиение» прогресса до 90%,
+      // остальные 10% задача получает в момент фактического завершения.
       for (const task of this.tasks.filter((candidate) => candidate.status === "running")) {
-        task.progress = Math.min(100, task.progress + taskStep[task.kind]);
-        task.updatedAt = now;
-        changed = true;
-        if (task.progress >= 60 && await this.shouldSimulateFailure(task)) {
-          task.progress = 0;
-          task.error = "Тестовая ошибка провайдера ([FAIL])";
-          if (task.attempts < task.maxAttempts) {
-            const delay = this.policy.retryDelaysMs[Math.min(task.attempts - 1, this.policy.retryDelaysMs.length - 1)] ?? 1000;
-            task.status = "retry_wait";
-            task.nextAttemptAt = new Date(nowTime + delay).toISOString();
-            this.emit("warn", "queue.task.retry_scheduled", this.taskDetails(task));
-          } else {
-            task.status = "failed";
-            this.emit("error", "queue.task.failed", this.taskDetails(task));
-          }
-          continue;
-        }
-        if (task.progress >= 100) {
-          try {
-            task.resultPath = await this.executeTask(task);
-            task.status = "done";
-            task.error = undefined;
-            task.nextAttemptAt = undefined;
-            this.emit("info", "queue.task.completed", this.taskDetails(task));
-          } catch (error) {
-            this.scheduleFailure(task, error, nowTime);
-          }
+        if (task.progress < 90) {
+          task.progress = Math.min(90, task.progress + taskStep[task.kind]);
+          task.updatedAt = now;
+          changed = true;
         }
       }
 
@@ -412,6 +399,7 @@ export class MockGenerationPipeline {
         running += 1;
         changed = true;
         this.emit("info", "queue.task.started", this.taskDetails(task));
+        this.beginExecution(task);
       }
 
       if (changed) {
@@ -419,6 +407,61 @@ export class MockGenerationPipeline {
         await this.syncProjects();
       }
     });
+  }
+
+  /** Запускает реальное выполнение задачи вне мьютекса: очередь остаётся отзывчивой, задачи идут параллельно. */
+  private beginExecution(task: QueueTask): void {
+    if (this.executing.has(task.id)) return;
+    const snapshot = structuredClone(task);
+    const work = (async () => {
+      let resultPath: string | undefined;
+      let failure: unknown;
+      try {
+        if (await this.shouldSimulateFailure(snapshot)) throw new Error("Тестовая ошибка провайдера ([FAIL])");
+        resultPath = await this.executeTask(snapshot);
+      } catch (error) {
+        failure = error;
+      }
+      await this.mutate(async () => {
+        const current = this.tasks.find((candidate) => candidate.id === snapshot.id);
+        if (!current || current.status === "cancelled") return;
+        const nowTime = Date.now();
+        current.updatedAt = new Date(nowTime).toISOString();
+        if (failure === undefined) {
+          current.resultPath = resultPath;
+          current.status = "done";
+          current.progress = 100;
+          current.error = undefined;
+          current.nextAttemptAt = undefined;
+          current.pausedFrom = undefined;
+          this.emit("info", "queue.task.completed", this.taskDetails(current));
+        } else {
+          this.scheduleFailure(current, failure, nowTime);
+        }
+        await this.persist();
+        await this.syncProjects();
+      });
+    })();
+    this.executing.set(task.id, work.catch(() => undefined).finally(() => {
+      this.executing.delete(task.id);
+    }));
+  }
+
+  /** Для тестов и отладки: доводит очередь до состояния без активных задач. */
+  async drain(maxIterations = 1000): Promise<void> {
+    await this.initialize();
+    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      await this.tick();
+      const inFlight = [...this.executing.values()];
+      if (inFlight.length > 0) {
+        await Promise.all(inFlight);
+        continue;
+      }
+      const active = this.tasks.some((task) => ["pending", "running", "retry_wait"].includes(task.status));
+      if (!active) return;
+      await new Promise((resolve) => setTimeout(resolve, 50)); // ждём retry_wait
+    }
+    throw new Error("drain: очередь не завершилась за отведённые итерации");
   }
 
   private async load(): Promise<void> {
@@ -491,11 +534,16 @@ export class MockGenerationPipeline {
     if (!scene) throw new Error("Сцена для задачи не найдена");
     if (task.kind === "image") {
       if (this.anyModel && (await this.anyModel.configured()) && scene.imagePrompt.trim().length > 0) {
-        const size = project.aspectRatio === "9:16" ? "1024x1792" : project.aspectRatio === "1:1" ? "1024x1024" : "1792x1024";
+        // Размеры, которые принимает шлюз AnyModel (Gemini сам приводит к родным 16:9/9:16/1:1).
+        const size = project.aspectRatio === "9:16" ? "1080x1920" : project.aspectRatio === "1:1" ? "1024x1024" : "1920x1080";
         const style = project.settings.image.style.trim();
         const prompt = style ? `${scene.imagePrompt}\nСтиль: ${style}` : scene.imagePrompt;
         return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(prompt, size));
       }
+      this.emit("warn", "queue.task.placeholder_used", {
+        ...this.taskDetails(task),
+        reason: scene.imagePrompt.trim().length === 0 ? "пустой промпт изображения" : "AnyModel не настроен"
+      });
       return this.storage.createPlaceholderImage(project, scene);
     }
     if (task.kind === "speech") {
@@ -503,6 +551,10 @@ export class MockGenerationPipeline {
         const audio = await this.anyModel.textToSpeech(scene.narration, ttsLanguageCode(project.language));
         return this.storage.saveGeneratedAudio(project, scene, audio);
       }
+      this.emit("warn", "queue.task.placeholder_used", {
+        ...this.taskDetails(task),
+        reason: scene.narration.trim().length === 0 ? "пустой текст озвучки" : "AnyModel не настроен"
+      });
       return this.storage.createPlaceholderAudio(project, scene);
     }
     if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {

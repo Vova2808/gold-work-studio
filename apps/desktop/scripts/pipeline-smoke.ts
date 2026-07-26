@@ -60,7 +60,7 @@ try {
   );
   await pipeline.initialize();
   await pipeline.start(project.id);
-  for (let index = 0; index < 50; index += 1) await pipeline.tick();
+  await pipeline.drain();
 
   const completed = await projectService.get(project.id);
   assert.equal(completed?.status, "complete");
@@ -69,7 +69,7 @@ try {
   assert.ok((await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "image-prompt.txt"), "utf8")).includes("кинематографичный"));
 
   await pipeline.regenerateScene(project.id, secondScene.id);
-  for (let index = 0; index < 50; index += 1) await pipeline.tick();
+  await pipeline.drain();
   const regenerated = await projectService.get(project.id);
   assert.equal(regenerated?.status, "complete");
   assert.ok(regenerated?.outputPath && (await stat(regenerated.outputPath)).size > 1000);
