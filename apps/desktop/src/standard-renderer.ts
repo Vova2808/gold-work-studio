@@ -94,7 +94,7 @@ export class StandardRenderer {
     }
     const finalPath = this.storage.finalPath(project.id);
     const musicPath = project.settings.music.path?.trim();
-    const withMusic = Boolean(musicPath && existsSync(musicPath));
+    const withMusic = project.settings.music.enabled !== false && Boolean(musicPath && existsSync(musicPath));
     const assembledPath = withMusic ? join(this.storage.projectDirectory(project.id), "Final.tmp.mp4") : finalPath;
 
     if (clips.length === 1) {

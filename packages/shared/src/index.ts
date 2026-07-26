@@ -53,6 +53,8 @@ export interface ProjectSettings {
   music: {
     path?: string;
     volume: number;
+    /** false — собирать ролик без музыки (музыку добавят вручную, например в CapCut). Отсутствие поля = включено. */
+    enabled?: boolean;
   };
   subtitles: SubtitleSettings;
   assembly: {

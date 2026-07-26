@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import type { ProjectRepository } from "@gold-work/core";
 import type { Project } from "@gold-work/shared";
 import { atomicWrite } from "./fs-utils.js";
@@ -9,13 +9,21 @@ export class FileProjectRepository implements ProjectRepository {
   constructor(private readonly filePath: string) {}
 
   async list(): Promise<Project[]> {
+    let content: string;
     try {
-      const content = await readFile(this.filePath, "utf8");
-      const projects = JSON.parse(content) as Project[];
-      return projects.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      content = await readFile(this.filePath, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
+    }
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      const projects = Array.isArray(parsed) ? (parsed as Project[]) : [];
+      return projects.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    } catch {
+      // Битый projects.json не должен «окирпичивать» приложение: файл откладывается, список начинается заново.
+      await rename(this.filePath, `${this.filePath}.corrupt-${Date.now()}`).catch(() => undefined);
+      return [];
     }
   }
 

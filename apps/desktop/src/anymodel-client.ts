@@ -44,7 +44,7 @@ export class AnyModelClient {
       { role: "system", content: "Ты сценарный аналитик. Верни только JSON без markdown. Не утверждай, что видел ролик, если дан только заголовок и описание. Создай самостоятельный сценарий, не копируй чужой текст или брендинг." },
       { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
     ], undefined, "medium");
-    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> };
+    const parsed = extractJson<Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> }>(content, "разборе референса");
     const scenes = (parsed.scenes ?? []).map((scene, order) => ({
       id: createId("scene"), order, title: scene.title || `Сцена ${order + 1}`, narration: scene.narration || "",
       imagePrompt: scene.imagePrompt || "", animationPrompt: scene.animationPrompt || "", durationSeconds: scene.durationSeconds || 8, status: "draft" as const
@@ -105,7 +105,7 @@ export class AnyModelClient {
         content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nТакже предложи ровно 3 темы для НОВЫХ роликов этого направления, опираясь на топ-ролики канала и комментарии: для каждой — цепляющий заголовок, хук (1–2 предложения) и угол подачи.\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,topics[{title,hook,angle}]`
       }
     ], 6_000, "medium");
-    const plan = JSON.parse(planContent.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> };
+    const plan = extractJson<Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> }>(planContent, "анализе YouTube-ролика");
     const suggestedTopics: SuggestedTopic[] = (Array.isArray(plan.topics) ? plan.topics : [])
       .map((topic) => ({
         title: typeof topic?.title === "string" ? topic.title : "",
@@ -162,7 +162,7 @@ export class AnyModelClient {
         content: `Данные канала YouTube:\n${JSON.stringify(compact)}\nПожелание пользователя: ${input.instructions || "проанализируй канал и нишу"}\nЯзык: ${input.language || "Русский"}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook(главный вывод — что цепляет зрителей этой ниши),structure[](что повторяется в успешных роликах канала),strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds(оптимальная длительность по таймлайну),topics[{title,hook,angle}] — ровно 3 темы для НОВЫХ роликов, опираясь на желания зрителей из комментариев и самые успешные ролики.`
       }
     ], 6_000, "medium");
-    const plan = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> };
+    const plan = extractJson<Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> }>(content, "анализе канала");
     const suggestedTopics: SuggestedTopic[] = (Array.isArray(plan.topics) ? plan.topics : [])
       .map((topic) => ({
         title: typeof topic?.title === "string" ? topic.title : "",
@@ -292,7 +292,7 @@ export class AnyModelClient {
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error("Gemini вернул пустой транскрипт");
-    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Array<Partial<TranscriptSegment>>;
+    const parsed = extractJson<Array<Partial<TranscriptSegment>>>(content, "транскрибации аудио");
     return parsed.map((segment) => ({
       startSeconds: Math.max(0, Number(segment.startSeconds) || 0),
       durationSeconds: Math.max(0, Number(segment.durationSeconds) || 0),
@@ -316,11 +316,11 @@ export class AnyModelClient {
         content: `Язык проекта: ${language}\nСохранённый разговор:\n${messages.map((message) => `${message.role}: ${message.content}`).join("\n\n")}`
       }
     ]);
-    const parsed = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as {
+    const parsed = extractJson<{
       title?: string;
       topic?: string;
       scenes?: Array<Partial<Scene>>;
-    };
+    }>(content, "создании проекта из темы чата");
     const scenes = (parsed.scenes ?? []).map((scene, order) => ({
       id: createId("scene"),
       order,
@@ -521,6 +521,26 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+/** Достаёт JSON из ответа модели: срезает markdown-фенсы, при неудаче берёт фрагмент между крайними скобками. */
+function extractJson<T>(content: string, what: string): T {
+  const cleaned = content.replace(/```[a-z]*\s*/gi, "").replace(/```/g, "").trim();
+  const candidates = [cleaned];
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
+  const firstBracket = cleaned.indexOf("[");
+  const lastBracket = cleaned.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) candidates.push(cleaned.slice(firstBracket, lastBracket + 1));
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // пробуем следующий вариант
+    }
+  }
+  throw new Error(`Модель вернула не-JSON при ${what}. Начало ответа: ${cleaned.slice(0, 160)}`);
 }
 
 /** Референсы для images/generations: URL идёт как есть, локальный файл превращается в data:URI. */

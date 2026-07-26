@@ -430,6 +430,14 @@ app.whenReady().then(async () => {
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
+}).catch((error: unknown) => {
+  // Без catch сбой инициализации оставляет процесс без окна и без объяснения.
+  const message = error instanceof Error ? `${error.message}\n\n${error.stack ?? ""}` : String(error);
+  try {
+    dialog.showErrorBox("Gold Work Studio не запустился", message);
+  } finally {
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {

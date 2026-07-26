@@ -1138,14 +1138,34 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
       </div>
       <div className="editor-secondary">
         <SettingsPanel icon={<Music2 size={16} />} title="ФОНОВАЯ МУЗЫКА">
+          <ToggleRow
+            label="Добавлять музыку в сборку"
+            checked={settings.music.enabled !== false}
+            onChange={(enabled) => {
+              setSettings({ music: { ...settings.music, enabled } });
+              onInfo(enabled ? "Музыка будет подмешана в финальный ролик." : "Ролик соберётся без музыки — добавите её сами, например в CapCut.");
+            }}
+          />
           <p className="empty-note">
             <Music2 size={21} />
-            {settings.music.path ?? "Нет добавленных треков"}
+            {settings.music.path ?? "Нет добавленных треков — ролик соберётся без музыки"}
           </p>
           <button className="outline-button small" onClick={() => void chooseMusic()}>
             <Upload size={15} />
             Выбрать трек
           </button>
+          {settings.music.path && (
+            <button
+              className="outline-button small"
+              onClick={() => {
+                setSettings({ music: { ...settings.music, path: undefined } });
+                onInfo("Трек убран из проекта — ролик соберётся без музыки.");
+              }}
+            >
+              <Trash2 size={15} />
+              Убрать трек
+            </button>
+          )}
           <Field label={`ГРОМКОСТЬ: ${settings.music.volume}%`}>
             <input
               type="range"
