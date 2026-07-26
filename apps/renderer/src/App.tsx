@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
+import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -829,6 +829,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [applyingTopic, setApplyingTopic] = useState(false);
   const [samplePlaying, setSamplePlaying] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [heroBuilding, setHeroBuilding] = useState(false);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -923,6 +924,21 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
       onInfo(`Не удалось пересобрать сценарий: ${errorMessage(reason)}`);
     } finally {
       setRebuilding(false);
+    }
+  };
+  /** Портрет главного героя по сценарию → в референсы: все сцены рисуются с одинаковым персонажем. */
+  const createHero = async () => {
+    setHeroBuilding(true);
+    try {
+      const saved = await save();
+      if (!saved) return;
+      const updated = await api.createCharacterReference(saved.id);
+      setDraft(structuredClone(updated));
+      onInfo("Референс героя создан и добавлен — сцены будут генерироваться с одинаковым персонажем.");
+    } catch (reason) {
+      onInfo(`Не удалось создать референс героя: ${errorMessage(reason)}`);
+    } finally {
+      setHeroBuilding(false);
     }
   };
   const projectLanguageCode = ttsLanguageCode(draft.language).split("-")[0]?.toLowerCase() ?? "en";
@@ -1120,7 +1136,24 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <option value="anymodel-image">AnyModel API</option>
             </select>
           </Field>
-          <Field label="СТИЛЬ ИЗОБРАЖЕНИЙ">
+          <Field label="СТИЛЬ — ВЫБЕРИТЕ КАРТИНКОЙ">
+            <div className="style-grid">
+              {IMAGE_STYLES.map((style) => (
+                <button
+                  key={style.id}
+                  className={`style-card${settings.image.style === style.promptSuffix ? " selected" : ""}`}
+                  onClick={() => {
+                    setSettings({ image: { ...settings.image, style: style.promptSuffix } });
+                    onInfo(`Стиль «${style.label}» будет применён ко всем сценам.`);
+                  }}
+                >
+                  <img src={`/styles/${style.id}.jpg`} alt={style.label} loading="lazy" />
+                  <span>{style.label}</span>
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="СВОЙ СТИЛЬ (ТЕКСТОМ)">
             <input
               value={settings.image.style}
               onChange={(event) =>
@@ -1136,7 +1169,12 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <Plus size={21} />
               <span>Добавить референс</span>
             </button>
+            <small>С референсами сцены генерируются моделью GPT Image — герой остаётся одинаковым.</small>
           </Field>
+          <button className="outline-button small" disabled={busy || saving || heroBuilding || draft.scenes.length === 0} onClick={() => void createHero()}>
+            <CircleUserRound size={15} />
+            {heroBuilding ? "Создаю референс героя…" : "Создать референс героя по сценарию"}
+          </button>
         </SettingsPanel>
         <SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ">
           <Field label="РЕЖИМ ГЕНЕРАЦИИ">

@@ -20,6 +20,7 @@ const api: DesktopApi = {
   clearAnyModelKey: () => ipcRenderer.invoke("anymodel:clear-key"),
   testAnyModelConnection: () => ipcRenderer.invoke("anymodel:test"),
   ttsSample: (voice, language) => ipcRenderer.invoke("anymodel:tts-sample", voice, language),
+  createCharacterReference: (projectId) => ipcRenderer.invoke("projects:character-reference", projectId),
   getYouTubeSettings: () => ipcRenderer.invoke("youtube:get-settings"),
   saveYouTubeSettings: (input) => ipcRenderer.invoke("youtube:save-settings", input),
   clearYouTubeKey: () => ipcRenderer.invoke("youtube:clear-key"),

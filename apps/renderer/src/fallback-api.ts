@@ -262,6 +262,9 @@ export const fallbackApi: DesktopApi = {
   async ttsSample() {
     throw new Error("Примеры голосов доступны только в приложении с ключом AnyModel");
   },
+  async createCharacterReference() {
+    throw new Error("Референс героя доступен только в приложении с ключом AnyModel");
+  },
   async getAnyModelSettings() { return clone(anyModelSettings); },
   async saveAnyModelSettings(input) {
     anyModelSettings = { ...input, configured: Boolean(input.apiKey) || anyModelSettings.configured };

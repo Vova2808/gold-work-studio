@@ -2445,3 +2445,36 @@ button:disabled {
   font-size: 12px;
   flex-shrink: 0;
 }
+
+/* --- Галерея стилей изображений --- */
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+}
+.style-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: #101010;
+  cursor: pointer;
+  color: #c9c6ba;
+  font-size: 11px;
+}
+.style-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #1a1a18;
+}
+.style-card span { text-align: center; }
+.style-card:hover { border-color: #665a31; color: #eee6cb; }
+.style-card.selected {
+  border-color: #e1c668;
+  box-shadow: 0 0 0 1px #e1c668;
+  color: #f1d470;
+}

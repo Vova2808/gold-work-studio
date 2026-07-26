@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext, YouTubeChannelContext } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, Project, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext, YouTubeChannelContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 
@@ -384,6 +384,28 @@ export class AnyModelClient {
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.byteLength === 0) throw new Error("AnyModel вернул пустую озвучку");
     return buffer;
+  }
+
+  /** Портрет главного героя по сценарию: текстовая модель описывает персонажа, дешёвая модель рисует. */
+  async characterReference(project: Project): Promise<{ name: string; prompt: string; image: Buffer }> {
+    const settings = await this.store.publicSettings();
+    const scenario = project.scenes
+      .map((scene) => `${scene.narration} | ${scene.imagePrompt}`)
+      .join("\n")
+      .slice(0, 12_000);
+    const content = await this.chat(settings.textModel, [
+      {
+        role: "system",
+        content: "Ты художник-постановщик. Верни только JSON без markdown: {\"name\":\"имя героя\",\"prompt\":\"развёрнутый визуальный промпт на английском\"}. Промпт описывает ОДНОГО главного повторяющегося персонажа сценария: внешность, лицо (5–8 конкретных визуальных якорей), одежду, телосложение — так, чтобы по нему персонажа можно было рисовать одинаково во всех сценах. Без фона и без действия."
+      },
+      { role: "user", content: `Тема: ${project.topic}\nСценарий:\n${scenario}` }
+    ], 2_000, "low");
+    const parsed = extractJson<{ name?: string; prompt?: string }>(content, "описании главного героя");
+    if (!parsed.prompt?.trim()) throw new Error("Модель не вернула описание героя");
+    const style = project.settings.image.style.trim();
+    const fullPrompt = `Character reference sheet, full body portrait, neutral plain background. ${parsed.prompt}${style ? `\nStyle: ${style}` : ""}`;
+    const image = await this.generateImage(fullPrompt, "1024x1024");
+    return { name: parsed.name?.trim() || "Главный герой", prompt: parsed.prompt, image };
   }
 
   private static readonly SAMPLE_TEXTS: Record<string, string> = {

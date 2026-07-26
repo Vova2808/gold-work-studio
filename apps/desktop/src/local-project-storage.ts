@@ -101,6 +101,14 @@ export class LocalProjectStorage {
     return path;
   }
 
+  /** Портрет главного героя проекта — используется как референс для всех сцен. */
+  async saveCharacterReference(project: Project, data: Buffer): Promise<string> {
+    const directory = await this.ensureProject(project);
+    const path = join(directory, "character.png");
+    await writeAtomic(path, data);
+    return path;
+  }
+
   async saveGeneratedVideo(project: Project, scene: Scene, data: Buffer): Promise<string> {
     await this.ensureProject(project);
     const path = this.sceneVideoPath(project, scene);

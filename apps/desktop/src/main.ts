@@ -222,6 +222,24 @@ function registerIpc(): void {
   handleIpc("anymodel:tts-sample", (_event, voice: string, language: string) =>
     anyModelClient.ttsSample(voice, language, join(dataPath, "tts-samples"))
   );
+  handleIpc("projects:character-reference", async (_event, projectId: string) => {
+    const project = await projectService.get(projectId);
+    if (!project) throw new Error("Проект не найден");
+    if (project.scenes.length === 0) throw new Error("Сначала соберите сценарий — герой описывается по сценам");
+    if (!await anyModelClient.configured()) throw new Error("Подключите AnyModel API в настройках");
+    const hero = await anyModelClient.characterReference(project);
+    const path = await projectStorage.saveCharacterReference(project, hero.image);
+    void logger.write("info", "project.character_reference.created", { projectId, hero: hero.name });
+    return projectService.mutate(project.id, (current) => ({
+      settings: {
+        ...current.settings,
+        image: {
+          ...current.settings.image,
+          references: [...new Set([path, ...current.settings.image.references])].slice(0, 3)
+        }
+      }
+    }));
+  });
   handleIpc("youtube:get-settings", () => youtubeStore.publicSettings());
   handleIpc("youtube:save-settings", (_event, input: SaveYouTubeSettingsInput) => youtubeStore.save(input));
   handleIpc("youtube:clear-key", () => youtubeStore.clearKey());

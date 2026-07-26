@@ -178,6 +178,27 @@ export interface YouTubeAnalysisContext {
   visualAnalysisIncluded: false;
 }
 
+export interface ImageStyleOption {
+  id: string;
+  label: string;
+  /** Суффикс, который добавляется к промпту каждой сцены (settings.image.style). */
+  promptSuffix: string;
+}
+
+/** Каталог стилей изображений; превью лежат в renderer/public/styles/<id>.jpg. */
+export const IMAGE_STYLES: ImageStyleOption[] = [
+  { id: "cinematic", label: "Кино", promptSuffix: "cinematic photorealistic, dramatic lighting, film grain, 35mm lens, movie still" },
+  { id: "pixar3d", label: "3D-мультфильм", promptSuffix: "3D animated family movie style, vibrant colors, soft global illumination, expressive big eyes, high quality render" },
+  { id: "anime", label: "Аниме", promptSuffix: "anime style, cel shading, detailed painted background, studio quality" },
+  { id: "comic", label: "Комикс", promptSuffix: "comic book art, bold ink outlines, halftone shading, dynamic angle" },
+  { id: "watercolor", label: "Акварель", promptSuffix: "soft watercolor painting, gentle brush strokes, pastel palette, paper texture" },
+  { id: "realistic", label: "Фотореализм", promptSuffix: "ultra realistic wildlife photography, natural light, high detail, shallow depth of field" },
+  { id: "neon", label: "Неон", promptSuffix: "neon cyberpunk aesthetic, glowing magenta and cyan lights, night scene, high contrast" },
+  { id: "minimal", label: "Минимализм", promptSuffix: "minimalist flat vector illustration, simple geometric shapes, bold colors" },
+  { id: "fantasy", label: "Фэнтези", promptSuffix: "epic fantasy concept art, painterly, atmospheric fog, rich detail" },
+  { id: "vintage", label: "Винтаж", promptSuffix: "vintage 1970s film photograph, muted warm colors, heavy grain, faded look" }
+];
+
 export interface TtsVoiceOption {
   /** Полный id модели озвучки AnyModel ("edge-tts/<голос>") или "google-tts" (язык проекта подставится сам). */
   id: string;
@@ -340,6 +361,8 @@ export interface DesktopApi {
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
   /** Короткий аудио-пример голоса (base64 MP3); кэшируется, так что повторное прослушивание бесплатно. */
   ttsSample(voice: string, language: string): Promise<string>;
+  /** Создаёт портрет главного героя по сценарию и добавляет его в референсы проекта. */
+  createCharacterReference(projectId: string): Promise<Project>;
   getYouTubeSettings(): Promise<YouTubeSettings>;
   saveYouTubeSettings(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings>;
   clearYouTubeKey(): Promise<YouTubeSettings>;
