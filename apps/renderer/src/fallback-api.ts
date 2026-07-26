@@ -265,6 +265,14 @@ export const fallbackApi: DesktopApi = {
   async createCharacterReference() {
     throw new Error("Референс героя доступен только в приложении с ключом AnyModel");
   },
+  async getVoicerSettings() { return { configured: false, baseUrl: "" }; },
+  async saveVoicerSettings(input) { return { configured: Boolean(input.apiKey), baseUrl: input.baseUrl ?? "" }; },
+  async clearVoicerKey() { return { configured: false, baseUrl: "" }; },
+  async testVoicerConnection() { return { ok: false, message: "Voicer доступен только в приложении" }; },
+  async listVoicerTemplates() { return []; },
+  async voicerSample() {
+    throw new Error("Примеры голосов Voicer доступны только в приложении");
+  },
   async getAnyModelSettings() { return clone(anyModelSettings); },
   async saveAnyModelSettings(input) {
     anyModelSettings = { ...input, configured: Boolean(input.apiKey) || anyModelSettings.configured };

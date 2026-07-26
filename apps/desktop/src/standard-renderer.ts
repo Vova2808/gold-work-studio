@@ -27,6 +27,26 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
+/** Длительность медиафайла в секундах: парсим Duration из stderr ffmpeg -i (ffprobe в сборке нет). */
+function mediaDurationSeconds(path: string): Promise<number> {
+  const executable = executablePath();
+  if (!executable) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    const child = spawn(executable, ["-i", path], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr = `${stderr}${chunk}`.slice(-4000);
+    });
+    child.once("error", () => resolve(0));
+    child.once("close", () => {
+      const match = /Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/.exec(stderr);
+      if (!match) return resolve(0);
+      resolve(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 100);
+    });
+  });
+}
+
 function videoSize(project: Project): { width: number; height: number } {
   if (project.aspectRatio === "9:16") return { width: 720, height: 1280 };
   if (project.aspectRatio === "1:1") return { width: 900, height: 900 };
@@ -47,7 +67,9 @@ export class StandardRenderer {
     const outputPath = this.storage.sceneVideoPath(project, scene);
     await mkdir(dirname(outputPath), { recursive: true });
     const { width, height } = videoSize(project);
-    const duration = Math.max(1, scene.durationSeconds);
+    // Сцена длится не меньше своей озвучки: иначе голос обрывался на полуслове при смене кадра.
+    const audioSeconds = await mediaDurationSeconds(audioPath);
+    const duration = Math.max(1, scene.durationSeconds, audioSeconds > 0 ? audioSeconds + 0.25 : 0);
     const base = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
     // Направление сцены важнее настройки проекта: off выключает движение, in/out задают его явно.
     const direction = scene.kenBurnsDirection ?? "auto";

@@ -268,6 +268,23 @@ export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "confi
   apiKey?: string;
 }
 
+/** Voicer API — озвучка на ElevenLabs (X-API-Key, шаблоны из Telegram-бота). */
+export interface VoicerSettings {
+  configured: boolean;
+  baseUrl: string;
+}
+
+export interface SaveVoicerSettingsInput {
+  baseUrl: string;
+  apiKey?: string;
+}
+
+export interface VoicerTemplate {
+  uuid: string;
+  name: string;
+  broken?: boolean;
+}
+
 export interface AiChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -367,6 +384,13 @@ export interface DesktopApi {
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
   /** Короткий аудио-пример голоса (base64 MP3); кэшируется, так что повторное прослушивание бесплатно. */
   ttsSample(voice: string, language: string): Promise<string>;
+  getVoicerSettings(): Promise<VoicerSettings>;
+  saveVoicerSettings(input: SaveVoicerSettingsInput): Promise<VoicerSettings>;
+  clearVoicerKey(): Promise<VoicerSettings>;
+  testVoicerConnection(): Promise<{ ok: boolean; message: string }>;
+  listVoicerTemplates(): Promise<VoicerTemplate[]>;
+  /** Пример голоса шаблона Voicer (base64 MP3); кэшируется по шаблону. */
+  voicerSample(templateUuid: string | undefined, language: string): Promise<string>;
   /** Создаёт портрет главного героя по сценарию и добавляет его в референсы проекта. */
   createCharacterReference(projectId: string): Promise<Project>;
   getYouTubeSettings(): Promise<YouTubeSettings>;

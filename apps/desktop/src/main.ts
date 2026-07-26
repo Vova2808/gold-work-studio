@@ -6,7 +6,9 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
 import { parseYouTubeChannelRef } from "@gold-work/shared";
-import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
+import { VoicerStore } from "./voicer-store.js";
+import { VoicerClient } from "./voicer-client.js";
+import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveVoicerSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -28,6 +30,8 @@ let logger: TextFileLogger;
 let dataPath: string;
 let anyModelStore: AnyModelStore;
 let anyModelClient: AnyModelClient;
+let voicerStore: VoicerStore;
+let voicerClient: VoicerClient;
 let chatTopics: ChatTopicRepository;
 let youtubeStore: YouTubeStore;
 let youtubeClient: YouTubeClient;
@@ -223,6 +227,14 @@ function registerIpc(): void {
   handleIpc("anymodel:test", () => anyModelClient.test());
   handleIpc("anymodel:tts-sample", (_event, voice: string, language: string) =>
     anyModelClient.ttsSample(voice, language, join(dataPath, "tts-samples"))
+  );
+  handleIpc("voicer:get-settings", () => voicerStore.publicSettings());
+  handleIpc("voicer:save-settings", (_event, input: SaveVoicerSettingsInput) => voicerStore.save(input));
+  handleIpc("voicer:clear-key", () => voicerStore.clearKey());
+  handleIpc("voicer:test", () => voicerClient.test());
+  handleIpc("voicer:templates", () => voicerClient.templates());
+  handleIpc("voicer:tts-sample", (_event, templateUuid: string | undefined, language: string) =>
+    voicerClient.ttsSample(templateUuid, language, join(dataPath, "tts-samples"))
   );
   handleIpc("projects:character-reference", async (_event, projectId: string) => {
     const project = await projectService.get(projectId);
@@ -423,6 +435,8 @@ app.whenReady().then(async () => {
   dataPath = resolveDataPath();
   anyModelStore = new AnyModelStore(join(dataPath, "credentials", "anymodel.json"));
   anyModelClient = new AnyModelClient(anyModelStore);
+  voicerStore = new VoicerStore(join(dataPath, "credentials", "voicer.json"));
+  voicerClient = new VoicerClient(voicerStore);
   youtubeStore = new YouTubeStore(join(dataPath, "credentials", "youtube.json"));
   youtubeClient = new YouTubeClient(youtubeStore, (audio, format) => anyModelClient.transcribeAudio(audio, format));
   chatTopics = new ChatTopicRepository(join(dataPath, "database", "gold-work-studio.sqlite"));
@@ -445,7 +459,8 @@ app.whenReady().then(async () => {
     standardRenderer,
     DEFAULT_QUEUE_POLICY,
     (event) => void logger.write(event.level, event.message, event.details),
-    anyModelClient
+    anyModelClient,
+    voicerClient
   );
   await pipeline.initialize();
   await startRealtimeServer();

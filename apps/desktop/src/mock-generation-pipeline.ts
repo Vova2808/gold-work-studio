@@ -4,6 +4,7 @@ import { ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type Qu
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 import { AnyModelClient } from "./anymodel-client.js";
+import { VoicerClient } from "./voicer-client.js";
 
 export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
   concurrency: 4,
@@ -41,7 +42,8 @@ export class MockGenerationPipeline {
     private readonly renderer: StandardRenderer,
     readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
     private readonly eventSink: PipelineEventSink = () => undefined,
-    private readonly anyModel?: AnyModelClient
+    private readonly anyModel?: AnyModelClient,
+    private readonly voicer?: VoicerClient
   ) {}
 
   async initialize(): Promise<void> {
@@ -578,6 +580,12 @@ export class MockGenerationPipeline {
       return this.storage.createPlaceholderImage(project, scene);
     }
     if (task.kind === "speech") {
+      // Провайдер "elevenlabs" = Voicer API: голос задаётся шаблоном (uuid в settings.voice.voice).
+      if (project.settings.voice.provider === "elevenlabs" && this.voicer && (await this.voicer.configured()) && scene.narration.trim().length > 0) {
+        const templateUuid = project.settings.voice.voice?.trim() || undefined;
+        const audio = await this.voicer.tts(scene.narration, templateUuid);
+        return this.storage.saveGeneratedAudio(project, scene, audio);
+      }
       if (this.anyModel && (await this.anyModel.configured()) && scene.narration.trim().length > 0) {
         // Голос из настроек проекта важнее глобального; "custom" и пустое значение = глобальная настройка.
         const projectVoice = project.settings.voice.voice?.trim();

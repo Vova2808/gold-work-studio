@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
+import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -263,32 +263,20 @@ export function App() {
     }
   }
 
-  /** Мгновенно создаёт проект по выбранной теме и открывает его; сценарий пишется в фоне и вливается в проект. */
-  async function createProjectFromTopic(analysis: ReferenceAnalysis, targetSeconds: number) {
+  /** Мгновенно создаёт проект по выбранной теме и открывает его — длину и язык пользователь выбирает уже в проекте. */
+  async function createProjectFromTopic(analysis: ReferenceAnalysis) {
     setError(null);
-    let project: Project;
     try {
-      project = await api.createReferenceProject({ analysis: { ...analysis, scenes: [] }, aspectRatio: "16:9", mode: "standard" });
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
       setSelectedProjectId(project.id);
       setActiveSection("project");
-      logAction(`Проект «${project.title}» создан — сценарий пишется в фоне`);
-      setNotice("Проект открыт. Сценарий пишется в фоне — настройте пока язык, длительность и озвучку.");
+      logAction(`Проект «${project.title}» создан`);
+      setNotice(project.scenes.length > 0
+        ? `Проект открыт: ${project.scenes.length} сцен. Проверьте настройки и запустите генерацию.`
+        : "Проект открыт. Выберите длину и язык (кнопки с флагами) и нажмите «Собрать сценарий».");
     } catch (reason) {
       setError(errorMessage(reason));
-      return;
-    }
-    try {
-      const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
-      const updated = await api.updateProject(project.id, { scenes: full.scenes, status: full.scenes.length > 0 ? "ready" : "draft" });
-      // Выбор не трогаем: пользователь мог уйти в другой проект, пока сценарий писался в фоне.
-      setProjects((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
-      logAction(`Сценарий готов: ${full.scenes.length} сцен`);
-      setNotice(`Сценарий готов: ${full.scenes.length} сцен. Проверьте текст и запустите генерацию.`);
-    } catch (reason) {
-      setError(`Сценарий не собрался: ${errorMessage(reason)} Выберите тему в AI Генераторе ещё раз.`);
-    } finally {
-      setDirectorProgress(null);
     }
   }
 
@@ -414,7 +402,10 @@ export function App() {
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis, targetSeconds) => void createProjectFromTopic(analysis, targetSeconds)} onInfo={setNotice} onLog={logAction} />}
+            {/* Director всегда смонтирован (скрывается CSS): чат и разбор не пропадают при переключении вкладок. */}
+            <div className={activeSection === "director" ? undefined : "hidden-section"}>
+              <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
+            </div>
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -451,6 +442,18 @@ export function App() {
     </div>
   );
 }
+
+/** Языки проекта: один клик по кнопке с флагом вместо ручного ввода. */
+const PROJECT_LANGUAGES: Array<{ label: string; flag: string }> = [
+  { label: "Русский", flag: "🇷🇺" },
+  { label: "English", flag: "🇬🇧" },
+  { label: "Español", flag: "🇪🇸" },
+  { label: "Deutsch", flag: "🇩🇪" },
+  { label: "Français", flag: "🇫🇷" },
+  { label: "Italiano", flag: "🇮🇹" },
+  { label: "Português", flag: "🇵🇹" },
+  { label: "Українська", flag: "🇺🇦" },
+];
 
 /** Приводит голос проекта к id каталога: старые голые имена → edge-tts/, "custom" и пустое → глобальная настройка. */
 function normalizeVoiceId(voice: string): string {
@@ -532,7 +535,7 @@ function computeStepHint(
   if (activeSection === "project" && project) {
     if (project.scenes.length === 0) {
       return {
-        now: directorProgress ?? "сценарий собирается в фоне — пока настройте язык, длительность, формат кадра и озвучку",
+        now: directorProgress ?? "выберите длину ролика и язык (кнопки с флагами) и нажмите «Собрать сценарий»",
         next: "когда сцены появятся, проверьте текст и нажмите «Генерировать видео»",
       };
     }
@@ -848,6 +851,13 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [samplePlaying, setSamplePlaying] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [heroBuilding, setHeroBuilding] = useState(false);
+  const [scenarioProgress, setScenarioProgress] = useState<string | null>(null);
+  useEffect(() => api.onDirectorProgress((text) => setScenarioProgress(text)), []);
+  const [voicerTemplates, setVoicerTemplates] = useState<VoicerTemplate[] | null>(null);
+  useEffect(() => {
+    if (draft?.settings.voice.provider !== "elevenlabs" || voicerTemplates !== null) return;
+    api.listVoicerTemplates().then(setVoicerTemplates).catch(() => setVoicerTemplates([]));
+  }, [draft?.settings.voice.provider]);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -962,11 +972,11 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const projectLanguageCode = ttsLanguageCode(draft.language).split("-")[0]?.toLowerCase() ?? "en";
   const voiceOptions = TTS_VOICES.filter((voice) => voice.language === "any" || voice.language === projectLanguageCode);
   const playVoiceSample = async () => {
-    const voice = normalizeVoiceId(settings.voice.voice);
-    if (!voice) return;
     setSamplePlaying(true);
     try {
-      const base64 = await api.ttsSample(voice, ttsLanguageCode(draft.language));
+      const base64 = settings.voice.provider === "elevenlabs"
+        ? await api.voicerSample(settings.voice.voice?.trim() || undefined, ttsLanguageCode(draft.language))
+        : await api.ttsSample(normalizeVoiceId(settings.voice.voice), ttsLanguageCode(draft.language));
       const audio = new Audio(`data:audio/mpeg;base64,${base64}`);
       audio.onended = () => setSamplePlaying(false);
       audio.onerror = () => setSamplePlaying(false);
@@ -1040,17 +1050,18 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           <Field label="ТЕМА ВИДЕО">
             <input value={draft.topic} onChange={(event) => setDraft({ ...draft, topic: event.target.value })} />
           </Field>
-          <Field label="ЯЗЫК">
-            <select value={draft.language} onChange={(event) => setDraft({ ...draft, language: event.target.value })}>
-              <option>Русский</option>
-              <option>English</option>
-              <option>Español</option>
-              <option>Deutsch</option>
-              <option>Français</option>
-              <option>Italiano</option>
-              <option>Português</option>
-              <option>Українська</option>
-            </select>
+          <Field label="ЯЗЫК РОЛИКА" hint="Язык сценария и озвучки. Один клик — писать ничего не нужно.">
+            <div className="choice-row language-row">
+              {PROJECT_LANGUAGES.map((item) => (
+                <button
+                  key={item.label}
+                  className={draft.language === item.label ? "selected" : ""}
+                  onClick={() => setDraft({ ...draft, language: item.label })}
+                >
+                  {item.flag} {item.label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО" hint="Целевая длина ролика (сцены по 5 секунд). После смены нажмите «Пересобрать сценарий» ниже.">
             <div className="choice-row">
@@ -1070,9 +1081,9 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
             <small>Своя длина в минутах — если пресеты не подходят.</small>
           </Field>
           {draft.referenceAnalysis && (
-            <button className="outline-button small" disabled={busy || saving || rebuilding} onClick={() => void rebuildScenario()}>
+            <button className={draft.scenes.length === 0 ? "generate-button" : "outline-button small"} disabled={busy || saving || rebuilding} onClick={() => void rebuildScenario()}>
               <RotateCcw size={15} />
-              {rebuilding ? "Пересобираю сценарий…" : "Пересобрать сценарий под длину и язык"}
+              {rebuilding ? "Пишу сценарий…" : draft.scenes.length === 0 ? "Собрать сценарий" : "Пересобрать сценарий под длину и язык"}
             </button>
           )}
           <Field label="СМЕНА КАДРОВ" hint="Как часто меняется кадр. Значение по умолчанию настроено под удержание внимания на YouTube.">
@@ -1109,25 +1120,57 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           <ToggleRow label="Озвучка" checked={settings.voice.enabled} onChange={(enabled) => setSettings({ voice: { ...settings.voice, enabled } })} />
           {settings.voice.enabled && (
             <>
-              <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">
+              <Field label="ДВИЖОК ОЗВУЧКИ" hint="Встроенная — голоса Edge/Google через AnyModel. Voicer — премиум-голоса ElevenLabs по шаблонам из Telegram-бота.">
                 <select
-                  value={normalizeVoiceId(settings.voice.voice)}
+                  value={settings.voice.provider}
                   onChange={(event) =>
                     setSettings({
-                      voice: { ...settings.voice, voice: event.target.value },
+                      voice: { ...settings.voice, provider: event.target.value as ProjectSettings["voice"]["provider"], voice: "" },
                     })
                   }
                 >
-                  <option value="">Как в общих настройках (Google TTS)</option>
-                  {voiceOptions.map((voiceOption) => (
-                    <option key={voiceOption.id} value={voiceOption.id}>
-                      {voiceOption.label}{voiceOption.gender ? ` (${voiceOption.gender})` : ""}
-                    </option>
-                  ))}
+                  <option value="edge-tts">Встроенная (Edge / Google)</option>
+                  <option value="elevenlabs">Voicer (ElevenLabs)</option>
                 </select>
-                <small>Список подобран под язык проекта. Пример голоса генерируется один раз и кэшируется.</small>
               </Field>
-              <button className="outline-button small" disabled={!normalizeVoiceId(settings.voice.voice) || samplePlaying} onClick={() => void playVoiceSample()}>
+              {settings.voice.provider === "elevenlabs" ? (
+                <Field label="ШАБЛОН ГОЛОСА VOICER" hint="Шаблоны создаются в Telegram-боте Voicer. Пустой выбор — настройки по умолчанию.">
+                  <select
+                    value={settings.voice.voice}
+                    onChange={(event) => setSettings({ voice: { ...settings.voice, voice: event.target.value } })}
+                  >
+                    <option value="">Шаблон по умолчанию</option>
+                    {(voicerTemplates ?? []).map((template) => (
+                      <option key={template.uuid} value={template.uuid}>{template.name}</option>
+                    ))}
+                  </select>
+                  <small>{voicerTemplates === null ? "Загружаю шаблоны…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — проверьте ключ Voicer в Настройках" : "Пример голоса генерируется один раз и кэшируется."}</small>
+                </Field>
+              ) : (
+                <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">
+                  <select
+                    value={normalizeVoiceId(settings.voice.voice)}
+                    onChange={(event) =>
+                      setSettings({
+                        voice: { ...settings.voice, voice: event.target.value },
+                      })
+                    }
+                  >
+                    <option value="">Как в общих настройках (Google TTS)</option>
+                    {voiceOptions.map((voiceOption) => (
+                      <option key={voiceOption.id} value={voiceOption.id}>
+                        {voiceOption.label}{voiceOption.gender ? ` (${voiceOption.gender})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <small>Список подобран под язык проекта. Пример голоса генерируется один раз и кэшируется.</small>
+                </Field>
+              )}
+              <button
+                className="outline-button small"
+                disabled={samplePlaying || (settings.voice.provider !== "elevenlabs" && !normalizeVoiceId(settings.voice.voice))}
+                onClick={() => void playVoiceSample()}
+              >
                 <Volume2 size={15} />
                 {samplePlaying ? "Играет пример…" : "Послушать пример"}
               </button>
@@ -1325,7 +1368,22 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
         </SettingsPanel>
       </div>
       <div className="sticky-actions editor-actions">
-        <span>{draft.scenes.length > 0 ? `${draft.scenes.length} сцен · данные сохраняются локально` : "Сценарий собирается в фоне — сцены появятся автоматически"}</span>
+        <span className="scenario-progress-line">
+          {rebuilding
+            ? (() => {
+                const match = scenarioProgress ? /(\d+)\s+из\s+(\d+)/.exec(scenarioProgress) : null;
+                const percent = match ? Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100) : 0;
+                return (
+                  <>
+                    {scenarioProgress ?? "Пишу сценарий…"} · {percent}%
+                    <i className="scenario-progress-bar"><em style={{ width: `${percent}%` }} /></i>
+                  </>
+                );
+              })()
+            : draft.scenes.length > 0
+              ? `${draft.scenes.length} сцен · данные сохраняются локально`
+              : "Сценария пока нет — выберите длину и язык и нажмите «Собрать сценарий»"}
+        </span>
         <div>
           <button className="outline-button" disabled={saving} onClick={() => void save()}>
             <Save size={16} />
@@ -1721,7 +1779,7 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis, targetSeconds: number) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
+function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -1742,14 +1800,6 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [targetMinutes, setTargetMinutes] = useState(5);
-  const [language, setLanguage] = useState("Русский");
-  useEffect(() => {
-    if (!analysis) return;
-    const seconds = analysis.youtubeContext?.durationSeconds ?? 0;
-    if (seconds > 0) setTargetMinutes(Math.max(1, Math.round((seconds + 90) / 60)));
-    if (analysis.language) setLanguage(analysis.language);
-  }, [analysis?.sourceUrl]);
 
   async function refreshChatTopics() {
     setChatTopics(await api.listChatTopics());
@@ -1867,15 +1917,12 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
 
   function buildAndOpen(base: ReferenceAnalysis, label: string) {
     if (analyzing) return;
-    const targetSeconds = Math.max(30, Math.round(targetMinutes * 60));
-    const expectedScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
-    onLog(`Открываю проект: ${label} (~${expectedScenes} сцен)`);
+    onLog(`Открываю проект: ${label}`);
     setMessages((current) => [...current, {
       role: "assistant",
-      text: `Открываю проект по теме «${label}». Сценарий (~${expectedScenes} сцен по 5 секунд, язык: ${language}) пишется в фоне — сцены появятся в проекте по мере готовности, прогресс виден в подсказке сверху. Пока можно настроить озвучку, формат и музыку.`
+      text: `Открываю проект по теме «${label}». Выбери в проекте длину ролика и язык (кнопки с флагами) и нажми «Собрать сценарий» — прогресс будет виден внизу проекта в процентах.`
     }]);
-    // Проект открывается мгновенно, сцены доезжают фоном — управление берёт корневой компонент.
-    onPickTopic({ ...base, language }, targetSeconds);
+    onPickTopic(base);
   }
 
   function pickTopic(topic: { title: string; hook: string; angle: string }) {
@@ -2099,17 +2146,6 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                     </p>
                   </div>
                 )}
-                <div className="build-options">
-                  <label>
-                    <span>ДЛИНА РОЛИКА (МИН)</span>
-                    <input type="number" min={1} max={60} value={targetMinutes} disabled={analyzing} onChange={(event) => setTargetMinutes(Math.max(1, Math.min(60, Number(event.target.value) || 1)))} />
-                  </label>
-                  <label>
-                    <span>ЯЗЫК</span>
-                    <input value={language} disabled={analyzing} onChange={(event) => setLanguage(event.target.value)} placeholder="Русский" />
-                  </label>
-                  <small>Сценарий соберётся под эту длину (сцены по 5 сек) и на этом языке. Ничего не запускается без твоей кнопки.</small>
-                </div>
                 {analysis.suggestedTopics && analysis.suggestedTopics.length > 0 && (
                   <div className="suggested-topics">
                     <small>ТЕМЫ ДЛЯ НОВОГО РОЛИКА — НАЖМИ, ЧТОБЫ СОБРАТЬ СЦЕНАРИЙ И ОТКРЫТЬ ПРОЕКТ</small>
@@ -2427,13 +2463,22 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [apiKey, setApiKey] = useState("");
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
+  const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, baseUrl: "" });
+  const [voicerKey, setVoicerKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
-    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings()]).then(([anyModelSettings, youtubeSettings]) => {
+    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings(), api.getVoicerSettings()]).then(([anyModelSettings, youtubeSettings, voicerSettings]) => {
       setAnyModel(anyModelSettings);
       setYouTube(youtubeSettings);
+      setVoicer(voicerSettings);
     });
   }, []);
+  const saveVoicer = async () => {
+    const saved = await api.saveVoicerSettings({ baseUrl: voicer.baseUrl, apiKey: voicerKey || undefined });
+    setVoicer(saved);
+    setVoicerKey("");
+    setConnectionMessage("Настройки Voicer сохранены, ключ зашифрован Windows");
+  };
   const saveAnyModel = async () => {
     const saved = await api.saveAnyModelSettings({ ...anyModel, apiKey: apiKey || undefined });
     setAnyModel(saved); setApiKey(""); setConnectionMessage("Настройки сохранены локально и зашифрованы Windows");
@@ -2513,6 +2558,18 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                 <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.clearAnyModelKey().then(setAnyModel)}>Удалить ключ</button>
               </div>
               {connectionMessage && <p>{connectionMessage}</p>}
+              <h2>Voicer — премиум-озвучка (ElevenLabs)</h2>
+              <p>Голоса ElevenLabs через Voicer API. Шаблоны голосов создаются в Telegram-боте Voicer, а выбираются в настройках проекта (движок «Voicer»).</p>
+              <InfoRow label="Статус Voicer" value={voicer.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="BASE URL VOICER"><input value={voicer.baseUrl} onChange={(event) => setVoicer({ ...voicer, baseUrl: event.target.value })} placeholder="https://адрес-из-кабинета-voicer" /></Field>
+              <Field label="API-КЛЮЧ VOICER (X-API-KEY)">
+                <input type="password" value={voicerKey} onChange={(event) => setVoicerKey(event.target.value)} placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ Voicer"} />
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveVoicer()}><Save size={15} />Сохранить Voicer</button>
+                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.testVoicerConnection().then((result) => setConnectionMessage(result.message))}>Проверить Voicer</button>
+                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.clearVoicerKey().then(setVoicer)}>Удалить ключ</button>
+              </div>
               <h2>YouTube Data API v3 (BYOK)</h2>
               <p>Используется только официальный API Google: метаданные, просмотры, лайки, комментарии и статистика канала. Ключ не попадает в проекты и логи.</p>
               <InfoRow label="Статус YouTube" value={youtube.configured ? "Ключ сохранён" : "Не настроен"} />

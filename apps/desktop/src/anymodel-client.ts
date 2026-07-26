@@ -203,7 +203,13 @@ export class AnyModelClient {
       hook: analysis.hook,
       niche: analysis.niche,
       targetAudience: analysis.targetAudience,
-      structure: analysis.structure
+      structure: analysis.structure,
+      improvements: analysis.improvements,
+      // Образцы для качества сценария: транскрипт референса и живые комментарии зрителей.
+      transcriptSample: analysis.youtubeContext?.transcript?.map((segment) => segment.text).join(" ").slice(0, 6_000) || undefined,
+      audienceComments: (analysis.youtubeContext?.topComments ?? analysis.youtubeChannelContext?.topComments ?? [])
+        .slice(0, 8)
+        .map((comment) => comment.text)
     };
     const scenes = await this.buildScenes(planBrief, targetScenes, analysis.language || "Русский", onProgress);
     if (scenes.length === 0) throw new Error("Не удалось собрать сцены сценария");
@@ -237,7 +243,7 @@ export class AnyModelClient {
         let batchContent: string;
         try {
           batchContent = await this.chat(settings.textModel, [
-            { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown и без пояснений." },
+            { role: "system", content: "Ты сценарист коротких видео. В плане могут быть транскрипт-образец (transcriptSample) и комментарии зрителей (audienceComments) — используй их приёмы, ритм и желания аудитории, но пиши полностью самостоятельный текст, не копируя фразы дословно. Верни только JSON-массив без markdown и без пояснений." },
             {
               role: "user",
               content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
