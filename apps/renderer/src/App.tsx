@@ -2764,7 +2764,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, baseUrl: "" });
   const [voicerKey, setVoicerKey] = useState("");
-  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "gemini-omni-flash-preview" });
+  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" });
   const [googleKey, setGoogleKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
@@ -2885,8 +2885,11 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                   <option value="veo-3.1-generate-preview">Veo 3.1 (максимальное качество)</option>
                 </select>
               </Field>
+              <Field label="SOCKS5-ПРОКСИ ДЛЯ GOOGLE" hint="Обходит региональную блокировку без системного VPN. Формат: socks5://логин:пароль@хост:порт. Пусто — прямое соединение.">
+                <input value={google.proxyUrl} onChange={(event) => setGoogle({ ...google, proxyUrl: event.target.value })} placeholder="socks5://логин:пароль@хост:порт" />
+              </Field>
               <div className="provider-actions">
-                <button className="generate-button" onClick={() => void api.saveGoogleSettings({ apiKey: googleKey || undefined, veoModel: google.veoModel }).then((saved) => { setGoogle(saved); setGoogleKey(""); setConnectionMessage("Ключ Google сохранён и зашифрован Windows"); })}><Save size={15} />Сохранить Google</button>
+                <button className="generate-button" onClick={() => void api.saveGoogleSettings({ apiKey: googleKey || undefined, veoModel: google.veoModel, proxyUrl: google.proxyUrl }).then((saved) => { setGoogle(saved); setGoogleKey(""); setConnectionMessage("Настройки Google сохранены, ключ зашифрован Windows"); })}><Save size={15} />Сохранить Google</button>
                 <button className="outline-button small" disabled={!google.configured} onClick={() => void api.testGoogleConnection().then((result) => setConnectionMessage(result.message))}>Проверить Google</button>
                 <button className="outline-button small" disabled={!google.configured} onClick={() => void api.clearGoogleKey().then(setGoogle)}>Удалить ключ</button>
               </div>

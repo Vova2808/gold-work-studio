@@ -4,7 +4,8 @@ import { atomicWrite } from "./fs-utils.js";
 import type { GoogleSettings, SaveGoogleSettingsInput } from "@gold-work/shared";
 
 const defaults: Omit<GoogleSettings, "configured"> = {
-  veoModel: "gemini-omni-flash-preview"
+  veoModel: "gemini-omni-flash-preview",
+  proxyUrl: ""
 };
 
 interface StoredSettings extends Omit<GoogleSettings, "configured"> {
@@ -31,6 +32,8 @@ export class GoogleStore {
     const current = await this.read();
     const next: StoredSettings = {
       veoModel: input.veoModel?.trim() || current.veoModel || defaults.veoModel,
+      // Пустую строку сохраняем осознанно — так пользователь отключает прокси.
+      proxyUrl: input.proxyUrl === undefined ? current.proxyUrl ?? "" : input.proxyUrl.trim(),
       encryptedApiKey: current.encryptedApiKey
     };
     if (input.apiKey?.trim()) {

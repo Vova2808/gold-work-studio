@@ -271,9 +271,9 @@ export const fallbackApi: DesktopApi = {
   async improveScene() {
     throw new Error("Улучшение сцены доступно только в приложении с ключом AnyModel");
   },
-  async getGoogleSettings() { return { configured: false, veoModel: "gemini-omni-flash-preview" }; },
-  async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "gemini-omni-flash-preview" }; },
-  async clearGoogleKey() { return { configured: false, veoModel: "gemini-omni-flash-preview" }; },
+  async getGoogleSettings() { return { configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" }; },
+  async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "gemini-omni-flash-preview", proxyUrl: input.proxyUrl ?? "" }; },
+  async clearGoogleKey() { return { configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" }; },
   async testGoogleConnection() { return { ok: false, message: "Veo доступен только в приложении" }; },
   mediaUrl(path: string) { return path; },
   async getVoicerSettings() { return { configured: false, baseUrl: "" }; },

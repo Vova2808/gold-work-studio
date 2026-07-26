@@ -1,4 +1,6 @@
+import { fetch as undiciFetch, type Dispatcher, type RequestInit as UndiciRequestInit } from "undici";
 import { GoogleStore } from "./google-store.js";
+import { createProxyDispatcher } from "./proxy-utils.js";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 const REQUEST_TIMEOUT_MS = 15 * 60_000;
@@ -43,7 +45,7 @@ export class VeoClient {
   async test(): Promise<{ ok: boolean; message: string }> {
     try {
       const key = await this.requiredKey();
-      const response = await fetch(`${BASE}/models?pageSize=1`, {
+      const response = await this.request(`${BASE}/models?pageSize=1`, {
         headers: { "x-goog-api-key": key },
         signal: AbortSignal.timeout(30_000)
       });
@@ -76,7 +78,7 @@ export class VeoClient {
     const input: Array<Record<string, unknown>> = [];
     if (sourceImage) input.push({ type: "image", data: sourceImage.toString("base64"), mime_type: "image/png" });
     input.push({ type: "text", text: sourceImage ? `${prompt}. Use the image as the starting frame, single continuous shot` : prompt });
-    const response = await fetch(`${BASE}/interactions`, {
+    const response = await this.request(`${BASE}/interactions`, {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -109,7 +111,7 @@ export class VeoClient {
     if (fileName) {
       const startedAt = Date.now();
       while (Date.now() - startedAt < 5 * 60_000) {
-        const info = await fetch(`${BASE}/files/${encodeURIComponent(fileName)}`, {
+        const info = await this.request(`${BASE}/files/${encodeURIComponent(fileName)}`, {
           headers: { "x-goog-api-key": key },
           signal: AbortSignal.timeout(30_000)
         });
@@ -120,7 +122,7 @@ export class VeoClient {
         await sleep(4_000);
       }
     }
-    const download = await fetch(uri.includes("alt=media") ? uri : `${uri}?alt=media`, {
+    const download = await this.request(uri.includes("alt=media") ? uri : `${uri}?alt=media`, {
       headers: { "x-goog-api-key": key },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
@@ -133,7 +135,7 @@ export class VeoClient {
   /** Классический Veo: predictLongRunning + поллинг операции. */
   private async generateWithVeo(model: string, prompt: string, ratio: string, sourceImage?: Buffer): Promise<Buffer> {
     const key = await this.requiredKey();
-    const startResponse = await fetch(`${BASE}/models/${encodeURIComponent(model)}:predictLongRunning`, {
+    const startResponse = await this.request(`${BASE}/models/${encodeURIComponent(model)}:predictLongRunning`, {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(60_000),
@@ -152,7 +154,7 @@ export class VeoClient {
     let operation: VeoOperation = started;
     while (!operation.done && Date.now() - startedAt < 12 * 60_000) {
       await sleep(6_000);
-      const poll = await fetch(`${BASE}/${started.name}`, {
+      const poll = await this.request(`${BASE}/${started.name}`, {
         headers: { "x-goog-api-key": key },
         signal: AbortSignal.timeout(30_000)
       });
@@ -176,6 +178,23 @@ export class VeoClient {
     if (!key) throw new Error("Добавьте ключ Google AI Studio в Настройки → AI и сценарии");
     return key;
   }
+
+  /**
+   * Все запросы к Google идут отсюда: при заданном SOCKS5-прокси подставляется его диспетчер.
+   * Используется fetch из undici — глобальный fetch Node не принимает внешний dispatcher.
+   */
+  private async request(url: string, init: UndiciRequestInit): Promise<Response> {
+    const { proxyUrl } = await this.store.publicSettings();
+    if (this.dispatcherFor !== proxyUrl) {
+      this.dispatcher = createProxyDispatcher(proxyUrl);
+      this.dispatcherFor = proxyUrl;
+    }
+    const response = await undiciFetch(url, this.dispatcher ? { ...init, dispatcher: this.dispatcher } : init);
+    return response as unknown as Response;
+  }
+
+  private dispatcher: Dispatcher | undefined;
+  private dispatcherFor: string | undefined;
 }
 
 async function googleError(response: Response): Promise<string> {
@@ -187,7 +206,7 @@ async function googleError(response: Response): Promise<string> {
     // не JSON
   }
   if (/User location is not supported/i.test(message)) {
-    return "Google не обслуживает запросы из вашего региона. Включите VPN (Европа/США) и повторите — ключ при этом рабочий.";
+    return "Google не обслуживает запросы из вашего региона. Укажите SOCKS5-прокси в Настройки → Google AI Studio (или включите VPN) — ключ при этом рабочий.";
   }
   if (response.status === 429) return `Google: превышены лимиты видео (${message}). Подождите или уменьшите число анимируемых сцен.`;
   if (response.status === 400 && /API key|API_KEY/i.test(message)) return "Google отклонил ключ API. Проверьте ключ в Настройках.";

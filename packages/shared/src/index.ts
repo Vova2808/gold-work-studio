@@ -274,11 +274,14 @@ export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "confi
 export interface GoogleSettings {
   configured: boolean;
   veoModel: string;
+  /** SOCKS5-прокси для обхода региональной блокировки Google: socks5://user:pass@host:port. */
+  proxyUrl: string;
 }
 
 export interface SaveGoogleSettingsInput {
   apiKey?: string;
   veoModel?: string;
+  proxyUrl?: string;
 }
 
 /** Voicer API — озвучка на ElevenLabs (X-API-Key, шаблоны из Telegram-бота). */
