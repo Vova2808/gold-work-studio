@@ -2478,3 +2478,30 @@ button:disabled {
   box-shadow: 0 0 0 1px #e1c668;
   color: #f1d470;
 }
+
+/* --- «?»-подсказки у функций --- */
+.field-hint {
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 6px;
+  border: 1px solid #55503a;
+  border-radius: 50%;
+  color: #b9a35c;
+  font-size: 9px;
+  font-style: normal;
+  cursor: help;
+  vertical-align: 1px;
+}
+.field-hint:hover { border-color: #e1c668; color: #f1d470; }
+
+/* --- Пресеты стиля субтитров --- */
+.preset-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.preset-row select { min-width: 150px; }
+.preset-row input { flex: 1; min-width: 130px; }

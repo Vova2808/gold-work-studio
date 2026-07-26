@@ -715,6 +715,8 @@ function Dashboard({ projects, selectedId, busy, onCreate, onOpen, onDelete, onP
     },
   ];
   const chosenId = selectedId ?? projects[0]?.id;
+  // Батч-запуск: все проекты со сценами, которые сейчас не генерируются.
+  const batchReady = projects.filter((project) => project.scenes.length > 0 && project.status !== "generating" && project.status !== "paused");
   return (
     <div className="dashboard-page page-with-actionbar">
       <PageHeading icon={<Zap size={25} />} title="Dashboard" subtitle="Управление проектами видео" />
@@ -811,10 +813,25 @@ function Dashboard({ projects, selectedId, busy, onCreate, onOpen, onDelete, onP
             Предпросмотр
           </button>
         </div>
-        <button className="generate-button" disabled={!chosenId || busy} onClick={() => chosenId && onGenerate(chosenId)}>
-          <Zap size={17} />
-          ГЕНЕРИРОВАТЬ ВИДЕО
-        </button>
+        <div>
+          <button
+            className="outline-button gold"
+            disabled={busy || batchReady.length === 0}
+            title="Запускает генерацию всех проектов, у которых есть сцены — можно оставить на ночь"
+            onClick={() => {
+              if (window.confirm(`Запустить генерацию сразу ${batchReady.length} проектов? Это потратит токены на каждый.`)) {
+                batchReady.forEach((project) => onGenerate(project.id));
+              }
+            }}
+          >
+            <ListPlus size={17} />
+            Сгенерировать все ({batchReady.length})
+          </button>
+          <button className="generate-button" disabled={!chosenId || busy} onClick={() => chosenId && onGenerate(chosenId)}>
+            <Zap size={17} />
+            ГЕНЕРИРОВАТЬ ВИДЕО
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1034,7 +1051,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <option>Українська</option>
             </select>
           </Field>
-          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО">
+          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО" hint="Целевая длина ролика (сцены по 5 секунд). После смены нажмите «Пересобрать сценарий» ниже.">
             <div className="choice-row">
               {[0.5, 1, 5, 10, 15, 30, 60].map((value) => (
                 <button className={settings.durationMinutes === value ? "selected" : ""} onClick={() => setSettings({ durationMinutes: value })} key={value}>
@@ -1057,7 +1074,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               {rebuilding ? "Пересобираю сценарий…" : "Пересобрать сценарий под длину и язык"}
             </button>
           )}
-          <Field label="СМЕНА КАДРОВ">
+          <Field label="СМЕНА КАДРОВ" hint="Как часто меняется кадр. Значение по умолчанию настроено под удержание внимания на YouTube.">
             <select
               value={settings.frameChange}
               onChange={(event) =>
@@ -1091,7 +1108,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           <ToggleRow label="Озвучка" checked={settings.voice.enabled} onChange={(enabled) => setSettings({ voice: { ...settings.voice, enabled } })} />
           {settings.voice.enabled && (
             <>
-              <Field label="ГОЛОС">
+              <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">
                 <select
                   value={normalizeVoiceId(settings.voice.voice)}
                   onChange={(event) =>
@@ -1136,7 +1153,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <option value="anymodel-image">AnyModel API</option>
             </select>
           </Field>
-          <Field label="СТИЛЬ — ВЫБЕРИТЕ КАРТИНКОЙ">
+          <Field label="СТИЛЬ — ВЫБЕРИТЕ КАРТИНКОЙ" hint="Единый стиль всех сцен ролика: клик по превью допишет его к каждому промпту изображения.">
             <div className="style-grid">
               {IMAGE_STYLES.map((style) => (
                 <button
@@ -1163,8 +1180,8 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               }
             />
           </Field>
-          <ToggleRow label="Последовательная генерация" checked={settings.image.sequential} onChange={(sequential) => setSettings({ image: { ...settings.image, sequential } })} />
-          <Field label={`РЕФЕРЕНСЫ (${settings.image.references.length}/3)`}>
+          <ToggleRow label="Последовательная генерация" hint="Каждая картинка генерируется после предыдущей — важно для бесшовных форматов." checked={settings.image.sequential} onChange={(sequential) => setSettings({ image: { ...settings.image, sequential } })} />
+          <Field label={`РЕФЕРЕНСЫ (${settings.image.references.length}/3)`} hint="Опорные изображения: персонаж или стиль сохраняются один в один во всех сценах (генерация переключается на GPT Image).">
             <button className="upload-box" onClick={() => void chooseReferences()}>
               <Plus size={21} />
               <span>Добавить референс</span>
@@ -1517,17 +1534,18 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
               </div>
               <ToggleRow
                 label="Сцена участвует в сборке"
+                hint="Выключите — сцена не попадёт в Final.mp4, но останется в проекте и её можно вернуть."
                 checked={selected.includeInAssembly !== false}
                 onChange={(included) => updateSceneMeta({ includeInAssembly: included })}
               />
               <div className="scene-form-grid">
-                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ">
+                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ" hint="Применяется в финальной сборке: сцена плавно уходит в чёрный, следующая мягко появляется.">
                   <select value={selected.transition ?? "none"} onChange={(event) => updateSceneMeta({ transition: event.target.value as Scene["transition"] })}>
                     <option value="none">Без перехода</option>
                     <option value="fade">Затухание</option>
                   </select>
                 </Field>
-                <Field label="ДВИЖЕНИЕ КАМЕРЫ (KEN BURNS)">
+                <Field label="ДВИЖЕНИЕ КАМЕРЫ (KEN BURNS)" hint="Эффект живой камеры на картинке сцены: плавное приближение или отдаление.">
                   <select value={selected.kenBurnsDirection ?? "auto"} onChange={(event) => updateSceneMeta({ kenBurnsDirection: event.target.value as Scene["kenBurnsDirection"] })}>
                     <option value="auto">Как в проекте</option>
                     <option value="in">Приближение</option>
@@ -1571,6 +1589,22 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   const defaults = createDefaultProjectSettings().subtitles;
   const [draft, setDraft] = useState<SubtitleSettings>(project?.settings.subtitles ?? defaults);
   const [saving, setSaving] = useState(false);
+  const [presets, setPresets] = useState<Record<string, SubtitleSettings>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gw-subtitle-presets") ?? "{}") as Record<string, SubtitleSettings>;
+    } catch {
+      return {};
+    }
+  });
+  const [presetName, setPresetName] = useState("");
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    const next = { ...presets, [name]: structuredClone(draft) };
+    setPresets(next);
+    localStorage.setItem("gw-subtitle-presets", JSON.stringify(next));
+    setPresetName("");
+  };
   useEffect(() => setDraft(structuredClone(project?.settings.subtitles ?? defaults)), [project?.id]);
   if (!project) return <EmptyState icon={<Captions size={34} />} title="Проект не выбран" text="Создайте или выберите проект для настройки субтитров." action="Понятно" onAction={() => undefined} />;
   const save = async () => {
@@ -1628,7 +1662,30 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
             <input type="range" min="2" max="35" value={draft.bottomMargin} onChange={(event) => setDraft({ ...draft, bottomMargin: Number(event.target.value) })} />
           </Field>
           <ToggleRow label="Тень" checked={draft.shadow} onChange={(shadow) => setDraft({ ...draft, shadow })} />
-          <ToggleRow label="POP WORDS" checked={draft.popWords} onChange={(popWords) => setDraft({ ...draft, popWords })} />
+          <ToggleRow label="POP WORDS" hint="Караоке-подсветка: произносимые слова окрашиваются в акцентный цвет." checked={draft.popWords} onChange={(popWords) => setDraft({ ...draft, popWords })} />
+          <Field label="ПРЕСЕТЫ СТИЛЯ" hint="Сохраните подобранные настройки и загружайте их в других проектах одним кликом.">
+            <div className="preset-row">
+              <select
+                value=""
+                onChange={(event) => {
+                  const preset = presets[event.target.value];
+                  if (preset) {
+                    setDraft(structuredClone(preset));
+                  }
+                }}
+              >
+                <option value="">Загрузить пресет…</option>
+                {Object.keys(presets).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+              <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder="Название пресета" />
+              <button className="outline-button small" disabled={!presetName.trim()} onClick={savePreset}>
+                <Save size={14} />
+                Сохранить
+              </button>
+            </div>
+          </Field>
         </section>
         <section className="subtitle-preview-panel">
           <div className={`subtitle-video aspect-${project.aspectRatio.replace(":", "-")}`}>
@@ -2629,18 +2686,24 @@ function SettingsPanel({ icon, title, children }: { icon: ReactNode; title: stri
     </section>
   );
 }
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>
+        {label}
+        {hint && <i className="field-hint" title={hint}>?</i>}
+      </span>
       {children}
     </label>
   );
 }
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function ToggleRow({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <div className="toggle-row">
-      <span>{label}</span>
+      <span>
+        {label}
+        {hint && <i className="field-hint" title={hint}>?</i>}
+      </span>
       <button className={`toggle${checked ? " on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}>
         <i />
       </button>

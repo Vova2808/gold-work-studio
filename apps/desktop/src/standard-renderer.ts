@@ -201,14 +201,35 @@ function narrationCues(narration: string, duration: number): Array<{ start: numb
   return cues;
 }
 
-/** Строит ASS-файл субтитров сцены по настройкам проекта (шрифт, цвета, обводка, отступ снизу). */
+/** Караоке-разметка ASS: каждое слово получает {\k<сотые секунды>} пропорционально своей длине. */
+function karaokeText(text: string, durationSeconds: number): string {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return text;
+  const totalCharacters = words.reduce((sum, word) => sum + word.length, 0) || 1;
+  let remaining = Math.max(words.length, Math.round(durationSeconds * 100));
+  return words
+    .map((word, index) => {
+      const share = index === words.length - 1
+        ? Math.max(1, remaining)
+        : Math.max(1, Math.round((word.length / totalCharacters) * durationSeconds * 100));
+      remaining -= share;
+      return `{\\k${share}}${word}`;
+    })
+    .join(" ");
+}
+
+/** Строит ASS-файл субтитров сцены по настройкам проекта (шрифт, цвета, обводка, отступ, караоке-подсветка). */
 function buildAssSubtitles(narration: string, duration: number, settings: SubtitleSettings, width: number, height: number): string {
   // fontSize в настройках задан из расчёта высоты 1080 — масштабируем под реальный кадр.
   const fontSize = Math.max(16, Math.round(settings.fontSize * (height / 1080)));
   const marginV = Math.max(10, Math.round((settings.bottomMargin / 100) * height));
+  // popWords: произнесённые слова окрашиваются в акцентный цвет (караоке \k: Secondary → Primary).
+  const primary = settings.popWords ? assColor(settings.accentColor) : assColor(settings.textColor);
+  const secondary = settings.popWords ? assColor(settings.textColor) : assColor(settings.accentColor);
   const events = narrationCues(narration, duration)
     .map((cue) => {
-      const text = cue.text.replace(/[{}]/g, "").replace(/\r?\n+/g, "\\N");
+      const clean = cue.text.replace(/[{}]/g, "").replace(/\r?\n+/g, "\\N");
+      const text = settings.popWords ? karaokeText(clean, cue.end - cue.start) : clean;
       return `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},Default,,0,0,0,,${text}`;
     })
     .join("\n");
@@ -221,7 +242,7 @@ function buildAssSubtitles(narration: string, duration: number, settings: Subtit
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,${settings.fontFamily},${fontSize},${assColor(settings.textColor)},${assColor(settings.accentColor)},${assColor(settings.outlineColor)},&H78000000,-1,0,0,0,100,100,0,0,1,${Math.max(0, settings.outlineWidth)},${settings.shadow ? 2 : 0},2,60,60,${marginV},1`,
+    `Style: Default,${settings.fontFamily},${fontSize},${primary},${secondary},${assColor(settings.outlineColor)},&H78000000,-1,0,0,0,100,100,0,0,1,${Math.max(0, settings.outlineWidth)},${settings.shadow ? 2 : 0},2,60,60,${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",

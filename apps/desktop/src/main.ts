@@ -89,6 +89,8 @@ function registerIpc(): void {
   );
   handleIpc("director:analyze-reference", async (event, input: AnalyzeReferenceInput) => {
     const stage = (text: string) => event.sender.send("director:progress", text);
+    // «Память режиссёра»: прошлые проекты идут в контекст, чтобы новые темы не повторялись.
+    const pastProjects = (await projectService.list()).slice(0, 30).map((project) => `${project.title} — ${project.topic}`);
     const channelRef = parseYouTubeChannelRef(input.url);
     if (channelRef) {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
@@ -96,7 +98,7 @@ function registerIpc(): void {
       const channelContext = await youtubeClient.collectChannel(channelRef);
       stage(`Канал «${channelContext.title}»: ${channelContext.subscribers.toLocaleString("ru-RU")} подписчиков, ${channelContext.totalViews.toLocaleString("ru-RU")} суммарных просмотров, в таймлайне ${channelContext.videos.length} роликов, комментариев собрано: ${channelContext.topComments.length}.`);
       stage("Claude анализирует нишу: что заходит по таймлайну, чего просят зрители в комментариях — и готовит стратегию с 3 темами…");
-      return anyModelClient.analyzeYouTubeChannel(channelContext, input);
+      return anyModelClient.analyzeYouTubeChannel(channelContext, input, pastProjects);
     }
     if (/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(input.url)) {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
@@ -108,10 +110,10 @@ function registerIpc(): void {
         : "недоступен";
       stage(`Данные собраны: ${context.views.toLocaleString("ru-RU")} просмотров, ${context.likes.toLocaleString("ru-RU")} лайков, ${context.topComments.length} комментариев, ${context.topVideos.length} топ-роликов канала (${context.channelSubscribers.toLocaleString("ru-RU")} подписчиков). Транскрипт: ${transcriptLabel}.`);
       stage("Claude изучает статистику, комментарии и транскрипт — пишет разбор, находит сильные стороны и готовит 3 темы для новых роликов…");
-      return anyModelClient.analyzeYouTube(context, input);
+      return anyModelClient.analyzeYouTube(context, input, pastProjects);
     }
     stage("Разбираю референс по ссылке…");
-    return await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input);
+    return await anyModelClient.configured() ? anyModelClient.analyzeReference(input, pastProjects) : projectService.analyzeReference(input);
   });
   handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
     analysis.youtubeChannelContext

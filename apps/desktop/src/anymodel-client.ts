@@ -38,12 +38,12 @@ export class AnyModelClient {
     ], onChunk);
   }
 
-  async analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+  async analyzeReference(input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
     const metadata = await this.referenceMetadata(input.url);
     const content = await this.chat(settings.textModel, [
       { role: "system", content: "Ты сценарный аналитик. Верни только JSON без markdown. Не утверждай, что видел ролик, если дан только заголовок и описание. Создай самостоятельный сценарий, не копируй чужой текст или брендинг." },
-      { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
+      { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}${memoryNote(pastProjects)}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
     ], undefined, "medium");
     const parsed = extractJson<Partial<ReferenceAnalysis> & { scenes?: Array<Partial<Scene>> }>(content, "разборе референса");
     const scenes = (parsed.scenes ?? []).map((scene, order) => ({
@@ -61,7 +61,7 @@ export class AnyModelClient {
     };
   }
 
-  async analyzeYouTube(context: YouTubeAnalysisContext, input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+  async analyzeYouTube(context: YouTubeAnalysisContext, input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
     const transcript = context.transcript
       .map((segment) => `[${clock(segment.startSeconds)}] ${segment.text}`)
@@ -103,7 +103,7 @@ export class AnyModelClient {
       },
       {
         role: "user",
-        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}\nТакже предложи ровно 3 темы для НОВЫХ роликов этого направления, опираясь на топ-ролики канала и комментарии: для каждой — цепляющий заголовок, хук (1–2 предложения) и угол подачи.\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,topics[{title,hook,angle}]`
+        content: `Данные YouTube:\n${JSON.stringify(compactContext)}\nПожелание пользователя: ${input.instructions || "улучшить хук, удержание и сценарий"}\nЯзык: ${input.language || "Русский"}\n${targetScenes > 0 ? `Улучшенный ролик будет ~${targetDurationSeconds} секунд (оригинал плюс ~1.5 минуты), примерно ${targetScenes} сцен по ${sceneDurationSeconds} секунд — сами сцены запросим отдельно.` : ""}${memoryNote(pastProjects)}\nТакже предложи ровно 3 темы для НОВЫХ роликов этого направления, опираясь на топ-ролики канала и комментарии: для каждой — цепляющий заголовок, хук (1–2 предложения) и угол подачи.\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,topics[{title,hook,angle}]`
       }
     ], 6_000, "medium");
     const plan = extractJson<Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> }>(planContent, "анализе YouTube-ролика");
@@ -140,7 +140,7 @@ export class AnyModelClient {
   }
 
   /** Анализ КАНАЛА: ниша, аудитория, что заходит по таймлайну и комментариям — и ровно 3 темы для новых роликов. */
-  async analyzeYouTubeChannel(context: YouTubeChannelContext, input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+  async analyzeYouTubeChannel(context: YouTubeChannelContext, input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
     const compact = {
       channel: {
@@ -160,7 +160,7 @@ export class AnyModelClient {
       },
       {
         role: "user",
-        content: `Данные канала YouTube:\n${JSON.stringify(compact)}\nПожелание пользователя: ${input.instructions || "проанализируй канал и нишу"}\nЯзык: ${input.language || "Русский"}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook(главный вывод — что цепляет зрителей этой ниши),structure[](что повторяется в успешных роликах канала),strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds(оптимальная длительность по таймлайну),topics[{title,hook,angle}] — ровно 3 темы для НОВЫХ роликов, опираясь на желания зрителей из комментариев и самые успешные ролики.`
+        content: `Данные канала YouTube:\n${JSON.stringify(compact)}\nПожелание пользователя: ${input.instructions || "проанализируй канал и нишу"}\nЯзык: ${input.language || "Русский"}${memoryNote(pastProjects)}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook(главный вывод — что цепляет зрителей этой ниши),structure[](что повторяется в успешных роликах канала),strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds(оптимальная длительность по таймлайну),topics[{title,hook,angle}] — ровно 3 темы для НОВЫХ роликов, опираясь на желания зрителей из комментариев и самые успешные ролики.`
       }
     ], 6_000, "medium");
     const plan = extractJson<Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> }>(content, "анализе канала");
@@ -573,6 +573,12 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+/** «Память режиссёра»: список уже сделанных роликов, чтобы новые темы не повторялись. */
+function memoryNote(pastProjects: string[]): string {
+  if (pastProjects.length === 0) return "";
+  return `\nУже созданные пользователем ролики (НЕ повторяй их темы, предлагай новое с учётом этой истории): ${JSON.stringify(pastProjects.slice(0, 30))}`;
 }
 
 /** Достаёт JSON из ответа модели: срезает markdown-фенсы, при неудаче берёт фрагмент между крайними скобками. */

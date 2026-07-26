@@ -86,7 +86,8 @@ try {
   assert.ok((await stat(completed.outputPath)).size > 1000);
   assert.ok((await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "image-prompt.txt"), "utf8")).includes("кинематографичный"));
   const assContent = await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "subtitles.ass"), "utf8");
-  assert.ok(assContent.includes("Dialogue:") && assContent.includes("Проверка локального конвейера"), "субтитры сцены должны содержать текст озвучки");
+  // popWords включён по умолчанию: караоке-теги {\k..} разбивают фразу, проверяем по словам.
+  assert.ok(assContent.includes("Dialogue:") && assContent.includes("локального") && assContent.includes("\\k"), "субтитры сцены должны содержать текст озвучки с караоке-разметкой");
 
   await pipeline.regenerateScene(project.id, secondScene.id);
   await pipeline.drain();
