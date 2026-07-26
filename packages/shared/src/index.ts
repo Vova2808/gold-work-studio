@@ -59,6 +59,8 @@ export interface ProjectSettings {
   subtitles: SubtitleSettings;
   assembly: {
     kenBurns: boolean;
+    /** Направление камеры для всех сцен: приближение, отдаление или чередование. Сцена может переопределить. */
+    kenBurnsDirection?: "in" | "out" | "alternate";
     fadeTransitions: boolean;
     audioNormalize: boolean;
     dualTrack: boolean;
@@ -78,8 +80,8 @@ export interface Scene {
   status: SceneStatus;
   /** false — сцена исключена из финальной сборки (Final.mp4), но остаётся в проекте. */
   includeInAssembly?: boolean;
-  /** Переход к следующей сцене в финальной сборке. */
-  transition?: "none" | "fade";
+  /** Переход к следующей сцене: mix — плавное смешивание кадров, fade — уход в чёрный. Отсутствие = как в проекте. */
+  transition?: "none" | "fade" | "mix";
   /** Движение камеры сцены: по настройке проекта (auto), приближение, отдаление или без движения. */
   kenBurnsDirection?: "auto" | "in" | "out" | "off";
   imagePath?: string;

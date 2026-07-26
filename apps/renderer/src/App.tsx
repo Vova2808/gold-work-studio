@@ -1283,6 +1283,20 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
             </select>
             <small>До четырёх задач одновременно.</small>
           </Field>
+          <Field label="ДВИЖЕНИЕ КАМЕРЫ (ВЕСЬ РОЛИК)" hint="Ken Burns на всех сценах: постоянное приближение, отдаление или чередование. Отдельную сцену можно переопределить в Сценарии.">
+            <select
+              value={settings.assembly.kenBurnsDirection ?? "in"}
+              onChange={(event) =>
+                setSettings({
+                  assembly: { ...settings.assembly, kenBurnsDirection: event.target.value as ProjectSettings["assembly"]["kenBurnsDirection"] },
+                })
+              }
+            >
+              <option value="in">Постоянное приближение</option>
+              <option value="out">Постоянное отдаление</option>
+              <option value="alternate">Чередование (приближение/отдаление)</option>
+            </select>
+          </Field>
           <ToggleRow label="Генерировать AI-видео (скоро)" checked={false} onChange={() => onInfo("Видео-генерация пока недоступна: финал собирается из картинок с эффектом Ken Burns и плавными переходами. Подключим позже.")} />
           {settings.video.enabled && (
             <>
@@ -1632,10 +1646,18 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                 onChange={(included) => updateSceneMeta({ includeInAssembly: included })}
               />
               <div className="scene-form-grid">
-                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ" hint="Применяется в финальной сборке: сцена плавно уходит в чёрный, следующая мягко появляется.">
-                  <select value={selected.transition ?? "none"} onChange={(event) => updateSceneMeta({ transition: event.target.value as Scene["transition"] })}>
+                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ" hint="Смешивание — кадры плавно перетекают друг в друга; затухание — уход в чёрный.">
+                  <select
+                    value={selected.transition ?? "auto"}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      updateSceneMeta({ transition: value === "auto" ? undefined : (value as Scene["transition"]) });
+                    }}
+                  >
+                    <option value="auto">Как в проекте (смешивание)</option>
+                    <option value="mix">Смешивание (mix)</option>
+                    <option value="fade">Затухание в чёрный</option>
                     <option value="none">Без перехода</option>
-                    <option value="fade">Затухание</option>
                   </select>
                 </Field>
                 <Field label="ДВИЖЕНИЕ КАМЕРЫ (KEN BURNS)" hint="Эффект живой камеры на картинке сцены: плавное приближение или отдаление.">

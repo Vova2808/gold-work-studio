@@ -53,6 +53,17 @@ function videoSize(project: Project): { width: number; height: number } {
   return { width: 1280, height: 720 };
 }
 
+/** Направление камеры сцены: личная настройка сцены → настройка проекта (в т.ч. чередование) → приближение. */
+function resolveKenBurnsDirection(project: Project, scene: Scene): "in" | "out" | "off" {
+  const sceneDirection = scene.kenBurnsDirection ?? "auto";
+  if (sceneDirection === "off") return "off";
+  if (sceneDirection === "in" || sceneDirection === "out") return sceneDirection;
+  if (!project.settings.assembly.kenBurns) return "off";
+  const projectDirection = project.settings.assembly.kenBurnsDirection ?? "in";
+  if (projectDirection === "alternate") return scene.order % 2 === 0 ? "in" : "out";
+  return projectDirection;
+}
+
 export class StandardRenderer {
   constructor(private readonly storage: LocalProjectStorage) {}
 
@@ -60,31 +71,29 @@ export class StandardRenderer {
     return Boolean(executablePath());
   }
 
-  async renderScene(project: Project, scene: Scene, fadeInSeconds = 0): Promise<string> {
+  async renderScene(project: Project, scene: Scene, fadeInSeconds = 0, fadeOutSeconds = 0): Promise<string> {
     const imagePath = scene.imagePath;
     if (!imagePath) throw new Error(`У сцены ${scene.order + 1} нет изображения`);
     const audioPath = scene.audioPath ?? await this.storage.createPlaceholderAudio(project, scene);
     const outputPath = this.storage.sceneVideoPath(project, scene);
     await mkdir(dirname(outputPath), { recursive: true });
     const { width, height } = videoSize(project);
-    // Сцена длится не меньше своей озвучки: иначе голос обрывался на полуслове при смене кадра.
+    // Кадр живёт ровно столько, сколько звучит его озвучка (+0.5с воздуха на переход):
+    // у каждого голоса своя скорость чтения, фиксированная длительность резала или тянула сцену.
     const audioSeconds = await mediaDurationSeconds(audioPath);
-    const duration = Math.max(1, scene.durationSeconds, audioSeconds > 0 ? audioSeconds + 0.25 : 0);
+    const duration = audioSeconds > 0.2 ? audioSeconds + 0.5 : Math.max(1, scene.durationSeconds);
     const base = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
-    // Направление сцены важнее настройки проекта: off выключает движение, in/out задают его явно.
-    const direction = scene.kenBurnsDirection ?? "auto";
-    const kenBurnsActive = direction === "off" ? false : direction === "auto" ? project.settings.assembly.kenBurns : true;
+    const direction = resolveKenBurnsDirection(project, scene);
     // pzoom (зум предыдущего ВЫХОДНОГО кадра): с -loop 1 переменная zoom сбрасывается на каждом входном кадре.
     const zoomExpression = direction === "out"
       ? "if(lte(on,1),1.08,max(pzoom-0.0006,1.001))"
       : "min(pzoom+0.0006,1.08)";
-    const motion = kenBurnsActive
+    const motion = direction !== "off"
       ? `,zoompan=z='${zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
       : "";
-    // Затухания: общие плавные переходы проекта + личный переход сцены (fade к следующей) + вход после перехода.
-    const globalFade = project.settings.assembly.fadeTransitions ? Math.min(0.35, duration / 4) : 0;
-    const fadeInDuration = Math.max(globalFade, Math.min(fadeInSeconds, duration / 3));
-    const fadeOutDuration = Math.max(globalFade, scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    // Затухания краёв решает сборка (первый/последний кадр, явный fade-переход) — между сценами теперь crossfade.
+    const fadeInDuration = Math.min(fadeInSeconds, duration / 3);
+    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
     const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
     let subtitles = "";
     if (project.settings.subtitles.enabled && scene.narration.trim().length > 0) {
@@ -116,15 +125,65 @@ export class StandardRenderer {
     return outputPath;
   }
 
+  /** Склейка через xfade/acrossfade: кадры плавно перетекают друг в друга (mix), без ухода в чёрный. */
+  private async assembleWithCrossfade(
+    project: Project,
+    scenes: Scene[],
+    clips: string[],
+    transitionOf: (scene: Scene) => "none" | "fade" | "mix",
+    outputPath: string
+  ): Promise<void> {
+    const durations: number[] = [];
+    for (const clip of clips) {
+      const seconds = await mediaDurationSeconds(clip);
+      durations.push(seconds > 0 ? seconds : 1);
+    }
+    const inputs = clips.flatMap((clip) => ["-i", clip]);
+    const filters: string[] = [];
+    let videoLabel = "[0:v]";
+    let audioLabel = "[0:a]";
+    let offset = 0;
+    for (let index = 1; index < clips.length; index += 1) {
+      const junctionScene = scenes[index - 1]!;
+      // mix — заметное смешивание 0.5с; fade/none — почти мгновенный стык (fade уже вшит в сам клип).
+      const wanted = transitionOf(junctionScene) === "mix" ? 0.5 : 0.05;
+      const junction = Math.max(0.02, Math.min(wanted, durations[index - 1]! - 0.1, durations[index]! - 0.1));
+      offset += durations[index - 1]! - junction;
+      const videoOut = `[vx${index}]`;
+      const audioOut = `[ax${index}]`;
+      filters.push(`${videoLabel}[${index}:v]xfade=transition=fade:duration=${junction.toFixed(2)}:offset=${offset.toFixed(2)}${videoOut}`);
+      filters.push(`${audioLabel}[${index}:a]acrossfade=d=${junction.toFixed(2)}${audioOut}`);
+      videoLabel = videoOut;
+      audioLabel = audioOut;
+    }
+    const crf = project.settings.assembly.quality === "high" ? "18" : project.settings.assembly.quality === "preview" ? "28" : "22";
+    const preset = project.settings.assembly.quality === "high" ? "medium" : "veryfast";
+    await runFfmpeg([
+      "-y",
+      ...inputs,
+      "-filter_complex", filters.join(";"),
+      "-map", videoLabel,
+      "-map", audioLabel,
+      "-r", "30",
+      "-c:v", "libx264",
+      "-preset", preset,
+      "-crf", crf,
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-ar", "48000",
+      "-movflags", "+faststart",
+      outputPath
+    ]);
+  }
+
   /** Приводит готовое AI-видео сцены к формату сборки, НЕ перезаписывая исходный scene.mp4. */
-  private async normalizeVideoClip(project: Project, scene: Scene, fadeInSeconds: number): Promise<string> {
+  private async normalizeVideoClip(project: Project, scene: Scene, fadeInSeconds: number, fadeOutSeconds = 0): Promise<string> {
     const sourcePath = scene.videoPath as string;
     const outputPath = join(dirname(this.storage.sceneVideoPath(project, scene)), "scene-clip.mp4");
     const { width, height } = videoSize(project);
     const duration = Math.max(1, scene.durationSeconds);
-    const globalFade = project.settings.assembly.fadeTransitions ? Math.min(0.35, duration / 4) : 0;
-    const fadeInDuration = Math.max(globalFade, Math.min(fadeInSeconds, duration / 3));
-    const fadeOutDuration = Math.max(globalFade, scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    const fadeInDuration = Math.min(fadeInSeconds, duration / 3);
+    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
     const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
     const sourceVolume = project.settings.video.muteSource ? 0 : Math.min(100, Math.max(0, project.settings.video.sourceVolume)) / 100;
     await runFfmpeg([
@@ -153,23 +212,39 @@ export class StandardRenderer {
       .sort((a, b) => a.order - b.order)
       .filter((scene) => scene.includeInAssembly !== false);
     if (included.length === 0) throw new Error("Все сцены исключены из сборки — включите хотя бы одну в редакторе сценария");
+
+    // Переход по умолчанию — плавное смешивание (mix); сцена может явно выбрать fade/none.
+    const defaultTransition = project.settings.assembly.fadeTransitions ? "mix" : "none";
+    const transitionOf = (scene: Scene): "none" | "fade" | "mix" => scene.transition ?? defaultTransition;
+    const edgeFade = project.settings.assembly.fadeTransitions ? 0.35 : 0;
+
     const clips: string[] = [];
-    let fadeInSeconds = 0;
-    for (const scene of included) {
+    for (let index = 0; index < included.length; index += 1) {
+      const scene = included[index]!;
+      const previous = index > 0 ? included[index - 1]! : undefined;
+      // Вход: мягкое появление первого кадра; после fade-перехода — выход из чёрного.
+      const fadeIn = index === 0 ? edgeFade : previous && transitionOf(previous) === "fade" ? 0.5 : 0;
+      // Выход: только у последнего кадра (fade-переход сцена добавляет сама).
+      const fadeOut = index === included.length - 1 ? edgeFade : 0;
       // Готовое AI-видео сцены используется как есть (нормализация в общий формат), не затираясь Ken Burns-рендером.
       const hasAiVideo = Boolean(scene.videoPath && existsSync(scene.videoPath));
       clips.push(hasAiVideo
-        ? await this.normalizeVideoClip(project, scene, fadeInSeconds)
-        : await this.renderScene(project, scene, fadeInSeconds));
-      fadeInSeconds = scene.transition === "fade" ? 0.5 : 0;
+        ? await this.normalizeVideoClip(project, scene, fadeIn, fadeOut)
+        : await this.renderScene(project, scene, fadeIn, fadeOut));
     }
+
     const finalPath = this.storage.finalPath(project.id);
     const musicPath = project.settings.music.path?.trim();
     const withMusic = project.settings.music.enabled !== false && Boolean(musicPath && existsSync(musicPath));
     const assembledPath = withMusic ? join(this.storage.projectDirectory(project.id), "Final.tmp.mp4") : finalPath;
 
+    const useCrossfade = included.length > 1 && included.length <= 60
+      && included.some((scene, index) => index < included.length - 1 && transitionOf(scene) === "mix");
+
     if (clips.length === 1) {
       await copyFile(clips[0] as string, assembledPath);
+    } else if (useCrossfade) {
+      await this.assembleWithCrossfade(project, included, clips, transitionOf, assembledPath);
     } else {
       const listPath = join(this.storage.projectDirectory(project.id), "concat.txt");
       const content = clips
