@@ -685,7 +685,7 @@ function memoryNote(pastProjects: string[]): string {
 }
 
 /** Достаёт JSON из ответа модели: срезает markdown-фенсы, при неудаче берёт фрагмент между крайними скобками. */
-function extractJson<T>(content: string, what: string): T {
+export function extractJson<T>(content: string, what: string): T {
   const cleaned = content.replace(/```[a-z]*\s*/gi, "").replace(/```/g, "").trim();
   const candidates = [cleaned];
   const firstBrace = cleaned.indexOf("{");
@@ -735,7 +735,7 @@ const EDGE_TTS_VOICES: Record<string, string> = {
 };
 
 /** Полный id модели озвучки: значение с "/" идёт как есть, "edge-tts" получает голос по языку, иначе провайдер+язык. */
-function ttsModelId(setting: string, languageCode: string): string {
+export function ttsModelId(setting: string, languageCode: string): string {
   const value = (setting || "google-tts").trim();
   if (value.includes("/")) return value;
   // Голое имя голоса вида "ru-RU-DmitryNeural" (старые проекты) — это Edge TTS.
@@ -771,7 +771,7 @@ function retryAfterMs(response: Response, bodyText: string, attempt: number): nu
 }
 
 /** Приводит поле-список (strengths/improvements/structure) к массиву строк, даже если модель вернула объекты. */
-function toStringList(value: unknown): string[] {
+export function toStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => {
@@ -787,7 +787,7 @@ function toStringList(value: unknown): string[] {
 }
 
 /** Разбирает ответ модели в массив сцен: принимает и голый JSON-массив, и объект { scenes: [...] }, и массив внутри текста. */
-function parseSceneArray(content: string): Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> {
+export function parseSceneArray(content: string): Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> {
   const cleaned = content.replace(/^```json\s*|```$/g, "").trim();
   const attempts = [cleaned, cleaned.match(/\[[\s\S]*\]/)?.[0] ?? ""];
   for (const candidate of attempts) {

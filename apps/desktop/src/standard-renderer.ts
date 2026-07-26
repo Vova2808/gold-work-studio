@@ -54,7 +54,7 @@ function videoSize(project: Project): { width: number; height: number } {
 }
 
 /** Направление камеры сцены: личная настройка сцены → настройка проекта (в т.ч. чередование) → приближение. */
-function resolveKenBurnsDirection(project: Project, scene: Scene): "in" | "out" | "off" {
+export function resolveKenBurnsDirection(project: Project, scene: Scene): "in" | "out" | "off" {
   const sceneDirection = scene.kenBurnsDirection ?? "auto";
   if (sceneDirection === "off") return "off";
   if (sceneDirection === "in" || sceneDirection === "out") return sceneDirection;
@@ -294,14 +294,14 @@ function filterPath(path: string): string {
 }
 
 /** "#rrggbb" → цвет ASS "&H00BBGGRR" (непрозрачный). */
-function assColor(hex: string): string {
+export function assColor(hex: string): string {
   const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!match) return "&H00FFFFFF";
   const value = match[1]!;
   return `&H00${value.slice(4, 6)}${value.slice(2, 4)}${value.slice(0, 2)}`.toUpperCase();
 }
 
-function assTime(seconds: number): string {
+export function assTime(seconds: number): string {
   const total = Math.max(0, seconds);
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
@@ -311,7 +311,7 @@ function assTime(seconds: number): string {
 }
 
 /** Делит озвучку сцены на реплики ~по 90 символов с таймингом, пропорциональным длине текста. */
-function narrationCues(narration: string, duration: number): Array<{ start: number; end: number; text: string }> {
+export function narrationCues(narration: string, duration: number): Array<{ start: number; end: number; text: string }> {
   const clean = narration.replace(/\s+/g, " ").trim();
   if (!clean) return [];
   const sentences = clean.match(/[^.!?…]+[.!?…]*\s*/g)?.map((part) => part.trim()).filter(Boolean) ?? [clean];
@@ -338,7 +338,7 @@ function narrationCues(narration: string, duration: number): Array<{ start: numb
 }
 
 /** Караоке-разметка ASS: каждое слово получает {\k<сотые секунды>} пропорционально своей длине. */
-function karaokeText(text: string, durationSeconds: number): string {
+export function karaokeText(text: string, durationSeconds: number): string {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return text;
   const totalCharacters = words.reduce((sum, word) => sum + word.length, 0) || 1;
