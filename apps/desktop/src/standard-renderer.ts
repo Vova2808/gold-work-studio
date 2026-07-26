@@ -52,9 +52,10 @@ export class StandardRenderer {
     // Направление сцены важнее настройки проекта: off выключает движение, in/out задают его явно.
     const direction = scene.kenBurnsDirection ?? "auto";
     const kenBurnsActive = direction === "off" ? false : direction === "auto" ? project.settings.assembly.kenBurns : true;
+    // pzoom (зум предыдущего ВЫХОДНОГО кадра): с -loop 1 переменная zoom сбрасывается на каждом входном кадре.
     const zoomExpression = direction === "out"
-      ? "if(lte(on,1),1.08,max(zoom-0.0006,1.001))"
-      : "min(zoom+0.0006,1.08)";
+      ? "if(lte(on,1),1.08,max(pzoom-0.0006,1.001))"
+      : "min(pzoom+0.0006,1.08)";
     const motion = kenBurnsActive
       ? `,zoompan=z='${zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
       : "";
@@ -86,6 +87,37 @@ export class StandardRenderer {
       "-crf", crf,
       "-c:a", "aac",
       "-b:a", "128k",
+      "-ar", "48000",
+      "-movflags", "+faststart",
+      outputPath
+    ]);
+    return outputPath;
+  }
+
+  /** Приводит готовое AI-видео сцены к формату сборки, НЕ перезаписывая исходный scene.mp4. */
+  private async normalizeVideoClip(project: Project, scene: Scene, fadeInSeconds: number): Promise<string> {
+    const sourcePath = scene.videoPath as string;
+    const outputPath = join(dirname(this.storage.sceneVideoPath(project, scene)), "scene-clip.mp4");
+    const { width, height } = videoSize(project);
+    const duration = Math.max(1, scene.durationSeconds);
+    const globalFade = project.settings.assembly.fadeTransitions ? Math.min(0.35, duration / 4) : 0;
+    const fadeInDuration = Math.max(globalFade, Math.min(fadeInSeconds, duration / 3));
+    const fadeOutDuration = Math.max(globalFade, scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
+    const sourceVolume = project.settings.video.muteSource ? 0 : Math.min(100, Math.max(0, project.settings.video.sourceVolume)) / 100;
+    await runFfmpeg([
+      "-y",
+      "-i", sourcePath,
+      "-t", String(duration),
+      "-vf", `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30${fades},format=yuv420p`,
+      "-af", `volume=${sourceVolume},apad=pad_dur=${duration},atrim=0:${duration},aresample=48000`,
+      "-r", "30",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "22",
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-ar", "48000",
       "-movflags", "+faststart",
       outputPath
     ]);
@@ -102,7 +134,11 @@ export class StandardRenderer {
     const clips: string[] = [];
     let fadeInSeconds = 0;
     for (const scene of included) {
-      clips.push(await this.renderScene(project, scene, fadeInSeconds));
+      // Готовое AI-видео сцены используется как есть (нормализация в общий формат), не затираясь Ken Burns-рендером.
+      const hasAiVideo = Boolean(scene.videoPath && existsSync(scene.videoPath));
+      clips.push(hasAiVideo
+        ? await this.normalizeVideoClip(project, scene, fadeInSeconds)
+        : await this.renderScene(project, scene, fadeInSeconds));
       fadeInSeconds = scene.transition === "fade" ? 0.5 : 0;
     }
     const finalPath = this.storage.finalPath(project.id);
@@ -137,7 +173,7 @@ export class StandardRenderer {
         "-i", assembledPath,
         "-stream_loop", "-1",
         "-i", musicPath as string,
-        "-filter_complex", `[1:a]volume=${volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]`,
+        "-filter_complex", `[1:a]volume=${volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`,
         "-map", "0:v",
         "-map", "[aout]",
         "-c:v", "copy",

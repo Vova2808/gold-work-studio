@@ -35,10 +35,11 @@ export class AnyModelStore {
   async save(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings> {
     const current = await this.read();
     const next: StoredSettings = {
-      baseUrl: input.baseUrl.replace(/\/+$/, "").replace(/\/v1\/v1$/i, "/v1"),
-      textModel: input.textModel.trim(),
-      imageModel: input.imageModel.trim(),
-      videoModel: input.videoModel.trim(),
+      // Пустые поля не должны затирать дефолты — иначе одно случайное сохранение ломает все запросы.
+      baseUrl: (input.baseUrl?.trim() || defaults.baseUrl).replace(/\/+$/, "").replace(/\/v1\/v1$/i, "/v1"),
+      textModel: input.textModel?.trim() || defaults.textModel,
+      imageModel: input.imageModel?.trim() || defaults.imageModel,
+      videoModel: input.videoModel?.trim() || defaults.videoModel,
       ttsModel: input.ttsModel?.trim() || defaults.ttsModel,
       imageRefModel: input.imageRefModel?.trim() || defaults.imageRefModel,
       transcriptionModel: input.transcriptionModel?.trim() || defaults.transcriptionModel,

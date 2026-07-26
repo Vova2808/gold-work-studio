@@ -13,9 +13,12 @@ function sleep(ms: number): Promise<void> {
  * Атомарная запись файла с ретраями: OneDrive/антивирус на Windows периодически
  * блокируют rename (EPERM/EBUSY). Пробуем несколько раз, затем fallback copy+rm.
  */
+let temporaryCounter = 0;
+
 export async function atomicWrite(filePath: string, data: string | Buffer): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  // Счётчик обязателен: параллельные записи одного файла в одну миллисекунду делили tmp-имя (ENOENT на rename).
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${temporaryCounter++}.tmp`;
   await writeFile(temporaryPath, data);
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {

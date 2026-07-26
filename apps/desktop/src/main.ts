@@ -265,16 +265,17 @@ function registerIpc(): void {
     if (!topic) throw new Error("Тема чата не найдена");
     const plan = await createPlanFromTopic(topic, project.language);
     const durationSeconds = plan.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
-    return projectService.update(projectId, {
+    // mutate вместо update: за время LLM-вызова настройки могли измениться, снимок project.settings устарел.
+    return projectService.mutate(projectId, (current) => ({
       title: plan.title,
       topic: plan.topic,
       chatTopicId: topicId,
       scenes: plan.scenes,
       settings: {
-        ...project.settings,
+        ...current.settings,
         durationMinutes: Math.max(1, Math.ceil(durationSeconds / 60))
       }
-    });
+    }));
   });
   handleIpc("app:info", async () => ({
     version: app.getVersion(),

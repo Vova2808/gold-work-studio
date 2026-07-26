@@ -281,7 +281,8 @@ export function App() {
     try {
       const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
       const updated = await api.updateProject(project.id, { scenes: full.scenes, status: full.scenes.length > 0 ? "ready" : "draft" });
-      upsertProject(updated);
+      // Выбор не трогаем: пользователь мог уйти в другой проект, пока сценарий писался в фоне.
+      setProjects((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
       logAction(`Сценарий готов: ${full.scenes.length} сцен`);
       setNotice(`Сценарий готов: ${full.scenes.length} сцен. Проверьте текст и запустите генерацию.`);
     } catch (reason) {
@@ -1349,6 +1350,12 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
     setScenes(next);
     setSelectedId(next[0]?.id ?? null);
   }, [project?.id]);
+  // Сценарий, дописанный в фоне, вливается в открытый пустой редактор — иначе сохранение затёрло бы его пустотой.
+  useEffect(() => {
+    if (!project || project.scenes.length === 0) return;
+    setScenes((current) => (current.length === 0 ? structuredClone(project.scenes) : current));
+    setSelectedId((current) => current ?? project.scenes[0]?.id ?? null);
+  }, [project?.id, project?.updatedAt]);
   if (!project) return <EmptyState icon={<FileText size={34} />} title="Проект не выбран" text="Выберите проект перед редактированием сценария." action="Назад" onAction={onBack} />;
   if (project.status === "generating" || project.status === "paused") return <EmptyState icon={<Pause size={34} />} title="Сценарий временно заблокирован" text="Во время активной генерации нельзя менять состав сцен. Остановите очередь или дождитесь завершения." action="Назад к проекту" onAction={onBack} />;
   const selected = scenes.find((scene) => scene.id === selectedId);

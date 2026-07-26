@@ -293,8 +293,10 @@ export class AnyModelClient {
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw new Error("Gemini вернул пустой транскрипт");
-    const parsed = extractJson<Array<Partial<TranscriptSegment>>>(content, "транскрибации аудио");
-    return parsed.map((segment) => ({
+    const parsed = extractJson<Array<Partial<TranscriptSegment>> | { segments?: Array<Partial<TranscriptSegment>> }>(content, "транскрибации аудио");
+    const segments = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.segments) ? parsed.segments : null;
+    if (!segments) throw new Error("Модель вернула не массив сегментов транскрипта");
+    return segments.map((segment) => ({
       startSeconds: Math.max(0, Number(segment.startSeconds) || 0),
       durationSeconds: Math.max(0, Number(segment.durationSeconds) || 0),
       text: String(segment.text ?? "").trim()
@@ -345,11 +347,13 @@ export class AnyModelClient {
     const refs = references.map((ref) => ref.trim()).filter(Boolean).slice(0, 3);
     // С референсами нужна модель с поддержкой опорных изображений (gpt-image); без них — дешёвый Gemini.
     const model = refs.length > 0 ? settings.imageRefModel : settings.imageModel;
+    // У gpt-image свой набор размеров — Gemini-размеры (1920x1080 и т.п.) он отвергает.
+    const effectiveSize = refs.length > 0 ? gptImageSize(size) : size;
     const image = refs.length > 0 ? await referencePayload(refs) : undefined;
     const response = await this.request("/v1/images/generations", {
       method: "POST",
       body: JSON.stringify({
-        model, prompt, n: 1, size, quality: "auto", background: "auto", image_detail: "high", output_format: "png",
+        model, prompt, n: 1, size: effectiveSize, quality: "auto", background: "auto", image_detail: "high", output_format: "png",
         ...(image !== undefined ? { image } : {})
       })
     });
@@ -495,7 +499,12 @@ export class AnyModelClient {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data || data === "[DONE]") continue;
-        const event = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string | Array<{ text?: string }> } }> };
+        let event: { choices?: Array<{ delta?: { content?: string | Array<{ text?: string }> } }> };
+        try {
+          event = JSON.parse(data) as typeof event;
+        } catch {
+          continue; // битый SSE-фрейм не должен обрывать весь стрим
+        }
         const content = event.choices?.[0]?.delta?.content;
         const chunk = typeof content === "string" ? content : Array.isArray(content) ? content.map((part) => part.text ?? "").join("") : "";
         if (!chunk) continue;
@@ -599,6 +608,13 @@ function extractJson<T>(content: string, what: string): T {
     }
   }
   throw new Error(`Модель вернула не-JSON при ${what}. Начало ответа: ${cleaned.slice(0, 160)}`);
+}
+
+/** Размеры, которые принимает gpt-image: ближайший к запрошенному формату кадра. */
+function gptImageSize(size: string): string {
+  if (/^(1920x1080|1792x1024|1536x1024)$/.test(size)) return "1536x1024";
+  if (/^(1080x1920|1024x1792|1024x1536)$/.test(size)) return "1024x1536";
+  return "1024x1024";
 }
 
 /** Референсы для images/generations: URL идёт как есть, локальный файл превращается в data:URI. */

@@ -136,6 +136,11 @@ export class MockGenerationPipeline {
 
       const runId = projectTasks[0]?.runId ?? createId("run");
       const now = new Date().toISOString();
+      // Запоминаем старые задачи сцены по типам: зависимости других сцен нужно перевязать на новые id.
+      const oldSceneTaskIds = new Map<TaskKind, string>();
+      for (const task of this.tasks) {
+        if (task.projectId === projectId && task.sceneId === sceneId) oldSceneTaskIds.set(task.kind, task.id);
+      }
       this.tasks = this.tasks.filter(
         (task) => task.projectId !== projectId || (task.sceneId !== sceneId && task.kind !== "assemble")
       );
@@ -181,6 +186,22 @@ export class MockGenerationPipeline {
         );
       }
       this.tasks.push(...created);
+      // Перевязываем зависимости остальных задач со старых id сцены на новые (sequential-картинки, парные кадры)
+      // и возвращаем «заблокированные» задачи в очередь — их блокировала удалённая упавшая задача.
+      const replacedIds = new Map<string, string>();
+      for (const task of created) {
+        const oldId = task.sceneId ? oldSceneTaskIds.get(task.kind) : undefined;
+        if (oldId) replacedIds.set(oldId, task.id);
+      }
+      for (const task of this.tasks) {
+        if (task.projectId !== projectId) continue;
+        task.dependsOn = task.dependsOn.map((id) => replacedIds.get(id) ?? id);
+        if (task.status === "blocked") {
+          task.status = "pending";
+          task.error = undefined;
+          task.updatedAt = now;
+        }
+      }
       const assembleDependencies = this.tasks
         .filter((task) => task.projectId === projectId && task.runId === runId && task.kind !== "assemble")
         .map((task) => task.id);
@@ -436,6 +457,13 @@ export class MockGenerationPipeline {
           current.nextAttemptAt = undefined;
           current.pausedFrom = undefined;
           this.emit("info", "queue.task.completed", this.taskDetails(current));
+        } else if (current.status === "paused") {
+          // Пауза важнее ретрая: сбой запомним, но продолжение — только по кнопке пользователя.
+          current.progress = 0;
+          current.error = failure instanceof Error ? failure.message : String(failure);
+          current.pausedFrom = "pending";
+          current.nextAttemptAt = undefined;
+          this.emit("warn", "queue.task.failed_while_paused", this.taskDetails(current));
         } else {
           this.scheduleFailure(current, failure, nowTime);
         }
