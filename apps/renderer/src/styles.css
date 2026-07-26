@@ -303,6 +303,11 @@ button {
   padding: 7px 18px;
   color: #d9d5ca;
   text-align: left;
+  /* Это <button>: без сброса браузер красит его в белый — та самая «некрасивая полоска». */
+  background: transparent;
+  border: none;
+  font: inherit;
+  cursor: pointer;
 }
 .global-progress-head > span:first-child {
   min-width: 0;

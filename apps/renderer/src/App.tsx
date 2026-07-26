@@ -85,6 +85,8 @@ export function App() {
   const [uiLog, setUiLog] = useState<Array<{ time: string; level: string; text: string }>>([]);
   const pageScrollRef = useRef<HTMLDivElement>(null);
   const socketConnectedRef = useRef(false);
+  const [directorProgress, setDirectorProgress] = useState<string | null>(null);
+  useEffect(() => api.onDirectorProgress((stage) => setDirectorProgress(stage)), []);
 
   /** Пишет действие в Console Output и в лог-файл приложения. */
   function logAction(text: string, level: "UI" | "INFO" | "ERROR" = "UI") {
@@ -261,21 +263,31 @@ export function App() {
     }
   }
 
-  /** Создаёт проект по готовому разбору (сцены уже собраны в чате) и открывает страницу проекта. */
-  async function createProjectFromTopic(analysis: ReferenceAnalysis) {
-    setBusy(true);
+  /** Мгновенно создаёт проект по выбранной теме и открывает его; сценарий пишется в фоне и вливается в проект. */
+  async function createProjectFromTopic(analysis: ReferenceAnalysis, targetSeconds: number) {
     setError(null);
+    let project: Project;
     try {
-      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      project = await api.createReferenceProject({ analysis: { ...analysis, scenes: [] }, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);
       setSelectedProjectId(project.id);
       setActiveSection("project");
-      logAction(`Проект «${project.title}» создан (${analysis.scenes.length} сцен)`);
-      setNotice(`Проект открыт: ${analysis.scenes.length} сцен. Проверьте настройки и нажмите «Генерировать видео».`);
+      logAction(`Проект «${project.title}» создан — сценарий пишется в фоне`);
+      setNotice("Проект открыт. Сценарий пишется в фоне — настройте пока язык, длительность и озвучку.");
     } catch (reason) {
       setError(errorMessage(reason));
+      return;
+    }
+    try {
+      const full = await api.regenerateReferenceScenes(analysis, targetSeconds);
+      const updated = await api.updateProject(project.id, { scenes: full.scenes, status: full.scenes.length > 0 ? "ready" : "draft" });
+      upsertProject(updated);
+      logAction(`Сценарий готов: ${full.scenes.length} сцен`);
+      setNotice(`Сценарий готов: ${full.scenes.length} сцен. Проверьте текст и запустите генерацию.`);
+    } catch (reason) {
+      setError(`Сценарий не собрался: ${errorMessage(reason)} Выберите тему в AI Генераторе ещё раз.`);
     } finally {
-      setBusy(false);
+      setDirectorProgress(null);
     }
   }
 
@@ -394,14 +406,14 @@ export function App() {
                 Демо-режим: нет связи с Electron, все данные и анализы — выдуманные. Реальные функции недоступны.
               </div>
             )}
-            <StepHintBar hint={computeStepHint(appInfo, selectedProject, queue, activeSection)} onNavigate={navigate} />
+            <StepHintBar hint={computeStepHint(appInfo, selectedProject, queue, activeSection, directorProgress)} onNavigate={navigate} />
           </div>
           <div className="page-scroll" ref={pageScrollRef}>
             {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onOpenFolder={(id) => void openProjectFolder(id)} />}
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
             {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
-            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />}
+            {activeSection === "director" && <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis, targetSeconds) => void createProjectFromTopic(analysis, targetSeconds)} onInfo={setNotice} onLog={logAction} />}
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
@@ -466,7 +478,8 @@ function computeStepHint(
   appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null,
   project: Project | undefined,
   queue: QueueTask[],
-  activeSection: SectionKey
+  activeSection: SectionKey,
+  directorProgress: string | null
 ): StepHint | null {
   if (appInfo?.mockMode) {
     return {
@@ -510,7 +523,7 @@ function computeStepHint(
   if (activeSection === "project" && project) {
     if (project.scenes.length === 0) {
       return {
-        now: "сценарий собирается в фоне — пока настройте язык, длительность, формат кадра и озвучку",
+        now: directorProgress ?? "сценарий собирается в фоне — пока настройте язык, длительность, формат кадра и озвучку",
         next: "когда сцены появятся, проверьте текст и нажмите «Генерировать видео»",
       };
     }
@@ -1526,7 +1539,7 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
+function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis, targetSeconds: number) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
@@ -1670,25 +1683,17 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     }
   }
 
-  async function buildAndOpen(base: ReferenceAnalysis, label: string) {
+  function buildAndOpen(base: ReferenceAnalysis, label: string) {
     if (analyzing) return;
-    setAnalyzing(true);
-    onLog(`Пишу сценарий: ${label}`);
-    setMessages((current) => [...current, { role: "assistant", text: `Пишу сценарий по теме «${label}». Прогресс — ниже.` }]);
-    setStreamingText("Пишу сценарий: подготовка…");
-    try {
-      const targetSeconds = Math.max(30, Math.round(targetMinutes * 60));
-      const full = await api.regenerateReferenceScenes({ ...base, language }, targetSeconds);
-      setStreamingText(null);
-      setMessages((current) => [...current, { role: "assistant", text: `Сценарий готов: ${full.scenes.length} сцен (у каждой — текст озвучки и промпт для картинки). Открываю проект.` }]);
-      onPickTopic(full);
-    } catch (reason) {
-      setStreamingText(null);
-      setMessages((current) => [...current, { role: "assistant", text: `Не удалось собрать сценарий: ${errorMessage(reason)}` }]);
-    } finally {
-      setAnalyzing(false);
-      setStreamingText(null);
-    }
+    const targetSeconds = Math.max(30, Math.round(targetMinutes * 60));
+    const expectedScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+    onLog(`Открываю проект: ${label} (~${expectedScenes} сцен)`);
+    setMessages((current) => [...current, {
+      role: "assistant",
+      text: `Открываю проект по теме «${label}». Сценарий (~${expectedScenes} сцен по 5 секунд, язык: ${language}) пишется в фоне — сцены появятся в проекте по мере готовности, прогресс виден в подсказке сверху. Пока можно настроить озвучку, формат и музыку.`
+    }]);
+    // Проект открывается мгновенно, сцены доезжают фоном — управление берёт корневой компонент.
+    onPickTopic({ ...base, language }, targetSeconds);
   }
 
   function pickTopic(topic: { title: string; hook: string; angle: string }) {

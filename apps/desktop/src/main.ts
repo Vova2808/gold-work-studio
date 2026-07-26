@@ -94,14 +94,20 @@ function registerIpc(): void {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
       stage("Получаю данные канала через YouTube API: статистика, таймлайн роликов, комментарии…");
       const channelContext = await youtubeClient.collectChannel(channelRef);
-      stage(`Канал «${channelContext.title}»: ${channelContext.subscribers.toLocaleString("ru-RU")} подписчиков, роликов в таймлайне: ${channelContext.videos.length}. Анализирую нишу и готовлю темы…`);
+      stage(`Канал «${channelContext.title}»: ${channelContext.subscribers.toLocaleString("ru-RU")} подписчиков, ${channelContext.totalViews.toLocaleString("ru-RU")} суммарных просмотров, в таймлайне ${channelContext.videos.length} роликов, комментариев собрано: ${channelContext.topComments.length}.`);
+      stage("Claude анализирует нишу: что заходит по таймлайну, чего просят зрители в комментариях — и готовит стратегию с 3 темами…");
       return anyModelClient.analyzeYouTubeChannel(channelContext, input);
     }
     if (/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(input.url)) {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
       stage("Получаю данные ролика и канала через YouTube API: статистика, комментарии, топ-ролики…");
       const context = await youtubeClient.collect(input.url);
-      stage(`Данные получены: ${context.views.toLocaleString("ru-RU")} просмотров, ${context.topComments.length} комментариев, ${context.topVideos.length} топ-роликов. Анализирую и готовлю темы…`);
+      const transcriptLabel = context.transcriptSource === "captions" ? "субтитры ролика"
+        : context.transcriptSource === "yt-dlp-captions" ? "субтитры (yt-dlp)"
+        : context.transcriptSource === "gemini-audio" ? "распознан из аудио"
+        : "недоступен";
+      stage(`Данные собраны: ${context.views.toLocaleString("ru-RU")} просмотров, ${context.likes.toLocaleString("ru-RU")} лайков, ${context.topComments.length} комментариев, ${context.topVideos.length} топ-роликов канала (${context.channelSubscribers.toLocaleString("ru-RU")} подписчиков). Транскрипт: ${transcriptLabel}.`);
+      stage("Claude изучает статистику, комментарии и транскрипт — пишет разбор, находит сильные стороны и готовит 3 темы для новых роликов…");
       return anyModelClient.analyzeYouTube(context, input);
     }
     stage("Разбираю референс по ссылке…");
