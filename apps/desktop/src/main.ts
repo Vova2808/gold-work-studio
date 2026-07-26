@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, type IpcMainInvokeEvent } from "electron";
 import { mkdir } from "node:fs/promises";
 import { join, normalize } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
@@ -23,7 +23,8 @@ import { ChatTopicRepository } from "./chat-topic-repository.js";
 import { YouTubeClient } from "./youtube-client.js";
 import { YouTubeStore } from "./youtube-store.js";
 
-const currentDirectory = fileURLToPath(new URL(".", import.meta.url));
+// __dirname доступен, потому что main собирается в CommonJS (см. electron.vite.config.ts).
+const currentDirectory = __dirname;
 let projectService: ProjectService;
 let pipeline: MockGenerationPipeline;
 let projectStorage: LocalProjectStorage;

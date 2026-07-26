@@ -1,6 +1,5 @@
-import { fetch as undiciFetch, type Dispatcher, type RequestInit as UndiciRequestInit } from "undici";
 import { GoogleStore } from "./google-store.js";
-import { createProxyDispatcher } from "./proxy-utils.js";
+import { parseProxyUrl, proxyRequest, type ProxyResponse } from "./proxy-utils.js";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 const REQUEST_TIMEOUT_MS = 15 * 60_000;
@@ -47,9 +46,9 @@ export class VeoClient {
       const key = await this.requiredKey();
       const response = await this.request(`${BASE}/models?pageSize=1`, {
         headers: { "x-goog-api-key": key },
-        signal: AbortSignal.timeout(30_000)
+        timeoutMs: 30_000
       });
-      if (!response.ok) throw new Error(await googleError(response));
+      if (!response.ok) throw new Error(googleError(response));
       const settings = await this.store.publicSettings();
       return { ok: true, message: `Google AI Studio подключён. Модель видео: ${settings.veoModel}.` };
     } catch (error) {
@@ -81,7 +80,7 @@ export class VeoClient {
     const response = await this.request(`${BASE}/interactions`, {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      timeoutMs: REQUEST_TIMEOUT_MS,
       body: JSON.stringify({
         model,
         input,
@@ -93,8 +92,8 @@ export class VeoClient {
         stream: false
       })
     });
-    if (!response.ok) throw new Error(await googleError(response));
-    const interaction = await response.json() as InteractionResponse;
+    if (!response.ok) throw new Error(googleError(response));
+    const interaction = response.json<InteractionResponse>();
     if (interaction.error?.message) throw new Error(`Omni Flash: ${interaction.error.message}`);
     const video = interaction.steps
       ?.flatMap((step) => step.content ?? [])
@@ -113,10 +112,10 @@ export class VeoClient {
       while (Date.now() - startedAt < 5 * 60_000) {
         const info = await this.request(`${BASE}/files/${encodeURIComponent(fileName)}`, {
           headers: { "x-goog-api-key": key },
-          signal: AbortSignal.timeout(30_000)
+          timeoutMs: 30_000
         });
         if (!info.ok) break; // файл может быть сразу доступен для скачивания
-        const state = (await info.json() as { state?: string }).state;
+        const state = (info.json<{ state?: string }>()).state;
         if (state === "ACTIVE") break;
         if (state === "FAILED") throw new Error("Google: обработка видеофайла завершилась ошибкой");
         await sleep(4_000);
@@ -124,10 +123,10 @@ export class VeoClient {
     }
     const download = await this.request(uri.includes("alt=media") ? uri : `${uri}?alt=media`, {
       headers: { "x-goog-api-key": key },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      timeoutMs: REQUEST_TIMEOUT_MS
     });
     if (!download.ok) throw new Error(`Не удалось скачать видео: HTTP ${download.status}`);
-    const buffer = Buffer.from(await download.arrayBuffer());
+    const buffer = download.body;
     if (buffer.byteLength === 0) throw new Error("Google вернул пустой видеофайл");
     return buffer;
   }
@@ -138,7 +137,7 @@ export class VeoClient {
     const startResponse = await this.request(`${BASE}/models/${encodeURIComponent(model)}:predictLongRunning`, {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(60_000),
+      timeoutMs: 60_000,
       body: JSON.stringify({
         instances: [{
           prompt,
@@ -147,8 +146,8 @@ export class VeoClient {
         parameters: { aspectRatio: ratio }
       })
     });
-    if (!startResponse.ok) throw new Error(await googleError(startResponse));
-    const started = await startResponse.json() as VeoOperation;
+    if (!startResponse.ok) throw new Error(googleError(startResponse));
+    const started = startResponse.json<VeoOperation>();
     if (!started.name) throw new Error("Veo не вернул идентификатор операции");
     const startedAt = Date.now();
     let operation: VeoOperation = started;
@@ -156,10 +155,10 @@ export class VeoClient {
       await sleep(6_000);
       const poll = await this.request(`${BASE}/${started.name}`, {
         headers: { "x-goog-api-key": key },
-        signal: AbortSignal.timeout(30_000)
+        timeoutMs: 30_000
       });
-      if (!poll.ok) throw new Error(await googleError(poll));
-      operation = await poll.json() as VeoOperation;
+      if (!poll.ok) throw new Error(googleError(poll));
+      operation = poll.json<VeoOperation>();
     }
     if (!operation.done) throw new Error("Veo: истекло время ожидания видео (12 минут)");
     if (operation.error) throw new Error(`Veo: ${operation.error.message ?? "ошибка генерации"}`);
@@ -179,26 +178,15 @@ export class VeoClient {
     return key;
   }
 
-  /**
-   * Все запросы к Google идут отсюда: при заданном SOCKS5-прокси подставляется его диспетчер.
-   * Используется fetch из undici — глобальный fetch Node не принимает внешний dispatcher.
-   */
-  private async request(url: string, init: UndiciRequestInit): Promise<Response> {
+  /** Единая точка выхода в Google: при заданном прокси запрос идёт через SOCKS5-туннель. */
+  private async request(url: string, init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<ProxyResponse> {
     const { proxyUrl } = await this.store.publicSettings();
-    if (this.dispatcherFor !== proxyUrl) {
-      this.dispatcher = createProxyDispatcher(proxyUrl);
-      this.dispatcherFor = proxyUrl;
-    }
-    const response = await undiciFetch(url, this.dispatcher ? { ...init, dispatcher: this.dispatcher } : init);
-    return response as unknown as Response;
+    return proxyRequest(url, init, parseProxyUrl(proxyUrl));
   }
-
-  private dispatcher: Dispatcher | undefined;
-  private dispatcherFor: string | undefined;
 }
 
-async function googleError(response: Response): Promise<string> {
-  const text = await response.text().catch(() => "");
+function googleError(response: ProxyResponse): string {
+  const text = response.text();
   let message = "";
   try {
     message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? "";

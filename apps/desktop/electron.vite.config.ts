@@ -11,7 +11,9 @@ export default defineConfig({
       outDir: "dist/main",
       rollupOptions: {
         input: resolve(projectDirectory, "src/main.ts"),
-        output: { entryFileNames: "index.js" }
+        // CommonJS для main — штатный формат Electron. В ESM-режиме загрузчик Electron падал на
+        // «Cannot read properties of undefined (reading 'exports')» при импорте самого electron.
+        output: { format: "cjs", entryFileNames: "index.cjs" }
       }
     }
   },
