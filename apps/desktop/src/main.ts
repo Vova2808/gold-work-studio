@@ -8,7 +8,9 @@ import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core"
 import { parseYouTubeChannelRef } from "@gold-work/shared";
 import { VoicerStore } from "./voicer-store.js";
 import { VoicerClient } from "./voicer-client.js";
-import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveVoicerSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
+import { GoogleStore } from "./google-store.js";
+import { VeoClient } from "./veo-client.js";
+import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveGoogleSettingsInput, SaveVoicerSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -32,6 +34,8 @@ let anyModelStore: AnyModelStore;
 let anyModelClient: AnyModelClient;
 let voicerStore: VoicerStore;
 let voicerClient: VoicerClient;
+let googleStore: GoogleStore;
+let veoClient: VeoClient;
 let chatTopics: ChatTopicRepository;
 let youtubeStore: YouTubeStore;
 let youtubeClient: YouTubeClient;
@@ -241,6 +245,10 @@ function registerIpc(): void {
   handleIpc("voicer:tts-sample", (_event, templateUuid: string | undefined, language: string) =>
     voicerClient.ttsSample(templateUuid, language, join(dataPath, "tts-samples"))
   );
+  handleIpc("google:get-settings", () => googleStore.publicSettings());
+  handleIpc("google:save-settings", (_event, input: SaveGoogleSettingsInput) => googleStore.save(input));
+  handleIpc("google:clear-key", () => googleStore.clearKey());
+  handleIpc("google:test", () => veoClient.test());
   handleIpc("projects:assemble", (_event, projectId: string) => pipeline.assembleOnly(projectId));
   handleIpc("projects:character-reference", async (_event, projectId: string) => {
     const project = await projectService.get(projectId);
@@ -443,6 +451,8 @@ app.whenReady().then(async () => {
   anyModelClient = new AnyModelClient(anyModelStore);
   voicerStore = new VoicerStore(join(dataPath, "credentials", "voicer.json"));
   voicerClient = new VoicerClient(voicerStore);
+  googleStore = new GoogleStore(join(dataPath, "credentials", "google.json"));
+  veoClient = new VeoClient(googleStore);
   youtubeStore = new YouTubeStore(join(dataPath, "credentials", "youtube.json"));
   youtubeClient = new YouTubeClient(youtubeStore, (audio, format) => anyModelClient.transcribeAudio(audio, format));
   chatTopics = new ChatTopicRepository(join(dataPath, "database", "gold-work-studio.sqlite"));
@@ -466,7 +476,8 @@ app.whenReady().then(async () => {
     DEFAULT_QUEUE_POLICY,
     (event) => void logger.write(event.level, event.message, event.details),
     anyModelClient,
-    voicerClient
+    voicerClient,
+    veoClient
   );
   await pipeline.initialize();
   await startRealtimeServer();

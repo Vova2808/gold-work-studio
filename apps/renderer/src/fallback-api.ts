@@ -268,6 +268,10 @@ export const fallbackApi: DesktopApi = {
   async assembleProject() {
     throw new Error("Пересборка доступна только в приложении");
   },
+  async getGoogleSettings() { return { configured: false, veoModel: "gemini-omni-flash-preview" }; },
+  async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "gemini-omni-flash-preview" }; },
+  async clearGoogleKey() { return { configured: false, veoModel: "gemini-omni-flash-preview" }; },
+  async testGoogleConnection() { return { ok: false, message: "Veo доступен только в приложении" }; },
   mediaUrl(path: string) { return path; },
   async getVoicerSettings() { return { configured: false, baseUrl: "" }; },
   async saveVoicerSettings(input) { return { configured: Boolean(input.apiKey), baseUrl: input.baseUrl ?? "" }; },

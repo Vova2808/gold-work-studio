@@ -5,6 +5,7 @@ import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 import { AnyModelClient } from "./anymodel-client.js";
 import { VoicerClient } from "./voicer-client.js";
+import { VeoClient } from "./veo-client.js";
 
 export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
   concurrency: 4,
@@ -43,7 +44,8 @@ export class MockGenerationPipeline {
     readonly policy: QueuePolicy = DEFAULT_QUEUE_POLICY,
     private readonly eventSink: PipelineEventSink = () => undefined,
     private readonly anyModel?: AnyModelClient,
-    private readonly voicer?: VoicerClient
+    private readonly voicer?: VoicerClient,
+    private readonly veo?: VeoClient
   ) {}
 
   async initialize(): Promise<void> {
@@ -96,7 +98,13 @@ export class MockGenerationPipeline {
       }
 
       if (project.settings.video.enabled) {
+        // Процент анимации: видео делаем не для всех сцен, а равномерно по ролику (экономия квоты и денег).
+        const percent = Math.min(100, Math.max(1, project.settings.video.animationPercent || 100));
+        const step = 100 / percent;
+        const animated = new Set<number>();
+        for (let position = 0; position < project.scenes.length; position += step) animated.add(Math.floor(position));
         for (const [index, scene] of project.scenes.entries()) {
+          if (!animated.has(index)) continue;
           const currentImage = images[index];
           if (!currentImage) continue;
           const nextImage = images[index + 1];
@@ -623,6 +631,14 @@ export class MockGenerationPipeline {
         reason: scene.narration.trim().length === 0 ? "пустой текст озвучки" : "AnyModel не настроен"
       });
       return this.storage.createPlaceholderAudio(project, scene);
+    }
+    if (task.kind === "video" && project.settings.video.provider === "veo") {
+      if (!this.veo || !(await this.veo.configured())) {
+        throw new Error("Движок Veo не настроен — добавьте ключ Google AI Studio в Настройки → AI и сценарии");
+      }
+      const startFrame = scene.imagePath ? await readFile(scene.imagePath).catch(() => undefined) : undefined;
+      const prompt = scene.animationPrompt?.trim() || scene.imagePrompt;
+      return this.storage.saveGeneratedVideo(project, scene, await this.veo.generateVideo(prompt, project.aspectRatio, startFrame));
     }
     if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
       if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");

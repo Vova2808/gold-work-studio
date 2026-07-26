@@ -190,7 +190,7 @@ export class StandardRenderer {
       "-y",
       "-i", sourcePath,
       "-t", String(duration),
-      "-vf", `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30${fades},format=yuv420p`,
+      "-vf", `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30,tpad=stop_mode=clone:stop=-1${fades},format=yuv420p`,
       "-af", `volume=${sourceVolume},apad=pad_dur=${duration},atrim=0:${duration},aresample=48000`,
       "-r", "30",
       "-c:v", "libx264",

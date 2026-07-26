@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
+import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type GoogleSettings, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -1338,7 +1338,39 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <option value="alternate">Чередование (приближение/отдаление)</option>
             </select>
           </Field>
-          <ToggleRow label="Генерировать AI-видео (скоро)" checked={false} onChange={() => onInfo("Видео-генерация пока недоступна: финал собирается из картинок с эффектом Ken Burns и плавными переходами. Подключим позже.")} />
+          <ToggleRow
+            label="Генерировать AI-видео"
+            hint="Оживляет картинку сцены (image-to-video). Veo — ключ Google AI Studio; AnyModel — grok-imagine. Внимание: видео заметно дороже картинок."
+            checked={settings.video.enabled}
+            onChange={(enabled) => {
+              setSettings({ video: { ...settings.video, enabled } });
+              onInfo(enabled ? "AI-видео включено: для каждой сцены будет сгенерирован живой клип из её картинки." : "AI-видео выключено — сцены соберутся из картинок с движением камеры.");
+            }}
+          />
+          {settings.video.enabled && (
+            <>
+              <Field label="ДВИЖОК ВИДЕО" hint="Google — Omni Flash / Veo по ключу AI Studio (нужен VPN). AnyModel — grok-imagine-video с баланса AnyModel.">
+                <select
+                  value={settings.video.provider === "anymodel-video" ? "anymodel-video" : "veo"}
+                  onChange={(event) => setSettings({ video: { ...settings.video, provider: event.target.value as ProjectSettings["video"]["provider"] } })}
+                >
+                  <option value="veo">Google (Omni Flash / Veo)</option>
+                  <option value="anymodel-video">AnyModel (grok-imagine)</option>
+                </select>
+              </Field>
+              <Field label={`АНИМИРОВАТЬ СЦЕН: ${settings.video.animationPercent}%`} hint="Экономия: оживляются только самые важные сцены, остальные идут картинкой с движением камеры.">
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={10}
+                  value={settings.video.animationPercent}
+                  onChange={(event) => setSettings({ video: { ...settings.video, animationPercent: Number(event.target.value) } })}
+                />
+                <small>Примерно {Math.max(1, Math.round((draft.scenes.length * settings.video.animationPercent) / 100))} из {draft.scenes.length} сцен получат видео.</small>
+              </Field>
+            </>
+          )}
           {settings.video.enabled && (
             <>
               <Field label="ПРОВАЙДЕР ВИДЕО">
@@ -2660,12 +2692,15 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, baseUrl: "" });
   const [voicerKey, setVoicerKey] = useState("");
+  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "gemini-omni-flash-preview" });
+  const [googleKey, setGoogleKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
-    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings(), api.getVoicerSettings()]).then(([anyModelSettings, youtubeSettings, voicerSettings]) => {
+    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings(), api.getVoicerSettings(), api.getGoogleSettings()]).then(([anyModelSettings, youtubeSettings, voicerSettings, googleSettings]) => {
       setAnyModel(anyModelSettings);
       setYouTube(youtubeSettings);
       setVoicer(voicerSettings);
+      setGoogle(googleSettings);
     });
   }, []);
   const saveVoicer = async () => {
@@ -2764,6 +2799,24 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
                 <button className="generate-button" onClick={() => void saveVoicer()}><Save size={15} />Сохранить Lumean</button>
                 <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.testVoicerConnection().then((result) => setConnectionMessage(result.message))}>Проверить Lumean</button>
                 <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.clearVoicerKey().then(setVoicer)}>Удалить ключ</button>
+              </div>
+              <h2>Google AI Studio — видео (Omni Flash / Veo)</h2>
+              <p>Ключ из aistudio.google.com → Get API key. Оживляет картинки сцен (image-to-video). Google не обслуживает запросы из РФ — нужен VPN. Лимиты видео на подписке AI Pro небольшие: анимируйте часть сцен.</p>
+              <InfoRow label="Статус Google" value={google.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="КЛЮЧ GOOGLE AI STUDIO">
+                <input type="password" value={googleKey} onChange={(event) => setGoogleKey(event.target.value)} placeholder={google.configured ? "Оставьте пустым, чтобы не менять" : "AIza… или AQ.…"} />
+              </Field>
+              <Field label="МОДЕЛЬ ВИДЕО" hint="gemini-omni-flash-preview — Omni Flash (быстро, image-to-video, звук). veo-3.1-fast-generate-preview — классический Veo.">
+                <select value={google.veoModel} onChange={(event) => setGoogle({ ...google, veoModel: event.target.value })}>
+                  <option value="gemini-omni-flash-preview">Gemini Omni Flash (рекомендуется)</option>
+                  <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
+                  <option value="veo-3.1-generate-preview">Veo 3.1 (максимальное качество)</option>
+                </select>
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void api.saveGoogleSettings({ apiKey: googleKey || undefined, veoModel: google.veoModel }).then((saved) => { setGoogle(saved); setGoogleKey(""); setConnectionMessage("Ключ Google сохранён и зашифрован Windows"); })}><Save size={15} />Сохранить Google</button>
+                <button className="outline-button small" disabled={!google.configured} onClick={() => void api.testGoogleConnection().then((result) => setConnectionMessage(result.message))}>Проверить Google</button>
+                <button className="outline-button small" disabled={!google.configured} onClick={() => void api.clearGoogleKey().then(setGoogle)}>Удалить ключ</button>
               </div>
               <h2>YouTube Data API v3 (BYOK)</h2>
               <p>Используется только официальный API Google: метаданные, просмотры, лайки, комментарии и статистика канала. Ключ не попадает в проекты и логи.</p>

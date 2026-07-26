@@ -270,6 +270,17 @@ export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "confi
   apiKey?: string;
 }
 
+/** Google AI Studio — движок видео Veo (image-to-video). */
+export interface GoogleSettings {
+  configured: boolean;
+  veoModel: string;
+}
+
+export interface SaveGoogleSettingsInput {
+  apiKey?: string;
+  veoModel?: string;
+}
+
 /** Voicer API — озвучка на ElevenLabs (X-API-Key, шаблоны из Telegram-бота). */
 export interface VoicerSettings {
   configured: boolean;
@@ -393,6 +404,10 @@ export interface DesktopApi {
   listVoicerTemplates(): Promise<VoicerTemplate[]>;
   /** Пример голоса шаблона Voicer (base64 MP3); кэшируется по шаблону. */
   voicerSample(templateUuid: string | undefined, language: string): Promise<string>;
+  getGoogleSettings(): Promise<GoogleSettings>;
+  saveGoogleSettings(input: SaveGoogleSettingsInput): Promise<GoogleSettings>;
+  clearGoogleKey(): Promise<GoogleSettings>;
+  testGoogleConnection(): Promise<{ ok: boolean; message: string }>;
   /** Создаёт портрет главного героя по сценарию и добавляет его в референсы проекта. */
   createCharacterReference(projectId: string): Promise<Project>;
   /** Пересобирает только Final.mp4 из готовых материалов (без перегенерации картинок и озвучки). */
