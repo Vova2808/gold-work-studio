@@ -266,6 +266,8 @@ export function App() {
   /** Мгновенно создаёт проект по выбранной теме и открывает его — длину и язык пользователь выбирает уже в проекте. */
   async function createProjectFromTopic(analysis: ReferenceAnalysis) {
     setError(null);
+    // Сбрасываем устаревший текст прогресса анализа — иначе он залипает в подсказке нового проекта.
+    setDirectorProgress(null);
     try {
       const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
       upsertProject(project);

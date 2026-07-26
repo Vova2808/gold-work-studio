@@ -581,7 +581,10 @@ export class MockGenerationPipeline {
     }
     if (task.kind === "speech") {
       // Провайдер "elevenlabs" = Voicer API: голос задаётся шаблоном (uuid в settings.voice.voice).
-      if (project.settings.voice.provider === "elevenlabs" && this.voicer && (await this.voicer.configured()) && scene.narration.trim().length > 0) {
+      if (project.settings.voice.provider === "elevenlabs" && scene.narration.trim().length > 0) {
+        if (!this.voicer || !(await this.voicer.configured())) {
+          throw new Error("В проекте выбран движок Voicer, но он не настроен. Добавьте Base URL и ключ в Настройки → AI и сценарии или переключите движок озвучки.");
+        }
         const templateUuid = project.settings.voice.voice?.trim() || undefined;
         const audio = await this.voicer.tts(scene.narration, templateUuid);
         return this.storage.saveGeneratedAudio(project, scene, audio);
