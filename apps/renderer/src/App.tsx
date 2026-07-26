@@ -1496,9 +1496,12 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
 }
 
 function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onBack: () => void }) {
+  const api = window.goldWork ?? fallbackApi;
   const [scenes, setScenes] = useState<Scene[]>(project?.scenes ? structuredClone(project.scenes) : []);
   const [selectedId, setSelectedId] = useState<string | null>(project?.scenes[0]?.id ?? null);
   const [saving, setSaving] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [improveHint, setImproveHint] = useState("");
   useEffect(() => {
     const next = project?.scenes ? structuredClone(project.scenes) : [];
     setScenes(next);
@@ -1579,6 +1582,26 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
     next[index] = other;
     next[target] = current;
     setScenes(reindex(next));
+  };
+  /** Просит модель переписать выбранную сцену: сначала сохраняем текущие правки, потом применяем ответ. */
+  const improveSelected = async () => {
+    if (!selected) return;
+    setImproving(true);
+    try {
+      await onSave(project.id, { scenes: reindex(scenes) });
+      const updated = await api.improveScene(project.id, selected.id, improveHint);
+      const improved = updated.scenes.find((scene) => scene.id === selected.id);
+      if (improved) {
+        setScenes((current) => current.map((scene) => (scene.id === selected.id
+          ? { ...scene, narration: improved.narration, imagePrompt: improved.imagePrompt, status: "draft", imagePath: undefined, audioPath: undefined, videoPath: undefined }
+          : scene)));
+      }
+      setImproveHint("");
+    } catch {
+      // Сообщение об ошибке показывает корневой компонент.
+    } finally {
+      setImproving(false);
+    }
   };
   const save = async () => {
     setSaving(true);
@@ -1669,6 +1692,10 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                     <Copy size={14} />
                     Копировать
                   </button>
+                  <button className="ghost-button" disabled={improving} onClick={() => void improveSelected()}>
+                    <WandSparkles size={14} />
+                    {improving ? "AI улучшает…" : "Улучшить через AI"}
+                  </button>
                   <button className="danger-button" onClick={() => removeScene(selected.id)}>
                     <Trash2 size={14} />
                     Удалить
@@ -1731,6 +1758,9 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
               </Field>
               <Field label="ПРОМПТ АНИМАЦИИ / ВИДЕО">
                 <textarea rows={4} value={selected.animationPrompt} onChange={(event) => updateScene({ animationPrompt: event.target.value })} placeholder="Движение камеры и объектов в кадре" />
+              </Field>
+              <Field label="ЧТО ПОПРАВИТЬ В СЦЕНЕ (ДЛЯ AI)" hint="Опишите словами — модель перепишет текст озвучки и промпт кадра с учётом соседних сцен.">
+                <input value={improveHint} onChange={(event) => setImproveHint(event.target.value)} placeholder="Например: «жёстче формулировку», «крупный план лица», «добавь цифру»" />
               </Field>
             </section>
           )}
@@ -2728,7 +2758,7 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
-  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" });
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-opus-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" });
   const [apiKey, setApiKey] = useState("");
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");

@@ -32,6 +32,7 @@ const api: DesktopApi = {
   testGoogleConnection: () => ipcRenderer.invoke("google:test"),
   createCharacterReference: (projectId) => ipcRenderer.invoke("projects:character-reference", projectId),
   assembleProject: (projectId) => ipcRenderer.invoke("projects:assemble", projectId),
+  improveScene: (projectId, sceneId, instructions) => ipcRenderer.invoke("projects:improve-scene", projectId, sceneId, instructions),
   mediaUrl: (path) => `gw-media://${encodeURIComponent(path)}`,
   getYouTubeSettings: () => ipcRenderer.invoke("youtube:get-settings"),
   saveYouTubeSettings: (input) => ipcRenderer.invoke("youtube:save-settings", input),

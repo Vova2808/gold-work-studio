@@ -85,8 +85,8 @@ export class VeoClient {
         input,
         response_format: { type: "video", aspect_ratio: ratio, delivery: "uri" },
         generation_config: { video_config: { task: sourceImage ? "image_to_video" : "text_to_video" } },
-        // Без сохранения состояния и фона: нам нужен один готовый клип за один вызов.
-        store: false,
+        // store обязателен при delivery=uri (иначе 400); фон и стрим не нужны — берём готовый клип за один вызов.
+        store: true,
         background: false,
         stream: false
       })

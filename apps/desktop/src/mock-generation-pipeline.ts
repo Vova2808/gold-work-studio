@@ -4,8 +4,31 @@ import { ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type Qu
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer } from "./standard-renderer.js";
 import { AnyModelClient } from "./anymodel-client.js";
+import { normalizeImageAspect } from "./media-utils.js";
 import { VoicerClient } from "./voicer-client.js";
 import { VeoClient } from "./veo-client.js";
+
+/**
+ * Финальный промпт кадра = сюжет сцены + единый стиль + формат + технические запреты.
+ * Модель видит только эту строку, поэтому всё, что должно повторяться от сцены к сцене, живёт здесь.
+ */
+function buildImagePrompt(project: Project, scene: Scene): string {
+  const framing = project.aspectRatio === "9:16"
+    ? "Vertical 9:16 full-frame composition, subject centered, safe margins top and bottom"
+    : project.aspectRatio === "1:1"
+      ? "Square 1:1 composition, subject centered"
+      : "Wide cinematic 16:9 composition, full widescreen framing, horizon respected";
+  const style = project.settings.image.style.trim();
+  const references = project.settings.image.references.filter((item) => item.trim().length > 0);
+  return [
+    scene.imagePrompt.trim(),
+    style ? `Style: ${style}` : "",
+    framing,
+    references.length > 0 ? "Keep the character from the reference image identical: same face, hair, body type and clothing." : "",
+    "High detail, natural lighting, professional photography or illustration quality.",
+    "Strictly no text, no captions, no watermarks, no logos, no UI elements, no borders, no collage, no split frames."
+  ].filter(Boolean).join("\n");
+}
 
 export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
   concurrency: 4,
@@ -597,11 +620,13 @@ export class MockGenerationPipeline {
       if (this.anyModel && (await this.anyModel.configured()) && scene.imagePrompt.trim().length > 0) {
         // Размеры, которые принимает шлюз AnyModel (Gemini сам приводит к родным 16:9/9:16/1:1).
         const size = project.aspectRatio === "9:16" ? "1080x1920" : project.aspectRatio === "1:1" ? "1024x1024" : "1920x1080";
-        const style = project.settings.image.style.trim();
-        const prompt = style ? `${scene.imagePrompt}\nСтиль: ${style}` : scene.imagePrompt;
+        const prompt = buildImagePrompt(project, scene);
         // С референсами клиент сам переключится на модель с поддержкой опорных изображений (gpt-image).
         const references = project.settings.image.references.filter((ref) => ref.trim().length > 0);
-        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(prompt, size, references));
+        const raw = await this.anyModel.generateImage(prompt, size, references);
+        // Кадр всегда приводим к формату проекта: у GPT Image нет 16:9, он отдаёт 3:2 и кадр выглядит квадратным.
+        const framed = await normalizeImageAspect(raw, project.aspectRatio);
+        return this.storage.saveGeneratedImage(project, scene, framed);
       }
       this.emit("warn", "queue.task.placeholder_used", {
         ...this.taskDetails(task),

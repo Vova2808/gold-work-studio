@@ -250,6 +250,19 @@ function registerIpc(): void {
   handleIpc("google:clear-key", () => googleStore.clearKey());
   handleIpc("google:test", () => veoClient.test());
   handleIpc("projects:assemble", (_event, projectId: string) => pipeline.assembleOnly(projectId));
+  handleIpc("projects:improve-scene", async (_event, projectId: string, sceneId: string, instructions: string) => {
+    const project = await projectService.get(projectId);
+    if (!project) throw new Error("Проект не найден");
+    const scene = project.scenes.find((item) => item.id === sceneId);
+    if (!scene) throw new Error("Сцена не найдена");
+    if (!await anyModelClient.configured()) throw new Error("Подключите AnyModel API в настройках");
+    const improved = await anyModelClient.improveScene(project, scene, instructions);
+    return projectService.mutate(projectId, (current) => ({
+      scenes: current.scenes.map((item) => (item.id === sceneId
+        ? { ...item, narration: improved.narration, imagePrompt: improved.imagePrompt }
+        : item))
+    }));
+  });
   handleIpc("projects:character-reference", async (_event, projectId: string) => {
     const project = await projectService.get(projectId);
     if (!project) throw new Error("Проект не найден");

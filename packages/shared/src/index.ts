@@ -412,6 +412,8 @@ export interface DesktopApi {
   createCharacterReference(projectId: string): Promise<Project>;
   /** Пересобирает только Final.mp4 из готовых материалов (без перегенерации картинок и озвучки). */
   assembleProject(projectId: string): Promise<QueueTask[]>;
+  /** Переписывает текст и промпт одной сцены по пожеланию пользователя. */
+  improveScene(projectId: string, sceneId: string, instructions: string): Promise<Project>;
   /** URL для показа локального медиафайла проекта в интерфейсе (gw-media://). */
   mediaUrl(path: string): string;
   getYouTubeSettings(): Promise<YouTubeSettings>;

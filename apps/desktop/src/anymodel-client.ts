@@ -243,10 +243,22 @@ export class AnyModelClient {
         let batchContent: string;
         try {
           batchContent = await this.chat(settings.textModel, [
-            { role: "system", content: "Ты сценарист коротких видео. В плане могут быть транскрипт-образец (transcriptSample) и комментарии зрителей (audienceComments) — используй их приёмы, ритм и желания аудитории, но пиши полностью самостоятельный текст, не копируя фразы дословно. Верни только JSON-массив без markdown и без пояснений." },
+            { role: "system", content: SCENE_WRITER_SYSTEM },
             {
               role: "user",
-              content: `План улучшенного ролика: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nВсего сцен: ${targetScenes}, каждая длится ${sceneDurationSeconds} секунд — одна короткая фраза озвучки (~12–14 слов) и короткий imagePrompt (без текста в кадре).\n${last ? `Последняя готовая фраза: «${last}». Продолжай по смыслу и без повторов.` : "Начни с сильного хука."}\nСгенерируй сцены с ${from} по ${from + count - 1}. Верни ровно ${count} элементов JSON-массивом: [{"narration":"...","imagePrompt":"..."}]`
+              content: [
+                `# План ролика`,
+                JSON.stringify(planBrief),
+                ``,
+                `# Задание`,
+                `Язык озвучки: ${language}. Всего сцен в ролике: ${targetScenes}, каждая ≈${sceneDurationSeconds} секунд.`,
+                `Сейчас нужны сцены с ${from} по ${from + count - 1} — ровно ${count} штук.`,
+                `Позиция в ролике: ${describePosition(from, targetScenes)}.`,
+                last ? `Последняя написанная фраза: «${last}». Продолжай мысль дальше, без повторов и без пересказа сказанного.` : `Это начало ролика — первая фраза обязана цеплять с первой секунды.`,
+                ``,
+                `# Формат ответа`,
+                `Только JSON-массив из ${count} объектов: [{"narration":"...","imagePrompt":"..."}]`
+              ].join("\n")
             }
           ], 6_000, "low");
         } catch (error) {
@@ -394,6 +406,40 @@ export class AnyModelClient {
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.byteLength === 0) throw new Error("AnyModel вернул пустую озвучку");
     return buffer;
+  }
+
+  /** Переписывает одну сцену по пожеланию пользователя, сохраняя место сцены в сценарии. */
+  async improveScene(project: Project, scene: Scene, instructions: string): Promise<{ narration: string; imagePrompt: string }> {
+    const settings = await this.store.publicSettings();
+    const neighbours = project.scenes
+      .filter((item) => Math.abs(item.order - scene.order) === 1)
+      .map((item) => `${item.order + 1}: ${item.narration}`);
+    const content = await this.chat(settings.textModel, [
+      { role: "system", content: SCENE_WRITER_SYSTEM },
+      {
+        role: "user",
+        content: [
+          `# Контекст ролика`,
+          `Тема: ${project.topic}. Язык озвучки: ${project.language}. Стиль кадров: ${project.settings.image.style || "не задан"}.`,
+          neighbours.length > 0 ? `Соседние сцены:\n${neighbours.join("\n")}` : "",
+          ``,
+          `# Текущая сцена ${scene.order + 1}`,
+          `narration: ${scene.narration}`,
+          `imagePrompt: ${scene.imagePrompt}`,
+          ``,
+          `# Что нужно изменить`,
+          instructions.trim() || "Усилить сцену: сделать текст живее и конкретнее, а кадр — выразительнее и точнее по смыслу.",
+          ``,
+          `# Формат ответа`,
+          `Только JSON-объект: {"narration":"...","imagePrompt":"..."} — сцена должна остаться на своём месте по смыслу.`
+        ].filter(Boolean).join("\n")
+      }
+    ], 1_500, "low");
+    const parsed = extractJson<{ narration?: string; imagePrompt?: string }>(content, "улучшении сцены");
+    return {
+      narration: parsed.narration?.trim() || scene.narration,
+      imagePrompt: parsed.imagePrompt?.trim() || scene.imagePrompt
+    };
   }
 
   /** Портрет главного героя по сценарию: текстовая модель описывает персонажа, дешёвая модель рисует. */
@@ -588,6 +634,36 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+/** Системный промпт сценариста: удержание, ритм, конкретика и жёсткие требования к промптам кадров. */
+const SCENE_WRITER_SYSTEM = [
+  "Ты — сценарист вирусных YouTube-роликов и художник-постановщик в одном лице.",
+  "",
+  "ОЗВУЧКА (narration):",
+  "1. Одна сцена = одна законченная мысль, 12–16 слов, разговорный живой язык, короткие предложения.",
+  "2. Пиши ГОТОВЫЙ текст для диктора: без ремарок, пометок, номеров сцен и слов «сцена», «кадр», «голос за кадром».",
+  "3. Держи удержание: конкретика вместо общих слов, факты, цифры, детали, приёмы «а вот что было дальше», микро-интрига в конце каждой 3–4 сцены.",
+  "4. Нельзя повторять одну мысль дважды и нельзя пересказывать уже сказанное другими словами.",
+  "5. Если в плане есть transcriptSample и audienceComments — бери оттуда приёмы, ритм и запросы аудитории, но текст пиши полностью свой, без дословных заимствований и чужого брендинга.",
+  "",
+  "КАДР (imagePrompt):",
+  "6. Пиши промпт НА АНГЛИЙСКОМ, одним предложением-описанием: субъект, действие, окружение, свет, ракурс, настроение.",
+  "7. Кадр должен показывать то, о чём говорит narration этой сцены, а не абстракцию.",
+  "8. Повторяющегося героя описывай ОДИНАКОВО в каждой сцене (возраст, внешность, одежда) — это критично для консистентности.",
+  "9. Запрещено: текст, надписи, субтитры, логотипы, интерфейсы, коллажи, рамки, водяные знаки в кадре.",
+  "10. Не указывай в промпте стиль и соотношение сторон — приложение добавит их само.",
+  "",
+  "Верни только JSON-массив без markdown и без пояснений."
+].join("\n");
+
+/** Подсказка модели, в какой части ролика находится батч сцен: начало держит, середина развивает, финал закрывает. */
+function describePosition(from: number, total: number): string {
+  const share = from / Math.max(1, total);
+  if (share < 0.15) return "начало — хук и обещание, ради чего смотреть дальше";
+  if (share < 0.75) return "основная часть — раскрытие по шагам, факты и примеры, микро-интриги для удержания";
+  if (share < 0.92) return "кульминация — самый сильный вывод или поворот";
+  return "финал — короткий вывод и призыв к действию (подписка/комментарий), без затянутого прощания";
 }
 
 /** «Память режиссёра»: список уже сделанных роликов, чтобы новые темы не повторялись. */

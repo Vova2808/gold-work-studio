@@ -16,7 +16,7 @@ const clone = <T,>(value: T): T => structuredClone(value);
 let projects: Project[] = [];
 let tasks: QueueTask[] = [];
 let chatTopics: ChatTopic[] = [];
-let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" };
+let anyModelSettings = { configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-opus-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" };
 let youtubeSettings = { configured: false, cookiesFileConfigured: false, cookiesFileName: undefined as string | undefined, workDirConfigured: false, workDirPath: undefined as string | undefined };
 
 function demoScenes(topic: string): Scene[] {
@@ -267,6 +267,9 @@ export const fallbackApi: DesktopApi = {
   },
   async assembleProject() {
     throw new Error("Пересборка доступна только в приложении");
+  },
+  async improveScene() {
+    throw new Error("Улучшение сцены доступно только в приложении с ключом AnyModel");
   },
   async getGoogleSettings() { return { configured: false, veoModel: "gemini-omni-flash-preview" }; },
   async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "gemini-omni-flash-preview" }; },

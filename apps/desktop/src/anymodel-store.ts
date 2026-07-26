@@ -5,7 +5,7 @@ import type { AnyModelSettings, SaveAnyModelSettingsInput } from "@gold-work/sha
 
 const defaults: Omit<AnyModelSettings, "configured"> = {
   baseUrl: "https://anymodel.org/v1",
-  textModel: "cc/claude-sonnet-5",
+  textModel: "cc/claude-opus-5",
   imageModel: "ag/gemini-3.1-flash-image",
   videoModel: "xai/grok-imagine-video",
   ttsModel: "google-tts",
