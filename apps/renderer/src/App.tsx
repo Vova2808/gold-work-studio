@@ -1367,53 +1367,32 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
                   value={settings.video.animationPercent}
                   onChange={(event) => setSettings({ video: { ...settings.video, animationPercent: Number(event.target.value) } })}
                 />
-                <small>Примерно {Math.max(1, Math.round((draft.scenes.length * settings.video.animationPercent) / 100))} из {draft.scenes.length} сцен получат видео.</small>
+                <small>
+                  {draft.scenes.length === 0
+                    ? "Соберите сценарий — и здесь появится, сколько сцен получат видео."
+                    : `Примерно ${Math.max(1, Math.round((draft.scenes.length * settings.video.animationPercent) / 100))} из ${draft.scenes.length} сцен получат видео, остальные — картинка с движением камеры.`}
+                </small>
               </Field>
-            </>
-          )}
-          {settings.video.enabled && (
-            <>
-              <Field label="ПРОВАЙДЕР ВИДЕО">
-                <select value={settings.video.provider} onChange={(event) => setSettings({ video: { ...settings.video, provider: event.target.value as ProjectSettings["video"]["provider"] } })}>
-                  <option value="mock-video">Локальный mock</option>
-                  <option value="anymodel-video">AnyModel API</option>
-                  <option value="veo">Veo</option>
-                </select>
-              </Field>
-              <Field label="МОДЕЛЬ">
-                <select
-                  value={settings.video.model}
-                  onChange={(event) =>
-                    setSettings({
-                      video: { ...settings.video, model: event.target.value },
-                    })
-                  }
-                >
-                  <option>Mock Motion 1</option>
-                  <option>Veo 3.1 Lite</option>
-                  <option>Veo 3.1 Fast</option>
-                  <option>xai/grok-imagine-video</option>
-                </select>
-              </Field>
-              <ToggleRow label="Анимация от первого кадра" checked={settings.video.startFrame} onChange={(startFrame) => setSettings({ video: { ...settings.video, startFrame } })} />
-              <ToggleRow label="Парные кадры (Start + End)" checked={settings.video.pairedFrames} onChange={(pairedFrames) => setSettings({ video: { ...settings.video, pairedFrames } })} />
-              <ToggleRow label="Без музыки/звука в видео" checked={settings.video.muteSource} onChange={(muteSource) => setSettings({ video: { ...settings.video, muteSource } })} />
-              <Field label={`ГРОМКОСТЬ ЗВУКА: ${settings.video.sourceVolume}%`}>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={settings.video.sourceVolume}
-                  onChange={(event) =>
-                    setSettings({
-                      video: {
-                        ...settings.video,
-                        sourceVolume: Number(event.target.value),
-                      },
-                    })
-                  }
-                />
-              </Field>
+              <ToggleRow label="Анимация от первого кадра" hint="Кадр сцены становится первым кадром видео — движение продолжает картинку, а не рисует новую." checked={settings.video.startFrame} onChange={(startFrame) => setSettings({ video: { ...settings.video, startFrame } })} />
+              <ToggleRow label="Без звука из видео" hint="Модель добавляет к клипу свой звук. Обычно его убирают, чтобы слышать только озвучку сцены." checked={settings.video.muteSource} onChange={(muteSource) => setSettings({ video: { ...settings.video, muteSource } })} />
+              {!settings.video.muteSource && (
+                <Field label={`ГРОМКОСТЬ ЗВУКА ИЗ ВИДЕО: ${settings.video.sourceVolume}%`} hint="Насколько слышен звук, сгенерированный видео-моделью, под озвучкой сцены.">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={settings.video.sourceVolume}
+                    onChange={(event) =>
+                      setSettings({
+                        video: {
+                          ...settings.video,
+                          sourceVolume: Number(event.target.value),
+                        },
+                      })
+                    }
+                  />
+                </Field>
+              )}
             </>
           )}
         </SettingsPanel>
