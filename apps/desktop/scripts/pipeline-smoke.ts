@@ -41,12 +41,21 @@ try {
     id: "scene_smoke_2",
     order: 1,
     title: "Вторая тестовая сцена",
-    imagePrompt: "Холодный кинематографичный кадр"
+    imagePrompt: "Холодный кинематографичный кадр",
+    transition: "fade",
+    kenBurnsDirection: "out"
+  };
+  const excludedScene: Scene = {
+    ...scene,
+    id: "scene_smoke_3",
+    order: 2,
+    title: "Сцена вне сборки",
+    includeInAssembly: false
   };
   const musicPath = join(root, "bgm.wav");
   await writeFile(musicPath, silentWav(2));
   await projectService.update(project.id, {
-    scenes: [scene, secondScene],
+    scenes: [scene, secondScene, excludedScene],
     settings: {
       ...project.settings,
       subtitles: { ...project.settings.subtitles, enabled: true },

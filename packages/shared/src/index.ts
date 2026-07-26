@@ -76,6 +76,12 @@ export interface Scene {
   narration: string;
   durationSeconds: number;
   status: SceneStatus;
+  /** false — сцена исключена из финальной сборки (Final.mp4), но остаётся в проекте. */
+  includeInAssembly?: boolean;
+  /** Переход к следующей сцене в финальной сборке. */
+  transition?: "none" | "fade";
+  /** Движение камеры сцены: по настройке проекта (auto), приближение, отдаление или без движения. */
+  kenBurnsDirection?: "auto" | "in" | "out" | "off";
   imagePath?: string;
   videoPath?: string;
   audioPath?: string;

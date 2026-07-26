@@ -1365,6 +1365,10 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
           : scene,
       ),
     );
+  // Монтажные свойства (участие в сборке, переход, Ken Burns) не трогают сгенерированные медиа —
+  // в отличие от updateScene, который сбрасывает сцену в draft.
+  const updateSceneMeta = (patch: Partial<Scene>) =>
+    setScenes((current) => current.map((scene) => (scene.id === selectedId ? { ...scene, ...patch } : scene)));
   const removeScene = (id: string) => {
     const next = reindex(scenes.filter((scene) => scene.id !== id));
     setScenes(next);
@@ -1445,7 +1449,7 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                 <div>
                   <strong>{scene.title}</strong>
                   <small>
-                    {scene.durationSeconds} сек · {scene.status}
+                    {scene.durationSeconds} сек · {scene.status}{scene.includeInAssembly === false ? " · вне сборки" : ""}
                   </small>
                 </div>
                 <div className="scene-mini-actions">
@@ -1509,6 +1513,27 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                       })
                     }
                   />
+                </Field>
+              </div>
+              <ToggleRow
+                label="Сцена участвует в сборке"
+                checked={selected.includeInAssembly !== false}
+                onChange={(included) => updateSceneMeta({ includeInAssembly: included })}
+              />
+              <div className="scene-form-grid">
+                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ">
+                  <select value={selected.transition ?? "none"} onChange={(event) => updateSceneMeta({ transition: event.target.value as Scene["transition"] })}>
+                    <option value="none">Без перехода</option>
+                    <option value="fade">Затухание</option>
+                  </select>
+                </Field>
+                <Field label="ДВИЖЕНИЕ КАМЕРЫ (KEN BURNS)">
+                  <select value={selected.kenBurnsDirection ?? "auto"} onChange={(event) => updateSceneMeta({ kenBurnsDirection: event.target.value as Scene["kenBurnsDirection"] })}>
+                    <option value="auto">Как в проекте</option>
+                    <option value="in">Приближение</option>
+                    <option value="out">Отдаление</option>
+                    <option value="off">Без движения</option>
+                  </select>
                 </Field>
               </div>
               <Field label="ТЕКСТ ОЗВУЧКИ">

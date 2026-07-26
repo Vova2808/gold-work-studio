@@ -40,7 +40,7 @@ export class StandardRenderer {
     return Boolean(executablePath());
   }
 
-  async renderScene(project: Project, scene: Scene): Promise<string> {
+  async renderScene(project: Project, scene: Scene, fadeInSeconds = 0): Promise<string> {
     const imagePath = scene.imagePath;
     if (!imagePath) throw new Error(`У сцены ${scene.order + 1} нет изображения`);
     const audioPath = scene.audioPath ?? await this.storage.createPlaceholderAudio(project, scene);
@@ -49,13 +49,20 @@ export class StandardRenderer {
     const { width, height } = videoSize(project);
     const duration = Math.max(1, scene.durationSeconds);
     const base = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
-    const motion = project.settings.assembly.kenBurns
-      ? `,zoompan=z='min(zoom+0.0006,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
+    // Направление сцены важнее настройки проекта: off выключает движение, in/out задают его явно.
+    const direction = scene.kenBurnsDirection ?? "auto";
+    const kenBurnsActive = direction === "off" ? false : direction === "auto" ? project.settings.assembly.kenBurns : true;
+    const zoomExpression = direction === "out"
+      ? "if(lte(on,1),1.08,max(zoom-0.0006,1.001))"
+      : "min(zoom+0.0006,1.08)";
+    const motion = kenBurnsActive
+      ? `,zoompan=z='${zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
       : "";
-    const fadeDuration = Math.min(0.35, duration / 4);
-    const fades = project.settings.assembly.fadeTransitions
-      ? `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${Math.max(0, duration - fadeDuration)}:d=${fadeDuration}`
-      : "";
+    // Затухания: общие плавные переходы проекта + личный переход сцены (fade к следующей) + вход после перехода.
+    const globalFade = project.settings.assembly.fadeTransitions ? Math.min(0.35, duration / 4) : 0;
+    const fadeInDuration = Math.max(globalFade, Math.min(fadeInSeconds, duration / 3));
+    const fadeOutDuration = Math.max(globalFade, scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
     let subtitles = "";
     if (project.settings.subtitles.enabled && scene.narration.trim().length > 0) {
       const assPath = join(dirname(outputPath), "subtitles.ass");
@@ -88,9 +95,15 @@ export class StandardRenderer {
   async render(project: Project): Promise<string> {
     await this.storage.ensureProject(project);
     if (project.scenes.length === 0) throw new Error("В проекте нет сцен");
+    const included = [...project.scenes]
+      .sort((a, b) => a.order - b.order)
+      .filter((scene) => scene.includeInAssembly !== false);
+    if (included.length === 0) throw new Error("Все сцены исключены из сборки — включите хотя бы одну в редакторе сценария");
     const clips: string[] = [];
-    for (const scene of [...project.scenes].sort((a, b) => a.order - b.order)) {
-      clips.push(await this.renderScene(project, scene));
+    let fadeInSeconds = 0;
+    for (const scene of included) {
+      clips.push(await this.renderScene(project, scene, fadeInSeconds));
+      fadeInSeconds = scene.transition === "fade" ? 0.5 : 0;
     }
     const finalPath = this.storage.finalPath(project.id);
     const musicPath = project.settings.music.path?.trim();
