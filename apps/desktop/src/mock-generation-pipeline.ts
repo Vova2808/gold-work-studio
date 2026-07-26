@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
 import { ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type QueueTask, type Scene, type TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
@@ -538,7 +539,9 @@ export class MockGenerationPipeline {
         const size = project.aspectRatio === "9:16" ? "1080x1920" : project.aspectRatio === "1:1" ? "1024x1024" : "1920x1080";
         const style = project.settings.image.style.trim();
         const prompt = style ? `${scene.imagePrompt}\nСтиль: ${style}` : scene.imagePrompt;
-        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(prompt, size));
+        // С референсами клиент сам переключится на модель с поддержкой опорных изображений (gpt-image).
+        const references = project.settings.image.references.filter((ref) => ref.trim().length > 0);
+        return this.storage.saveGeneratedImage(project, scene, await this.anyModel.generateImage(prompt, size, references));
       }
       this.emit("warn", "queue.task.placeholder_used", {
         ...this.taskDetails(task),
@@ -559,7 +562,10 @@ export class MockGenerationPipeline {
     }
     if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
       if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
-      return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio));
+      const startFrame = project.settings.video.startFrame && scene.imagePath
+        ? await readFile(scene.imagePath).catch(() => undefined)
+        : undefined;
+      return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio, startFrame));
     }
     if (task.kind === "video") return this.renderer.renderScene(project, scene);
     throw new Error(`Неизвестный тип задачи: ${task.kind}`);

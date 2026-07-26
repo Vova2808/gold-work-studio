@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext } from "@gold-work/shared";
+import { readFile } from "node:fs/promises";
+import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext, YouTubeChannelContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 
@@ -137,6 +138,60 @@ export class AnyModelClient {
     };
   }
 
+  /** Анализ КАНАЛА: ниша, аудитория, что заходит по таймлайну и комментариям — и ровно 3 темы для новых роликов. */
+  async analyzeYouTubeChannel(context: YouTubeChannelContext, input: AnalyzeReferenceInput): Promise<ReferenceAnalysis> {
+    const settings = await this.store.publicSettings();
+    const compact = {
+      channel: {
+        title: context.title,
+        description: context.description.slice(0, 4_000),
+        subscribers: context.subscribers,
+        totalViews: context.totalViews,
+        videoCount: context.videoCount
+      },
+      videosTimeline: context.videos.slice(0, 100),
+      topComments: context.topComments.slice(0, 60)
+    };
+    const content = await this.chat(settings.textModel, [
+      {
+        role: "system",
+        content: "Ты YouTube-аналитик ниш и каналов. Верни только JSON без markdown. По статистике канала, таймлайну роликов (просмотры, даты, длительности) и комментариям объясни, что работает в нише и чего хотят зрители. Видеокадры не анализировались — не утверждай обратное."
+      },
+      {
+        role: "user",
+        content: `Данные канала YouTube:\n${JSON.stringify(compact)}\nПожелание пользователя: ${input.instructions || "проанализируй канал и нишу"}\nЯзык: ${input.language || "Русский"}\nВерни JSON БЕЗ поля scenes: niche,targetAudience,hook(главный вывод — что цепляет зрителей этой ниши),structure[](что повторяется в успешных роликах канала),strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds(оптимальная длительность по таймлайну),topics[{title,hook,angle}] — ровно 3 темы для НОВЫХ роликов, опираясь на желания зрителей из комментариев и самые успешные ролики.`
+      }
+    ], 6_000, "medium");
+    const plan = JSON.parse(content.replace(/^```json\s*|```$/g, "").trim()) as Partial<ReferenceAnalysis> & { topics?: Array<Partial<SuggestedTopic>> };
+    const suggestedTopics: SuggestedTopic[] = (Array.isArray(plan.topics) ? plan.topics : [])
+      .map((topic) => ({
+        title: typeof topic?.title === "string" ? topic.title : "",
+        hook: typeof topic?.hook === "string" ? topic.hook : "",
+        angle: typeof topic?.angle === "string" ? topic.angle : ""
+      }))
+      .filter((topic) => topic.title.trim().length > 0)
+      .slice(0, 3);
+    return {
+      sourceUrl: input.url,
+      sourceTitle: context.title,
+      niche: plan.niche || "YouTube-канал",
+      targetAudience: plan.targetAudience || "Аудитория канала",
+      hook: plan.hook || "Главный вывод по нише появится после уточнения",
+      structure: toStringList(plan.structure),
+      strengths: toStringList(plan.strengths),
+      improvements: toStringList(plan.improvements),
+      suggestedAngle: plan.suggestedAngle || input.instructions || "Стратегия по данным канала",
+      suggestedTitle: plan.suggestedTitle || `Новый ролик для «${context.title}»`,
+      recommendedDurationSeconds: plan.recommendedDurationSeconds || 300,
+      language: input.language || "Русский",
+      instructions: input.instructions,
+      scenes: [],
+      provider: `anymodel:${settings.textModel}+youtube-channel`,
+      youtubeChannelContext: context,
+      suggestedTopics
+    };
+  }
+
   /** Пересобирает сцены существующего разбора под заданную пользователем длину (сцены по 5 секунд). */
   async regenerateScenes(analysis: ReferenceAnalysis, targetSeconds: number, onProgress?: (done: number, total: number) => void): Promise<ReferenceAnalysis> {
     const sceneDurationSeconds = 5;
@@ -215,7 +270,8 @@ export class AnyModelClient {
     const response = await this.request("/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify({
-        model: settings.textModel,
+        // Аудио умеют только Gemini-модели; textModel (Claude) input_audio не принимает.
+        model: settings.transcriptionModel,
         messages: [
           {
             role: "system",
@@ -283,11 +339,18 @@ export class AnyModelClient {
     };
   }
 
-  async generateImage(prompt: string, size: string): Promise<Buffer> {
+  async generateImage(prompt: string, size: string, references: string[] = []): Promise<Buffer> {
     const settings = await this.store.publicSettings();
+    const refs = references.map((ref) => ref.trim()).filter(Boolean).slice(0, 3);
+    // С референсами нужна модель с поддержкой опорных изображений (gpt-image); без них — дешёвый Gemini.
+    const model = refs.length > 0 ? settings.imageRefModel : settings.imageModel;
+    const image = refs.length > 0 ? await referencePayload(refs) : undefined;
     const response = await this.request("/v1/images/generations", {
       method: "POST",
-      body: JSON.stringify({ model: settings.imageModel, prompt, n: 1, size, quality: "auto", background: "auto", image_detail: "high", output_format: "png" })
+      body: JSON.stringify({
+        model, prompt, n: 1, size, quality: "auto", background: "auto", image_detail: "high", output_format: "png",
+        ...(image !== undefined ? { image } : {})
+      })
     });
     if (!response.ok) throw new Error(await this.error(response));
     const data = await response.json() as { data?: Array<{ b64_json?: string; url?: string }> };
@@ -322,9 +385,17 @@ export class AnyModelClient {
     return buffer;
   }
 
-  async generateVideo(prompt: string, duration: number, aspectRatio: string): Promise<Buffer> {
+  async generateVideo(prompt: string, duration: number, aspectRatio: string, sourceImage?: Buffer): Promise<Buffer> {
     const settings = await this.store.publicSettings();
-    const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({ model: settings.videoModel, prompt, duration: [5, 8, 10, 15].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a), resolution: "720p", aspect_ratio: aspectRatio }) });
+    const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({
+      model: settings.videoModel,
+      prompt,
+      duration: [5, 8, 10, 15].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a),
+      resolution: "720p",
+      aspect_ratio: aspectRatio,
+      // Задел под image-to-video: стартовый кадр сцены; точное имя параметра сверим при подключении видео-провайдера.
+      ...(sourceImage ? { input_image: `data:image/png;base64,${sourceImage.toString("base64")}` } : {})
+    }) });
     if (!create.ok) throw new Error(await this.error(create));
     const ticket = create.headers.get("x-9router-connection-id");
     const created = await create.json() as { request_id?: string; id?: string };
@@ -450,6 +521,17 @@ export class AnyModelClient {
       return {};
     }
   }
+}
+
+/** Референсы для images/generations: URL идёт как есть, локальный файл превращается в data:URI. */
+async function referencePayload(references: string[]): Promise<string | string[]> {
+  const payloads = await Promise.all(references.map(async (ref) => {
+    if (/^https?:\/\//i.test(ref) || ref.startsWith("data:")) return ref;
+    const data = await readFile(ref);
+    const mime = /\.jpe?g$/i.test(ref) ? "image/jpeg" : /\.webp$/i.test(ref) ? "image/webp" : "image/png";
+    return `data:${mime};base64,${data.toString("base64")}`;
+  }));
+  return payloads.length === 1 ? payloads[0]! : payloads;
 }
 
 /** Нейроголоса Edge TTS по языкам проекта — используются, когда в настройках указан просто "edge-tts". */

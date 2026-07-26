@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
+import { parseYouTubeChannelRef } from "@gold-work/shared";
 import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
@@ -88,6 +89,14 @@ function registerIpc(): void {
   );
   handleIpc("director:analyze-reference", async (event, input: AnalyzeReferenceInput) => {
     const stage = (text: string) => event.sender.send("director:progress", text);
+    const channelRef = parseYouTubeChannelRef(input.url);
+    if (channelRef) {
+      if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
+      stage("Получаю данные канала через YouTube API: статистика, таймлайн роликов, комментарии…");
+      const channelContext = await youtubeClient.collectChannel(channelRef);
+      stage(`Канал «${channelContext.title}»: ${channelContext.subscribers.toLocaleString("ru-RU")} подписчиков, роликов в таймлайне: ${channelContext.videos.length}. Анализирую нишу и готовлю темы…`);
+      return anyModelClient.analyzeYouTubeChannel(channelContext, input);
+    }
     if (/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(input.url)) {
       if (!await anyModelClient.configured()) throw new Error("Для YouTube-разбора сначала подключите AnyModel API в настройках");
       stage("Получаю данные ролика и канала через YouTube API: статистика, комментарии, топ-ролики…");
@@ -99,7 +108,13 @@ function registerIpc(): void {
     return await anyModelClient.configured() ? anyModelClient.analyzeReference(input) : projectService.analyzeReference(input);
   });
   handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
-    analysis.youtubeContext
+    analysis.youtubeChannelContext
+      ? anyModelClient.analyzeYouTubeChannel(analysis.youtubeChannelContext, {
+          url: analysis.sourceUrl,
+          language: analysis.language,
+          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim()
+        })
+      : analysis.youtubeContext
       ? anyModelClient.analyzeYouTube(analysis.youtubeContext, {
           url: analysis.sourceUrl,
           language: analysis.language,
@@ -232,13 +247,14 @@ function registerIpc(): void {
       }
     });
   });
-  handleIpc("app:info", () => ({
+  handleIpc("app:info", async () => ({
     version: app.getVersion(),
     dataPath,
     workspacePath: projectStorage.rootPath,
     logPath: logger.path,
     realtimeUrl,
-    mockMode: true,
+    // Реальные провайдеры активны, когда сохранён ключ AnyModel; без него работают заглушки.
+    mockMode: !(await anyModelStore.publicSettings()).configured,
     ffmpegAvailable: standardRenderer.isAvailable(),
     queuePolicy: pipeline.policy
   } satisfies Awaited<ReturnType<DesktopApi["getAppInfo"]>>));

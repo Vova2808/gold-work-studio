@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
-import { evaluateFreeSpace, formatBytes, parseYouTubeVideoId, type TranscriptSegment, type YouTubeAnalysisContext } from "@gold-work/shared";
+import { evaluateFreeSpace, formatBytes, parseYouTubeVideoId, type TranscriptSegment, type YouTubeAnalysisContext, type YouTubeChannelContext, type YouTubeChannelRef, type YouTubeChannelVideoStat } from "@gold-work/shared";
 import { YouTubeStore } from "./youtube-store.js";
 
 type AudioTranscriber = (audio: Buffer, format: string) => Promise<TranscriptSegment[]>;
@@ -32,14 +32,14 @@ export class YouTubeClient {
     const video = asItems(videoResponse)[0] as YouTubeVideo | undefined;
     if (!video) throw new Error("YouTube не вернул данные ролика. Проверьте ссылку и доступ к видео.");
     const channelId = video.snippet.channelId;
-    const [channelResponse, comments, topVideos, transcriptResult] = await Promise.all([
-      this.api("channels", { part: "snippet,statistics", id: channelId }, key),
-      this.comments(videoId, key),
-      this.topVideos(channelId, key),
-      this.safeTranscript(url, videoId)
-    ]);
+    const channelResponse = await this.api("channels", { part: "snippet,statistics,contentDetails", id: channelId }, key);
     const channel = asItems(channelResponse)[0] as YouTubeChannel | undefined;
     if (!channel) throw new Error("YouTube не вернул статистику канала");
+    const [comments, topVideos, transcriptResult] = await Promise.all([
+      this.comments(videoId, key),
+      this.safeTopVideos(channel, key),
+      this.safeTranscript(url, videoId)
+    ]);
     return {
       videoId,
       title: video.snippet.title,
@@ -87,29 +87,97 @@ export class YouTubeClient {
     }
   }
 
-  private async topVideos(channelId: string, key: string): Promise<YouTubeAnalysisContext["topVideos"]> {
-    // Топ-ролики канала по просмотрам (реальные хиты), а не только последние загрузки.
-    const search = await this.api("search", {
-      part: "snippet",
-      channelId,
-      maxResults: "10",
-      order: "viewCount",
-      type: "video"
-    }, key);
-    const ids = asItems(search).map((item) => (item as SearchResult).id.videoId).filter(Boolean);
-    if (ids.length === 0) return [];
-    const details = await this.api("videos", { part: "snippet,statistics", id: ids.join(",") }, key);
-    return asItems(details).map((item) => {
-      const video = item as YouTubeVideo;
-      return {
-        id: video.id,
-        title: video.snippet.title,
-        publishedAt: video.snippet.publishedAt,
-        views: number(video.statistics.viewCount),
-        likes: number(video.statistics.likeCount),
-        commentCount: number(video.statistics.commentCount)
-      };
-    }).sort((a, b) => b.views - a.views);
+  /** Полный сбор данных КАНАЛА: статистика, таймлайн загрузок (до 100 роликов) и комментарии под хитами. */
+  async collectChannel(ref: YouTubeChannelRef): Promise<YouTubeChannelContext> {
+    const key = await this.requiredKey();
+    const channel = await this.channelByRef(ref, key);
+    const uploads = channel.contentDetails?.relatedPlaylists?.uploads;
+    const videos = uploads ? await this.uploadsVideoStats(uploads, key, 100).catch(() => []) : [];
+    const topForComments = [...videos].sort((a, b) => b.views - a.views).slice(0, 3);
+    const topComments: YouTubeChannelContext["topComments"] = [];
+    for (const video of topForComments) {
+      const comments = await this.comments(video.id, key).catch(() => []);
+      for (const comment of comments.slice(0, 15)) topComments.push({ videoTitle: video.title, ...comment });
+    }
+    return {
+      channelId: channel.id ?? "",
+      title: channel.snippet?.title ?? "Канал YouTube",
+      description: channel.snippet?.description ?? "",
+      subscribers: number(channel.statistics.subscriberCount),
+      totalViews: number(channel.statistics.viewCount),
+      videoCount: number(channel.statistics.videoCount),
+      videos,
+      topComments
+    };
+  }
+
+  private async channelByRef(ref: YouTubeChannelRef, key: string): Promise<YouTubeChannel> {
+    const attempts: Array<Record<string, string>> =
+      ref.kind === "id" ? [{ id: ref.value }]
+        : ref.kind === "handle" ? [{ forHandle: ref.value }]
+        : [{ forHandle: `@${ref.value}` }, { forUsername: ref.value }]; // /c/ и /user/: сначала как handle, затем как username
+    for (const params of attempts) {
+      try {
+        const response = await this.api("channels", { part: "snippet,statistics,contentDetails", ...params }, key);
+        const channel = asItems(response)[0] as YouTubeChannel | undefined;
+        if (channel) return channel;
+      } catch {
+        // пробуем следующий вариант обращения
+      }
+    }
+    throw new Error("YouTube не нашёл канал по этой ссылке. Проверьте адрес (@handle или /channel/UC…).");
+  }
+
+  /** Топ-ролики по просмотрам через плейлист загрузок (~2 единицы квоты вместо 100 у search.list). Сбой не роняет разбор. */
+  private async safeTopVideos(channel: YouTubeChannel, key: string): Promise<YouTubeAnalysisContext["topVideos"]> {
+    try {
+      const uploads = channel.contentDetails?.relatedPlaylists?.uploads;
+      if (!uploads) return [];
+      const stats = await this.uploadsVideoStats(uploads, key, 50);
+      return stats
+        .sort((a, b) => b.views - a.views)
+        .slice(0, 10)
+        .map(({ id, title, publishedAt, views, likes, commentCount }) => ({ id, title, publishedAt, views, likes, commentCount }));
+    } catch {
+      return []; // исчерпанная квота или сбой не должны рушить весь разбор
+    }
+  }
+
+  /** Загрузки канала (до limit роликов) со статистикой и длительностями. */
+  private async uploadsVideoStats(playlistId: string, key: string, limit: number): Promise<YouTubeChannelVideoStat[]> {
+    const ids: string[] = [];
+    let pageToken: string | undefined;
+    while (ids.length < limit) {
+      const page = await this.api("playlistItems", {
+        part: "contentDetails",
+        playlistId,
+        maxResults: "50",
+        ...(pageToken ? { pageToken } : {})
+      }, key);
+      for (const item of asItems(page)) {
+        const videoId = (item as PlaylistItem).contentDetails?.videoId;
+        if (videoId) ids.push(videoId);
+      }
+      pageToken = page.nextPageToken;
+      if (!pageToken) break;
+    }
+    const stats: YouTubeChannelVideoStat[] = [];
+    for (let index = 0; index < Math.min(ids.length, limit); index += 50) {
+      const details = await this.api("videos", { part: "snippet,statistics,contentDetails", id: ids.slice(index, index + 50).join(",") }, key);
+      for (const item of asItems(details)) {
+        const video = item as YouTubeVideo;
+        stats.push({
+          id: video.id,
+          title: video.snippet.title,
+          publishedAt: video.snippet.publishedAt,
+          durationSeconds: parseIsoDurationSeconds(video.contentDetails?.duration),
+          views: number(video.statistics.viewCount),
+          likes: number(video.statistics.likeCount),
+          commentCount: number(video.statistics.commentCount)
+        });
+      }
+    }
+    return stats.slice(0, limit);
   }
 
   /** Транскрипт необязателен: если получить не удалось (защищённый ролик без cookies), разбор продолжается без текста. */
@@ -413,6 +481,11 @@ function asItems(response: ApiResponse): unknown[] {
 
 interface ApiResponse {
   items?: unknown[];
+  nextPageToken?: string;
+}
+
+interface PlaylistItem {
+  contentDetails?: { videoId?: string };
 }
 
 interface YouTubeVideo {
@@ -423,7 +496,10 @@ interface YouTubeVideo {
 }
 
 interface YouTubeChannel {
+  id?: string;
+  snippet?: { title?: string; description?: string };
   statistics: { subscriberCount?: string; viewCount?: string; videoCount?: string };
+  contentDetails?: { relatedPlaylists?: { uploads?: string } };
 }
 
 interface CommentThread {
@@ -432,8 +508,4 @@ interface CommentThread {
       snippet: { authorDisplayName: string; textDisplay: string; likeCount?: number; publishedAt: string };
     };
   };
-}
-
-interface SearchResult {
-  id: { videoId: string };
 }

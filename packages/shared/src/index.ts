@@ -102,6 +102,7 @@ export interface ReferenceAnalysis {
   scenes: Scene[];
   provider: string;
   youtubeContext?: YouTubeAnalysisContext;
+  youtubeChannelContext?: YouTubeChannelContext;
   suggestedTopics?: SuggestedTopic[];
 }
 
@@ -125,6 +126,10 @@ export interface AnyModelSettings {
   videoModel: string;
   /** Провайдер озвучки: "google-tts"/"edge-tts" (язык проекта подставится сам) или полный id вида "edge-tts/ru-RU-DmitryNeural". */
   ttsModel: string;
+  /** Модель картинок при заданных референсах — нужна поддержка опорных изображений (gpt-image-2/gpt-image-1). */
+  imageRefModel: string;
+  /** Модель транскрипции аудио — должна принимать input_audio (Gemini); Claude аудио не принимает. */
+  transcriptionModel: string;
 }
 
 export interface YouTubeSettings {
@@ -169,6 +174,29 @@ export interface YouTubeAnalysisContext {
   topComments: Array<{ author: string; text: string; likes: number; publishedAt: string }>;
   topVideos: Array<{ id: string; title: string; publishedAt: string; views: number; likes: number; commentCount: number }>;
   visualAnalysisIncluded: false;
+}
+
+export interface YouTubeChannelVideoStat {
+  id: string;
+  title: string;
+  publishedAt: string;
+  durationSeconds: number;
+  views: number;
+  likes: number;
+  commentCount: number;
+}
+
+export interface YouTubeChannelContext {
+  channelId: string;
+  title: string;
+  description: string;
+  subscribers: number;
+  totalViews: number;
+  videoCount: number;
+  /** Таймлайн загрузок канала (до 100 роликов): просмотры, даты публикации, длительности. */
+  videos: YouTubeChannelVideoStat[];
+  /** Комментарии под самыми просматриваемыми роликами — что хотят зрители ниши. */
+  topComments: Array<{ videoTitle: string; author: string; text: string; likes: number; publishedAt: string }>;
 }
 
 export interface SaveAnyModelSettingsInput extends Omit<AnyModelSettings, "configured"> {
@@ -388,6 +416,39 @@ export function parseYouTubeVideoId(value: string): string {
       : "";
   if (!id || !/^[A-Za-z0-9_-]{6,20}$/.test(id)) throw new Error("Ссылка не содержит корректный ID YouTube-видео");
   return id;
+}
+
+/** Как parseYouTubeVideoId, но без исключений: не ссылка на видео → undefined. */
+export function tryParseYouTubeVideoId(value: string): string | undefined {
+  try {
+    return parseYouTubeVideoId(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export interface YouTubeChannelRef {
+  kind: "id" | "handle" | "custom" | "user";
+  value: string;
+}
+
+/** Распознаёт ссылку на КАНАЛ YouTube: /@handle, /channel/UC…, /c/имя, /user/имя. Не канал → undefined. */
+export function parseYouTubeChannelRef(value: string): YouTubeChannelRef | undefined {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return undefined;
+  }
+  const host = url.hostname.replace(/^(www|m)\./, "").toLowerCase();
+  if (!["youtube.com", "music.youtube.com"].includes(host)) return undefined;
+  const parts = url.pathname.split("/").filter(Boolean);
+  const head = parts[0] ?? "";
+  if (head.startsWith("@") && head.length > 1) return { kind: "handle", value: head };
+  if (head === "channel" && /^UC[A-Za-z0-9_-]{10,}$/.test(parts[1] ?? "")) return { kind: "id", value: parts[1]! };
+  if (head === "c" && parts[1]) return { kind: "custom", value: parts[1]! };
+  if (head === "user" && parts[1]) return { kind: "user", value: parts[1]! };
+  return undefined;
 }
 
 // --- yt-dlp preflight: чистые (без Electron/fs) хелперы для проверки cookies и свободного места ---

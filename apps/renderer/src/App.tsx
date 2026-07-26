@@ -2052,7 +2052,7 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
   const api = window.goldWork ?? fallbackApi;
   const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
-  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts" });
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-sonnet-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" });
   const [apiKey, setApiKey] = useState("");
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
@@ -2132,6 +2132,8 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <Field label="BASE URL"><input value={anyModel.baseUrl} onChange={(event) => setAnyModel({ ...anyModel, baseUrl: event.target.value })} /></Field>
               <Field label="МОДЕЛЬ СЦЕНАРИЯ"><input value={anyModel.textModel} onChange={(event) => setAnyModel({ ...anyModel, textModel: event.target.value })} /></Field>
               <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ"><input value={anyModel.imageModel} onChange={(event) => setAnyModel({ ...anyModel, imageModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ С РЕФЕРЕНСОМ"><input value={anyModel.imageRefModel} onChange={(event) => setAnyModel({ ...anyModel, imageRefModel: event.target.value })} placeholder="gpt-image-2 — включается сама, если в проекте заданы референсы" /></Field>
+              <Field label="МОДЕЛЬ ТРАНСКРИПЦИИ"><input value={anyModel.transcriptionModel} onChange={(event) => setAnyModel({ ...anyModel, transcriptionModel: event.target.value })} placeholder="gc/gemini-2.5-flash — нужна модель с поддержкой аудио" /></Field>
               <Field label="МОДЕЛЬ ВИДЕО"><input value={anyModel.videoModel} onChange={(event) => setAnyModel({ ...anyModel, videoModel: event.target.value })} /></Field>
               <Field label="МОДЕЛЬ ОЗВУЧКИ"><input value={anyModel.ttsModel} onChange={(event) => setAnyModel({ ...anyModel, ttsModel: event.target.value })} placeholder="google-tts, edge-tts или edge-tts/ru-RU-DmitryNeural" /></Field>
               <div className="provider-actions">
@@ -2172,8 +2174,8 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
             <>
               <h2>Изображения</h2>
               <p>Каждая сцена получает собственный промпт и отдельную картинку. Неудачный кадр можно будет перегенерировать независимо.</p>
-              <InfoRow label="Планируемый сервис" value="Nano Banana / Gemini" />
-              <InfoRow label="AnyModel" value={anyModel.imageModel} />
+              <InfoRow label="Без референсов" value={anyModel.imageModel} />
+              <InfoRow label="С референсами" value={anyModel.imageRefModel} />
               <InfoRow label="Референсы" value="До 3 изображений" />
               <InfoRow label="Сохранение" value="Сразу в папку сцены" />
             </>
