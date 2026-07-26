@@ -265,6 +265,10 @@ export const fallbackApi: DesktopApi = {
   async createCharacterReference() {
     throw new Error("Референс героя доступен только в приложении с ключом AnyModel");
   },
+  async assembleProject() {
+    throw new Error("Пересборка доступна только в приложении");
+  },
+  mediaUrl(path: string) { return path; },
   async getVoicerSettings() { return { configured: false, baseUrl: "" }; },
   async saveVoicerSettings(input) { return { configured: Boolean(input.apiKey), baseUrl: input.baseUrl ?? "" }; },
   async clearVoicerKey() { return { configured: false, baseUrl: "" }; },

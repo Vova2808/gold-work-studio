@@ -125,6 +125,28 @@ export class MockGenerationPipeline {
     });
   }
 
+  /** Только пересборка Final.mp4 из готовых материалов — без перегенерации картинок и озвучки. */
+  async assembleOnly(projectId: string): Promise<QueueTask[]> {
+    await this.initialize();
+    return this.mutate(async () => {
+      const project = await this.requireProject(projectId);
+      if (project.scenes.length === 0) throw new Error("В проекте нет сцен");
+      const active = this.tasks.some((task) =>
+        task.projectId === projectId && ["pending", "running", "retry_wait", "paused"].includes(task.status)
+      );
+      if (active) throw new Error("Сначала дождитесь завершения или остановите текущую очередь");
+      const now = new Date().toISOString();
+      const runId = createId("run");
+      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
+      const assemble = this.makeTask(runId, project, undefined, "assemble", "Пересборка Final.mp4", [], now);
+      this.tasks.push(assemble);
+      await this.projects.update(projectId, { status: "generating", outputPath: undefined });
+      await this.persist();
+      this.emit("info", "queue.project.reassemble", { projectId, runId });
+      return this.forProject(projectId);
+    });
+  }
+
   async regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
@@ -656,6 +678,19 @@ export class MockGenerationPipeline {
       try {
         await this.projects.mutate(projectId, (project) => {
           const trackedSceneIds = new Set(tasks.filter((task) => task.sceneId).map((task) => task.sceneId as string));
+          // Ран без сценных задач (пересборка Final.mp4): статус считаем только по assemble, сцены не трогаем.
+          if (trackedSceneIds.size === 0) {
+            const assembleTask = tasks.find((task) => task.kind === "assemble");
+            const assembleStatus = assembleTask?.status === "done"
+              ? "complete" as const
+              : assembleTask && ["failed", "blocked", "cancelled"].includes(assembleTask.status)
+                ? "failed" as const
+                : "generating" as const;
+            return {
+              status: assembleStatus,
+              outputPath: assembleStatus === "complete" ? assembleTask?.resultPath : project.outputPath
+            };
+          }
           const hasSceneGraphMismatch = trackedSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !trackedSceneIds.has(scene.id));
           const projectStatus = hasSceneGraphMismatch
             ? "failed"

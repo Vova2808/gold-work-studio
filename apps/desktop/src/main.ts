@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, type IpcMainInvokeEvent } from "electron";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, normalize } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
@@ -38,6 +38,11 @@ let youtubeClient: YouTubeClient;
 let realtimeHttpServer: HttpServer;
 let realtimeServer: SocketServer;
 let realtimeUrl: string;
+
+// gw-media:// — локальные медиа проекта (картинки/озвучка/видео) для <img>/<video> в изолированном renderer.
+protocol.registerSchemesAsPrivileged([
+  { scheme: "gw-media", privileges: { stream: true, supportFetchAPI: true } }
+]);
 
 function resolveDataPath(): string {
   const portableDirectory = process.env.PORTABLE_EXECUTABLE_DIR;
@@ -236,6 +241,7 @@ function registerIpc(): void {
   handleIpc("voicer:tts-sample", (_event, templateUuid: string | undefined, language: string) =>
     voicerClient.ttsSample(templateUuid, language, join(dataPath, "tts-samples"))
   );
+  handleIpc("projects:assemble", (_event, projectId: string) => pipeline.assembleOnly(projectId));
   handleIpc("projects:character-reference", async (_event, projectId: string) => {
     const project = await projectService.get(projectId);
     if (!project) throw new Error("Проект не найден");
@@ -470,6 +476,15 @@ app.whenReady().then(async () => {
       .catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
     500
   );
+  protocol.handle("gw-media", (request) => {
+    const encoded = request.url.replace(/^gw-media:\/\//, "");
+    const filePath = normalize(decodeURIComponent(encoded));
+    // Отдаём только файлы из папки данных приложения (workspace, кэши) — не весь диск.
+    if (!filePath.toLowerCase().startsWith(normalize(dataPath).toLowerCase())) {
+      return new Response("forbidden", { status: 403 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
   registerIpc();
   await createWindow();
   app.on("activate", async () => {

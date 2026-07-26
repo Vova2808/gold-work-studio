@@ -395,6 +395,10 @@ export interface DesktopApi {
   voicerSample(templateUuid: string | undefined, language: string): Promise<string>;
   /** Создаёт портрет главного героя по сценарию и добавляет его в референсы проекта. */
   createCharacterReference(projectId: string): Promise<Project>;
+  /** Пересобирает только Final.mp4 из готовых материалов (без перегенерации картинок и озвучки). */
+  assembleProject(projectId: string): Promise<QueueTask[]>;
+  /** URL для показа локального медиафайла проекта в интерфейсе (gw-media://). */
+  mediaUrl(path: string): string;
   getYouTubeSettings(): Promise<YouTubeSettings>;
   saveYouTubeSettings(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings>;
   clearYouTubeKey(): Promise<YouTubeSettings>;

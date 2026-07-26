@@ -181,7 +181,7 @@ async function run() {
     button?.click();
   })()`);
   await wait(250);
-  const timelineOpened = await window.webContents.executeJavaScript("Boolean(document.querySelector('.timeline'))");
+  const timelineOpened = await window.webContents.executeJavaScript("Boolean(document.querySelector('.timeline-tracks'))");
   if (!timelineOpened) fail("таймлайн не открылся");
   window.webContents.invalidate();
   await wait(250);

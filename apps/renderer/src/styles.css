@@ -2544,3 +2544,57 @@ button:disabled {
 .scenario-preview p { margin: 0 0 7px; }
 .scenario-preview b { color: #e1c668; }
 .template-row button { font-size: 12px; }
+
+/* --- Таблица проектов с раскрывающейся панелью --- */
+.projects-table { border: 1px solid #24231f; border-radius: 11px; overflow: hidden; background: #0b0b0a; }
+.projects-table-head, .projects-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px 74px 56px 150px 110px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 14px;
+  text-align: left;
+}
+.projects-table-head { color: #6f6e66; font-size: 10px; letter-spacing: 0.08em; border-bottom: 1px solid #1c1b18; }
+.projects-table-row { width: 100%; background: transparent; border: 0; border-bottom: 1px solid #151511; color: #d6d3c8; font-size: 12.5px; cursor: pointer; }
+.projects-table-row:hover { background: #12110e; }
+.projects-table-row.open { background: #161410; color: #f0e8cf; }
+.projects-table-row .cell-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.projects-table-row .cell-date { color: #86847b; font-size: 11px; }
+.project-expand { display: flex; flex-wrap: wrap; gap: 22px; padding: 14px 18px 16px; background: #100f0c; border-bottom: 1px solid #1c1b18; }
+.expand-block small { display: block; margin-bottom: 8px; color: #6f6e66; font-size: 9.5px; letter-spacing: 0.1em; }
+.expand-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.expand-checks { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 12px; color: #c9c6ba; }
+.expand-checks label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.expand-checks select { margin-left: 5px; }
+.expand-music { display: inline-flex; align-items: center; gap: 6px; color: #9a978c; }
+.generate-button.compact { padding: 7px 13px; font-size: 12px; }
+.outline-button.small.danger { border-color: #5c2731; color: #e88; }
+
+/* --- Плеер предпросмотра --- */
+.preview-player { display: flex; flex-direction: column; gap: 6px; padding: 0 18px 10px; }
+.preview-player img, .preview-player video { width: 100%; max-height: 340px; object-fit: contain; border-radius: 10px; background: #000; }
+.preview-player small { color: #86847b; font-size: 11px; }
+
+/* --- Дорожки таймлайна --- */
+.timeline-tracks { display: flex; flex-direction: column; gap: 6px; padding: 4px 18px 12px; overflow: hidden; }
+.timeline-track-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: center; }
+.timeline-track-row > strong { color: #8b897e; font-size: 10.5px; }
+.track-cells { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+.track-cells.single { overflow: visible; }
+.track-thumb { position: relative; flex: 0 0 84px; height: 48px; padding: 0; border: 1px solid #2a2820; border-radius: 6px; overflow: hidden; background: #141310; cursor: pointer; color: #6f6e66; display: grid; place-items: center; }
+.track-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.track-thumb i { position: absolute; top: 2px; left: 4px; z-index: 2; font-size: 9px; font-style: normal; color: #ffe9a6; text-shadow: 0 1px 2px #000; }
+.track-thumb.selected { border-color: #e1c668; box-shadow: 0 0 0 1px #e1c668; }
+.track-thumb.excluded { opacity: 0.35; }
+.track-cell { flex: 0 0 84px; height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border-radius: 5px; border: 1px solid #23221c; background: #101008; color: #5c5b52; font-size: 10.5px; }
+.track-cell.ready { color: #cfe3b8; border-color: #33402a; background: #131a10; }
+.track-cell.music { flex: 1 1 auto; }
+.track-cell.subs.ready { color: #e9d489; border-color: #4a3f22; background: #191507; }
+
+/* --- Контекстное меню сцены --- */
+.context-backdrop { position: fixed; inset: 0; z-index: 60; }
+.context-menu { position: fixed; z-index: 61; min-width: 210px; padding: 6px; border: 1px solid #35322a; border-radius: 10px; background: #14130f; box-shadow: 0 14px 40px rgba(0,0,0,0.55); display: flex; flex-direction: column; }
+.context-menu button { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #d8d5c9; font-size: 12.5px; text-align: left; cursor: pointer; }
+.context-menu button:hover { background: #221f16; color: #f2e7c5; }
+.context-menu button:disabled { opacity: 0.45; cursor: default; }

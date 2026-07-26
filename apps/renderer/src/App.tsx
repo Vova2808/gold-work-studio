@@ -263,6 +263,32 @@ export function App() {
     }
   }
 
+  /** Пересборка только Final.mp4 из готовых материалов — без перегенерации картинок и озвучки. */
+  async function reassembleProject(id: string) {
+    setError(null);
+    try {
+      await api.assembleProject(id);
+      setNotice("Пересборка Final.mp4 запущена — прогресс в очереди.");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function toggleSceneAssembly(projectId: string, sceneId: string, include: boolean) {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+    try {
+      const updated = await api.updateProject(projectId, {
+        scenes: project.scenes.map((scene) => (scene.id === sceneId ? { ...scene, includeInAssembly: include } : scene))
+      });
+      setProjects((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      setNotice(include ? "Сцена возвращена в сборку." : "Сцена исключена из сборки — нажмите «Пересобрать Final.mp4».");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
   /** Мгновенно создаёт проект по выбранной теме и открывает его — длину и язык пользователь выбирает уже в проекте. */
   async function createProjectFromTopic(analysis: ReferenceAnalysis) {
     setError(null);
@@ -409,7 +435,7 @@ export function App() {
             <div className={activeSection === "director" ? "section-host" : "hidden-section"}>
               <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
             </div>
-            {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} />}
+            {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} onAssemble={(id) => void reassembleProject(id)} onOpenFolder={(id) => void openProjectFolder(id)} onSave={saveProject} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
             {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} onAction={() => setNotice("Этот инструмент подключим после добавления соответствующего API. Экран уже готов к интеграции.")} />}
@@ -427,7 +453,22 @@ export function App() {
           <ConsoleDock open={consoleOpen} queue={queue} log={uiLog} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
-      {overlay && overlayProject && <ProjectPreviewModal project={overlayProject} initialMode={overlay.type} onClose={() => setOverlay(null)} onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)} onOpenFolder={() => void openProjectFolder(overlayProject.id)} />}
+      {overlay && overlayProject && (
+        <ProjectPreviewModal
+          project={overlayProject}
+          initialMode={overlay.type}
+          onClose={() => setOverlay(null)}
+          onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)}
+          onOpenFolder={() => void openProjectFolder(overlayProject.id)}
+          onAssemble={() => void reassembleProject(overlayProject.id)}
+          onEditScenario={() => {
+            setOverlay(null);
+            setSelectedProjectId(overlayProject.id);
+            navigate("scenario");
+          }}
+          onToggleScene={(sceneId, include) => void toggleSceneAssembly(overlayProject.id, sceneId, include)}
+        />
+      )}
       {error && (
         <div className="error-toast">
           <X size={15} />
@@ -2235,13 +2276,19 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
   );
 }
 
-function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete, onPreview, onTimeline, onGenerate }: { projects: Project[]; busy: boolean; onCreate: () => void; onOpen: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onTimeline: (id: string) => void; onGenerate: (id: string) => void }) {
+function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete, onPreview, onTimeline, onGenerate, onAssemble, onOpenFolder, onSave }: { projects: Project[]; busy: boolean; onCreate: () => void; onOpen: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onTimeline: (id: string) => void; onGenerate: (id: string) => void; onAssemble: (id: string) => void; onOpenFolder: (id: string) => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project> }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const expanded = projects.find((project) => project.id === expandedId);
+  const patchAssembly = (project: Project, patch: Partial<ProjectSettings["assembly"]>) =>
+    void onSave(project.id, { settings: { ...project.settings, assembly: { ...project.settings.assembly, ...patch } } });
+  const patchSubtitles = (project: Project, patch: Partial<SubtitleSettings>) =>
+    void onSave(project.id, { settings: { ...project.settings, subtitles: { ...project.settings.subtitles, ...patch } } });
   return (
     <div>
       <PageHeading
         icon={<FolderOpen size={24} />}
         title="Проекты"
-        subtitle="Все сохранённые проекты и материалы"
+        subtitle="Клик по строке раскрывает управление генерацией и сборкой"
         actions={
           <button className="generate-button" disabled={busy} onClick={onCreate}>
             <Plus size={16} />
@@ -2252,47 +2299,75 @@ function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete,
       {projects.length === 0 ? (
         <EmptyState icon={<FolderOpen size={34} />} title="Список пуст" text="Созданные проекты появятся здесь." action="Создать проект" onAction={onCreate} />
       ) : (
-        <div className="projects-cards">
+        <div className="projects-table">
+          <div className="projects-table-head">
+            <span>Название</span>
+            <span title="Картинок готово">🖼</span>
+            <span title="Озвучек готово">🔊</span>
+            <span title="Final.mp4">🎬</span>
+            <span>Статус</span>
+            <span>Дата</span>
+          </div>
           {projects.map((project) => (
-            <article key={project.id}>
-              <div className="project-cover" onClick={() => onPreview(project.id)}>
-                <Clapperboard size={26} />
-                <span>{project.aspectRatio}</span>
-              </div>
-              <h3>{project.title}</h3>
-              <p>{project.topic}</p>
-              <div className="project-card-meta">
-                <span>{project.scenes.length} сцен</span>
-                <span>{Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0))} сек</span>
+            <div key={project.id}>
+              <button className={`projects-table-row${project.id === expandedId ? " open" : ""}`} onClick={() => setExpandedId(project.id === expandedId ? null : project.id)}>
+                <span className="cell-name">{project.title}</span>
+                <span>{project.scenes.filter((scene) => scene.imagePath).length}/{project.scenes.length}</span>
+                <span>{project.scenes.filter((scene) => scene.audioPath).length}/{project.scenes.length}</span>
+                <span>{project.outputPath ? "✅" : "—"}</span>
                 <span className={`status-${project.status}`}>{statusLabels[project.status]}</span>
-              </div>
-              <div className="card-action-grid">
-                <button onClick={() => onOpen(project.id)}>
-                  <Settings size={14} />
-                  Настроить
-                </button>
-                <button onClick={() => onPreview(project.id)}>
-                  <Eye size={14} />
-                  Превью
-                </button>
-                <button onClick={() => onTimeline(project.id)}>
-                  <Clock3 size={14} />
-                  Таймлайн
-                </button>
-                <button onClick={() => onDuplicate(project.id)}>
-                  <Copy size={14} />
-                  Копия
-                </button>
-                <button className="danger" onClick={() => onDelete(project.id)}>
-                  <Trash2 size={14} />
-                  Удалить
-                </button>
-                <button className="gold" onClick={() => onGenerate(project.id)}>
-                  <Play size={14} />
-                  Запустить
-                </button>
-              </div>
-            </article>
+                <span className="cell-date">{new Date(project.updatedAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+              </button>
+              {project.id === expandedId && expanded && (
+                <div className="project-expand">
+                  <div className="expand-block">
+                    <small>ГЕНЕРАЦИЯ</small>
+                    <div className="expand-actions">
+                      <button className="generate-button compact" disabled={busy || project.status === "generating"} onClick={() => onGenerate(project.id)}>
+                        <Play size={14} />
+                        {project.scenes.some((scene) => !scene.imagePath) ? "Сгенерировать" : "Перегенерировать сцены"}
+                      </button>
+                      <button className="outline-button small" disabled={busy || project.status === "generating" || project.scenes.length === 0} onClick={() => onAssemble(project.id)}>
+                        <RotateCcw size={14} />
+                        Пересобрать Final.mp4
+                      </button>
+                    </div>
+                  </div>
+                  <div className="expand-block">
+                    <small>СБОРКА</small>
+                    <div className="expand-checks">
+                      <label><input type="checkbox" checked={project.settings.assembly.kenBurns} onChange={(event) => patchAssembly(project, { kenBurns: event.target.checked })} /> Ken Burns</label>
+                      <label><input type="checkbox" checked={project.settings.assembly.fadeTransitions} onChange={(event) => patchAssembly(project, { fadeTransitions: event.target.checked })} /> Переходы (mix)</label>
+                      <label><input type="checkbox" checked={project.settings.subtitles.enabled} onChange={(event) => patchSubtitles(project, { enabled: event.target.checked })} /> Субтитры</label>
+                      <label><input type="checkbox" checked={project.settings.subtitles.popWords} onChange={(event) => patchSubtitles(project, { popWords: event.target.checked })} /> Pop Words</label>
+                      <label>
+                        Качество:
+                        <select value={project.settings.assembly.quality} onChange={(event) => patchAssembly(project, { quality: event.target.value as ProjectSettings["assembly"]["quality"] })}>
+                          <option value="preview">Черновик</option>
+                          <option value="standard">Стандарт</option>
+                          <option value="high">Высокое</option>
+                        </select>
+                      </label>
+                      <span className="expand-music">
+                        <Music2 size={13} />
+                        {project.settings.music.path && project.settings.music.enabled !== false ? "Музыка: есть" : "Музыка: нет"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="expand-block">
+                    <small>ДЕЙСТВИЯ</small>
+                    <div className="expand-actions">
+                      <button className="outline-button small" onClick={() => onTimeline(project.id)}><Clock3 size={14} />Таймлайн</button>
+                      <button className="outline-button small" onClick={() => onPreview(project.id)}><Eye size={14} />Предпросмотр</button>
+                      <button className="outline-button small" onClick={() => onOpen(project.id)}><Settings size={14} />Настроить</button>
+                      <button className="outline-button small" onClick={() => onOpenFolder(project.id)}><FolderOpen size={14} />Открыть папку</button>
+                      <button className="outline-button small" onClick={() => onDuplicate(project.id)}><Copy size={14} />Копия</button>
+                      <button className="outline-button small danger" onClick={() => onDelete(project.id)}><Trash2 size={14} />Удалить</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -2397,10 +2472,14 @@ function QueuePage({ tasks, projects, onPause, onResume, onStop, onRetry, onClea
   );
 }
 
-function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string) => void; onOpenFolder: () => void }) {
+function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder, onAssemble, onEditScenario, onToggleScene }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string) => void; onOpenFolder: () => void; onAssemble: () => void; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void }) {
+  const api = window.goldWork ?? fallbackApi;
   const [mode, setMode] = useState(initialMode);
-  const totalDuration = project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
-  const maxDuration = Math.max(totalDuration, 1);
+  const [menu, setMenu] = useState<{ x: number; y: number; scene: Scene } | null>(null);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const busyGenerating = project.status === "generating" || project.status === "paused";
+  const selectedScene = project.scenes.find((scene) => scene.id === selectedSceneId);
+  const totalDuration = Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0));
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="preview-modal">
@@ -2432,6 +2511,24 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
           <Stat label="Видео" value={String(project.scenes.filter((scene) => scene.videoPath).length)} />
           <Stat label="Длительность" value={`${totalDuration} сек`} />
         </div>
+        <div className="preview-player">
+          {selectedScene?.imagePath ? (
+            <img src={api.mediaUrl(selectedScene.imagePath)} alt={selectedScene.title} />
+          ) : project.outputPath ? (
+            <video key={project.outputPath} controls src={api.mediaUrl(project.outputPath)} />
+          ) : project.scenes[0]?.imagePath ? (
+            <img src={api.mediaUrl(project.scenes[0].imagePath)} alt="Первая сцена" />
+          ) : (
+            <div className="scene-placeholder"><Image size={34} /><span>Медиа появится после генерации</span></div>
+          )}
+          <small>
+            {selectedScene
+              ? `Сцена ${selectedScene.order + 1} из ${project.scenes.length} · клик по дорожке выбирает сцену, правый клик — меню`
+              : project.outputPath
+                ? "Final.mp4 · правый клик по сцене в дорожке — меню действий"
+                : "Final.mp4 ещё не собран"}
+          </small>
+        </div>
         {mode === "preview" ? (
           <div className="scene-gallery">
             {project.scenes.length === 0 ? (
@@ -2439,19 +2536,23 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
             ) : (
               project.scenes.map((scene) => (
                 <article className="preview-scene" key={scene.id}>
-                  <div className="scene-placeholder">
-                    <Image size={28} />
-                    <span>{scene.status}</span>
-                  </div>
+                  {scene.imagePath ? (
+                    <img className="scene-thumb" src={api.mediaUrl(scene.imagePath)} alt={scene.title} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, scene }); }} />
+                  ) : (
+                    <div className="scene-placeholder">
+                      <Image size={28} />
+                      <span>{scene.status}</span>
+                    </div>
+                  )}
                   <div>
                     <strong>
-                      Сцена {scene.order + 1}: {scene.title}
+                      Сцена {scene.order + 1}: {scene.title}{scene.includeInAssembly === false ? " · вне сборки" : ""}
                     </strong>
                     <p>{scene.narration || "Текст озвучки не задан"}</p>
                     <small>
-                      {scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.videoPath ? "видео готово" : "видео ожидается"}
+                      {scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.audioPath ? "озвучка готова" : "озвучка ожидается"}
                     </small>
-                    <button className="retry-button" disabled={project.status === "generating" || project.status === "paused"} onClick={() => onRegenerate(scene.id)}>
+                    <button className="retry-button" disabled={busyGenerating} onClick={() => onRegenerate(scene.id)}>
                       <RotateCcw size={13} />
                       Перегенерировать сцену
                     </button>
@@ -2461,37 +2562,81 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
             )}
           </div>
         ) : (
-          <div className="timeline">
-            <div className="timeline-ruler">
-              <span>0:00</span>
-              <span>{Math.round(totalDuration / 2)} сек</span>
-              <span>{totalDuration} сек</span>
-            </div>
-            {(["Видео / фото", "Озвучка", "Субтитры"] as const).map((track) => (
-              <div className="timeline-track" key={track}>
-                <strong>{track}</strong>
-                <div>
-                  {project.scenes.map((scene) => (
-                    <span
-                      key={scene.id}
-                      style={{
-                        width: `${Math.max(8, (scene.durationSeconds / maxDuration) * 100)}%`,
-                      }}
-                      title={scene.title}
-                    >
-                      {scene.order + 1}
-                      <small>{scene.title}</small>
-                    </span>
-                  ))}
-                </div>
+          <div className="timeline-tracks">
+            <div className="timeline-track-row">
+              <strong>Видео/Фото</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <button
+                    key={scene.id}
+                    className={`track-thumb${scene.includeInAssembly === false ? " excluded" : ""}${scene.id === selectedSceneId ? " selected" : ""}`}
+                    title={`${scene.order + 1}. ${scene.title}`}
+                    onClick={() => setSelectedSceneId(scene.id === selectedSceneId ? null : scene.id)}
+                    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, scene }); }}
+                  >
+                    <i>{scene.order + 1}</i>
+                    {scene.imagePath ? <img src={api.mediaUrl(scene.imagePath)} alt="" loading="lazy" /> : <Image size={16} />}
+                  </button>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="timeline-track-row">
+              <strong>Audio TTS</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <span key={scene.id} className={`track-cell audio${scene.audioPath ? " ready" : ""}`} title={scene.narration.slice(0, 120)}>
+                    <Volume2 size={13} />
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="timeline-track-row">
+              <strong>Музыка</strong>
+              <div className="track-cells single">
+                <span className={`track-cell music${project.settings.music.path && project.settings.music.enabled !== false ? " ready" : ""}`}>
+                  <Music2 size={13} />
+                  {project.settings.music.path && project.settings.music.enabled !== false ? "Трек добавлен" : "Нет музыки"}
+                </span>
+              </div>
+            </div>
+            <div className="timeline-track-row">
+              <strong>Субтитры</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <span key={scene.id} className={`track-cell subs${project.settings.subtitles.enabled && scene.narration ? " ready" : ""}`}>
+                    {project.settings.subtitles.enabled && scene.narration ? "≡" : "—"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {menu && (
+          <div className="context-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
+            <div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 190) }} onMouseDown={(event) => event.stopPropagation()}>
+              <button onClick={() => { setMenu(null); onEditScenario(); }}>
+                <FileText size={14} />
+                Редактировать сцену
+              </button>
+              <button disabled={busyGenerating} onClick={() => { onRegenerate(menu.scene.id); setMenu(null); }}>
+                <RotateCcw size={14} />
+                Перегенерировать сцену
+              </button>
+              <button onClick={() => { onToggleScene(menu.scene.id, menu.scene.includeInAssembly === false); setMenu(null); }}>
+                {menu.scene.includeInAssembly === false ? <Check size={14} /> : <X size={14} />}
+                {menu.scene.includeInAssembly === false ? "Вернуть в сборку" : "Исключить из сборки"}
+              </button>
+            </div>
           </div>
         )}
         <footer>
           <button className="outline-button" onClick={onOpenFolder}>
             <FolderOpen size={15} />
             Открыть папку
+          </button>
+          <button className="outline-button" disabled={busyGenerating} onClick={onAssemble}>
+            <RotateCcw size={15} />
+            Пересобрать Final.mp4
           </button>
           <button className="outline-button" onClick={onClose}>
             Закрыть
