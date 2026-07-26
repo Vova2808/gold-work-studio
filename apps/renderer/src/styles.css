@@ -2598,3 +2598,25 @@ button:disabled {
 .context-menu button { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #d8d5c9; font-size: 12.5px; text-align: left; cursor: pointer; }
 .context-menu button:hover { background: #221f16; color: #f2e7c5; }
 .context-menu button:disabled { opacity: 0.45; cursor: default; }
+
+/* --- Подтверждение темы перед сборкой сценария --- */
+.topic-modal {
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #2c2a22;
+  border-radius: 14px;
+  background: #0d0c0a;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+.topic-modal header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid #1e1d18; }
+.topic-modal header > div:first-child { display: flex; align-items: center; gap: 11px; color: var(--gold); }
+.topic-modal header strong { display: block; color: #f1eada; font-size: 14px; }
+.topic-modal header small { color: #7d7b72; font-size: 11px; }
+.topic-modal-body { padding: 14px 18px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.topic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.topic-value { padding: 9px 11px; border: 1px solid #24231d; border-radius: 8px; background: #121110; color: #cfccc1; font-size: 12.5px; line-height: 1.5; }
+.topic-value.strong { color: #f3e6bd; font-weight: 600; }
+.topic-note { color: #7d7b72; font-size: 11px; }
+.topic-modal footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 18px; border-top: 1px solid #1e1d18; }

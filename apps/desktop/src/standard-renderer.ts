@@ -82,12 +82,15 @@ export class StandardRenderer {
     // у каждого голоса своя скорость чтения, фиксированная длительность резала или тянула сцену.
     const audioSeconds = await mediaDurationSeconds(audioPath);
     const duration = audioSeconds > 0.2 ? audioSeconds + 0.5 : Math.max(1, scene.durationSeconds);
-    const base = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
     const direction = resolveKenBurnsDirection(project, scene);
-    // pzoom (зум предыдущего ВЫХОДНОГО кадра): с -loop 1 переменная zoom сбрасывается на каждом входном кадре.
+    // Дрожание при зуме лечится двумя вещами: работой на удвоенном разрешении (субпиксельное движение
+    // округляется мягче) и линейной формулой от номера кадра вместо накопления pzoom.
+    const superScale = direction === "off" ? 1 : 2;
+    const base = `scale=${width * superScale}:${height * superScale}:force_original_aspect_ratio=increase,crop=${width * superScale}:${height * superScale}`;
+    const totalFrames = Math.max(2, Math.round(duration * 30));
     const zoomExpression = direction === "out"
-      ? "if(lte(on,1),1.08,max(pzoom-0.0006,1.001))"
-      : "min(pzoom+0.0006,1.08)";
+      ? `1.10-0.10*on/${totalFrames}`
+      : `1+0.10*on/${totalFrames}`;
     const motion = direction !== "off"
       ? `,zoompan=z='${zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
       : "";

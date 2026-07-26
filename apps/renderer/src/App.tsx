@@ -1343,8 +1343,10 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
             hint="Оживляет картинку сцены (image-to-video). Veo — ключ Google AI Studio; AnyModel — grok-imagine. Внимание: видео заметно дороже картинок."
             checked={settings.video.enabled}
             onChange={(enabled) => {
-              setSettings({ video: { ...settings.video, enabled } });
-              onInfo(enabled ? "AI-видео включено: для каждой сцены будет сгенерирован живой клип из её картинки." : "AI-видео выключено — сцены соберутся из картинок с движением камеры.");
+              // mock-video остался в старых проектах и молча отключал реальную генерацию — переводим на Google.
+              const provider = settings.video.provider === "anymodel-video" ? "anymodel-video" : "veo";
+              setSettings({ video: { ...settings.video, enabled, provider } });
+              onInfo(enabled ? "AI-видео включено: выбранные сцены будут оживлены из своих картинок." : "AI-видео выключено — сцены соберутся из картинок с движением камеры.");
             }}
           />
           {settings.video.enabled && (
@@ -1902,6 +1904,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [pending, setPending] = useState<{ title: string; hook: string; angle: string } | null>(null);
 
   async function refreshChatTopics() {
     setChatTopics(await api.listChatTopics());
@@ -2027,15 +2030,24 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     onPickTopic(base);
   }
 
+  /** Подтверждение темы: показываем, что именно уйдёт в сценарий, и даём поправить одной строкой. */
+  function confirmPending(extraInstructions: string) {
+    if (!pending || !analysis) return;
+    const base: ReferenceAnalysis = {
+      ...analysis,
+      suggestedTitle: pending.title,
+      hook: pending.hook || analysis.hook,
+      suggestedAngle: pending.angle || analysis.suggestedAngle,
+      instructions: [analysis.instructions, extraInstructions.trim()].filter(Boolean).join("\n") || undefined
+    };
+    setPending(null);
+    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${pending.title}»${extraInstructions.trim() ? ` (правка: ${extraInstructions.trim()})` : ""}` }]);
+    buildAndOpen(base, pending.title);
+  }
+
   function pickTopic(topic: { title: string; hook: string; angle: string }) {
     if (!analysis) return;
-    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${topic.title}»` }]);
-    void buildAndOpen({
-      ...analysis,
-      suggestedTitle: topic.title,
-      hook: topic.hook || analysis.hook,
-      suggestedAngle: topic.angle || analysis.suggestedAngle
-    }, topic.title);
+    setPending({ title: topic.title, hook: topic.hook, angle: topic.angle });
   }
 
   async function openTopic(id: string) {
@@ -2095,6 +2107,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
         }
       />
       <div className="chat-area">
+        {pending && analysis && <TopicConfirmModal analysis={analysis} topic={pending} onCancel={() => setPending(null)} onConfirm={confirmPending} />}
         {historyOpen && (
           <aside className="chat-history-panel">
             <header>
@@ -2261,7 +2274,11 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                 )}
                 <footer>
                   <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
-                  <button className="generate-button" disabled={busy || analyzing} onClick={() => void buildAndOpen(analysis, analysis.suggestedTitle || "улучшенный ролик")}>
+                  <button
+                    className="generate-button"
+                    disabled={busy || analyzing}
+                    onClick={() => setPending({ title: analysis.suggestedTitle || "Улучшенный ролик", hook: analysis.hook, angle: analysis.suggestedAngle })}
+                  >
                     <WandSparkles size={15} />
                     Написать сценарий и создать проект
                   </button>
@@ -2283,6 +2300,52 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
           <Send size={19} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Карточка подтверждения перед сборкой сценария: что именно уйдёт в генерацию и как это поправить. */
+function TopicConfirmModal({ analysis, topic, onCancel, onConfirm }: { analysis: ReferenceAnalysis; topic: { title: string; hook: string; angle: string }; onCancel: () => void; onConfirm: (instructions: string) => void }) {
+  const [instructions, setInstructions] = useState("");
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <section className="topic-modal">
+        <header>
+          <div>
+            <WandSparkles size={18} />
+            <div>
+              <strong>Проверьте пресет перед сборкой</strong>
+              <small>Сценарий соберётся именно по этим данным</small>
+            </div>
+          </div>
+          <button className="modal-close" onClick={onCancel}><X size={18} /></button>
+        </header>
+        <div className="topic-modal-body">
+          <Field label="ТЕМА РОЛИКА"><div className="topic-value strong">{topic.title}</div></Field>
+          <Field label="ХУК (ПЕРВЫЕ СЕКУНДЫ)"><div className="topic-value">{topic.hook || "—"}</div></Field>
+          <Field label="УГОЛ ПОДАЧИ"><div className="topic-value">{topic.angle || "—"}</div></Field>
+          <div className="topic-grid">
+            <Field label="НИША"><div className="topic-value">{analysis.niche}</div></Field>
+            <Field label="АУДИТОРИЯ"><div className="topic-value">{analysis.targetAudience}</div></Field>
+          </div>
+          {analysis.structure.length > 0 && (
+            <Field label="СТРУКТУРА">
+              <div className="topic-value">{analysis.structure.slice(0, 6).map((item, index) => <div key={index}>• {item}</div>)}</div>
+            </Field>
+          )}
+          <Field label="ЧТО ИЗМЕНИТЬ (НЕОБЯЗАТЕЛЬНО)" hint="Например: «сделай хук жёстче», «больше конкретики и цифр», «от лица новичка».">
+            <textarea rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Пожелания к сценарию — учтутся при генерации" />
+          </Field>
+          <small className="topic-note">Длину ролика и язык выберете в проекте — он откроется сразу, а сцены будут писаться с прогрессом внизу.</small>
+        </div>
+        <footer>
+          <button className="outline-button" onClick={onCancel}>Отмена</button>
+          <button className="generate-button" onClick={() => onConfirm(instructions)}>
+            <Check size={15} />
+            Согласен — собрать сценарий
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
