@@ -106,15 +106,26 @@ export class VoicerClient {
 
   private async requestBinary(path: string): Promise<Buffer> {
     const { url, key } = await this.endpoint(path);
-    const response = await fetch(url, { headers: { "X-API-Key": key } });
-    if (!response.ok) throw new Error(await voicerError(response));
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("zip")) {
-      throw new Error("Voicer вернул архив чанков. Поставьте в шаблоне тип результата «default» (единый MP3).");
+    // 202 = «результат ещё не готов»: это JSON, а не аудио — ждём и пробуем снова.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await fetch(url, { headers: { "X-API-Key": key } });
+      if (response.status === 202) {
+        await sleep(3_000);
+        continue;
+      }
+      if (!response.ok) throw new Error(await voicerError(response));
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("zip")) {
+        throw new Error("Voicer вернул архив чанков. Поставьте в шаблоне тип результата «default» (единый MP3).");
+      }
+      if (contentType.includes("application/json")) {
+        throw new Error(`Voicer вернул JSON вместо аудио: ${(await response.text()).slice(0, 200)}`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.byteLength === 0) throw new Error("Voicer вернул пустой результат");
+      return buffer;
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength === 0) throw new Error("Voicer вернул пустой результат");
-    return buffer;
+    throw new Error("Voicer: результат так и не стал готов после ожидания");
   }
 }
 
