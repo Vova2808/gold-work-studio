@@ -259,6 +259,9 @@ export const fallbackApi: DesktopApi = {
     projects.unshift(project);
     return clone(project);
   },
+  async ttsSample() {
+    throw new Error("Примеры голосов доступны только в приложении с ключом AnyModel");
+  },
   async getAnyModelSettings() { return clone(anyModelSettings); },
   async saveAnyModelSettings(input) {
     anyModelSettings = { ...input, configured: Boolean(input.apiKey) || anyModelSettings.configured };

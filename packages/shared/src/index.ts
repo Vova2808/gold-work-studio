@@ -178,6 +178,42 @@ export interface YouTubeAnalysisContext {
   visualAnalysisIncluded: false;
 }
 
+export interface TtsVoiceOption {
+  /** Полный id модели озвучки AnyModel ("edge-tts/<голос>") или "google-tts" (язык проекта подставится сам). */
+  id: string;
+  label: string;
+  /** Короткий код языка ("ru", "en", …); "any" — подходит для любого языка проекта. */
+  language: string;
+  gender?: "м" | "ж";
+}
+
+/** Каталог голосов озвучки: нейроголоса Edge TTS по языкам + стандартный Google TTS. */
+export const TTS_VOICES: TtsVoiceOption[] = [
+  { id: "google-tts", label: "Google TTS — стандартный", language: "any" },
+  { id: "edge-tts/ru-RU-DmitryNeural", label: "Дмитрий — русский", language: "ru", gender: "м" },
+  { id: "edge-tts/ru-RU-SvetlanaNeural", label: "Светлана — русский", language: "ru", gender: "ж" },
+  { id: "edge-tts/ru-RU-DariyaNeural", label: "Дария — русский", language: "ru", gender: "ж" },
+  { id: "edge-tts/en-US-ChristopherNeural", label: "Christopher — английский (США)", language: "en", gender: "м" },
+  { id: "edge-tts/en-US-GuyNeural", label: "Guy — английский (США)", language: "en", gender: "м" },
+  { id: "edge-tts/en-US-AriaNeural", label: "Aria — английский (США)", language: "en", gender: "ж" },
+  { id: "edge-tts/en-US-JennyNeural", label: "Jenny — английский (США)", language: "en", gender: "ж" },
+  { id: "edge-tts/en-GB-RyanNeural", label: "Ryan — английский (Британия)", language: "en", gender: "м" },
+  { id: "edge-tts/en-GB-SoniaNeural", label: "Sonia — английский (Британия)", language: "en", gender: "ж" },
+  { id: "edge-tts/es-ES-AlvaroNeural", label: "Álvaro — испанский", language: "es", gender: "м" },
+  { id: "edge-tts/es-ES-ElviraNeural", label: "Elvira — испанский", language: "es", gender: "ж" },
+  { id: "edge-tts/es-MX-JorgeNeural", label: "Jorge — испанский (Мексика)", language: "es", gender: "м" },
+  { id: "edge-tts/de-DE-ConradNeural", label: "Conrad — немецкий", language: "de", gender: "м" },
+  { id: "edge-tts/de-DE-KatjaNeural", label: "Katja — немецкий", language: "de", gender: "ж" },
+  { id: "edge-tts/fr-FR-HenriNeural", label: "Henri — французский", language: "fr", gender: "м" },
+  { id: "edge-tts/fr-FR-DeniseNeural", label: "Denise — французский", language: "fr", gender: "ж" },
+  { id: "edge-tts/it-IT-DiegoNeural", label: "Diego — итальянский", language: "it", gender: "м" },
+  { id: "edge-tts/it-IT-ElsaNeural", label: "Elsa — итальянский", language: "it", gender: "ж" },
+  { id: "edge-tts/pt-BR-AntonioNeural", label: "Antonio — португальский (Бразилия)", language: "pt", gender: "м" },
+  { id: "edge-tts/pt-BR-FranciscaNeural", label: "Francisca — португальский (Бразилия)", language: "pt", gender: "ж" },
+  { id: "edge-tts/uk-UA-OstapNeural", label: "Остап — украинский", language: "uk", gender: "м" },
+  { id: "edge-tts/uk-UA-PolinaNeural", label: "Полина — украинский", language: "uk", gender: "ж" }
+];
+
 export interface YouTubeChannelVideoStat {
   id: string;
   title: string;
@@ -302,6 +338,8 @@ export interface DesktopApi {
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
   clearAnyModelKey(): Promise<AnyModelSettings>;
   testAnyModelConnection(): Promise<{ ok: boolean; message: string }>;
+  /** Короткий аудио-пример голоса (base64 MP3); кэшируется, так что повторное прослушивание бесплатно. */
+  ttsSample(voice: string, language: string): Promise<string>;
   getYouTubeSettings(): Promise<YouTubeSettings>;
   saveYouTubeSettings(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings>;
   clearYouTubeKey(): Promise<YouTubeSettings>;

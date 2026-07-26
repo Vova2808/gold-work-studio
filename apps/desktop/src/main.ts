@@ -219,6 +219,9 @@ function registerIpc(): void {
   handleIpc("anymodel:save-settings", (_event, input: SaveAnyModelSettingsInput) => anyModelStore.save(input));
   handleIpc("anymodel:clear-key", () => anyModelStore.clearKey());
   handleIpc("anymodel:test", () => anyModelClient.test());
+  handleIpc("anymodel:tts-sample", (_event, voice: string, language: string) =>
+    anyModelClient.ttsSample(voice, language, join(dataPath, "tts-samples"))
+  );
   handleIpc("youtube:get-settings", () => youtubeStore.publicSettings());
   handleIpc("youtube:save-settings", (_event, input: SaveYouTubeSettingsInput) => youtubeStore.save(input));
   handleIpc("youtube:clear-key", () => youtubeStore.clearKey());

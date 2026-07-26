@@ -551,7 +551,10 @@ export class MockGenerationPipeline {
     }
     if (task.kind === "speech") {
       if (this.anyModel && (await this.anyModel.configured()) && scene.narration.trim().length > 0) {
-        const audio = await this.anyModel.textToSpeech(scene.narration, ttsLanguageCode(project.language));
+        // Голос из настроек проекта важнее глобального; "custom" и пустое значение = глобальная настройка.
+        const projectVoice = project.settings.voice.voice?.trim();
+        const voiceOverride = projectVoice && projectVoice !== "custom" ? projectVoice : undefined;
+        const audio = await this.anyModel.textToSpeech(scene.narration, ttsLanguageCode(project.language), voiceOverride);
         return this.storage.saveGeneratedAudio(project, scene, audio);
       }
       this.emit("warn", "queue.task.placeholder_used", {

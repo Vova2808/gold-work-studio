@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, parseDurationSeconds, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
+import { createDefaultProjectSettings, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -451,6 +451,14 @@ export function App() {
   );
 }
 
+/** Приводит голос проекта к id каталога: старые голые имена → edge-tts/, "custom" и пустое → глобальная настройка. */
+function normalizeVoiceId(voice: string): string {
+  const value = (voice ?? "").trim();
+  if (!value || value === "custom") return "";
+  if (value.includes("/") || value === "google-tts") return value;
+  return `edge-tts/${value}`;
+}
+
 /** Компактная сводка данных YouTube для чата: модель отвечает реальными цифрами, а не догадками. */
 function youtubeChatContext(analysis: ReferenceAnalysis): string | null {
   const video = analysis.youtubeContext;
@@ -819,6 +827,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [selectedTopicId, setSelectedTopicId] = useState(project?.chatTopicId ?? "");
   const [applyingTopic, setApplyingTopic] = useState(false);
+  const [samplePlaying, setSamplePlaying] = useState(false);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -896,6 +905,23 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
     if (!path) return;
     setSettings({ music: { ...settings.music, path } });
     onInfo("Фоновая музыка добавлена в проект.");
+  };
+  const projectLanguageCode = ttsLanguageCode(draft.language).split("-")[0]?.toLowerCase() ?? "en";
+  const voiceOptions = TTS_VOICES.filter((voice) => voice.language === "any" || voice.language === projectLanguageCode);
+  const playVoiceSample = async () => {
+    const voice = normalizeVoiceId(settings.voice.voice);
+    if (!voice) return;
+    setSamplePlaying(true);
+    try {
+      const base64 = await api.ttsSample(voice, ttsLanguageCode(draft.language));
+      const audio = new Audio(`data:audio/mpeg;base64,${base64}`);
+      audio.onended = () => setSamplePlaying(false);
+      audio.onerror = () => setSamplePlaying(false);
+      await audio.play();
+    } catch (reason) {
+      setSamplePlaying(false);
+      onInfo(`Не удалось получить пример голоса: ${errorMessage(reason)}`);
+    }
   };
   const applyTopic = async (startGeneration: boolean) => {
     if (!selectedTopicId) return;
@@ -1011,37 +1037,28 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           <ToggleRow label="Озвучка" checked={settings.voice.enabled} onChange={(enabled) => setSettings({ voice: { ...settings.voice, enabled } })} />
           {settings.voice.enabled && (
             <>
-              <Field label="ДВИЖОК ОЗВУЧКИ">
-                <select
-                  value={settings.voice.provider}
-                  onChange={(event) =>
-                    setSettings({
-                      voice: {
-                        ...settings.voice,
-                        provider: event.target.value as ProjectSettings["voice"]["provider"],
-                      },
-                    })
-                  }
-                >
-                  <option value="edge-tts">Edge TTS</option>
-                  <option value="elevenlabs">ElevenLabs API</option>
-                </select>
-                <small>Сейчас используется mock-адаптер. API можно будет добавить в настройках.</small>
-              </Field>
               <Field label="ГОЛОС">
                 <select
-                  value={settings.voice.voice}
+                  value={normalizeVoiceId(settings.voice.voice)}
                   onChange={(event) =>
                     setSettings({
                       voice: { ...settings.voice, voice: event.target.value },
                     })
                   }
                 >
-                  <option value="ru-RU-DmitryNeural">Дмитрий</option>
-                  <option value="ru-RU-SvetlanaNeural">Светлана</option>
-                  <option value="custom">Пользовательский</option>
+                  <option value="">Как в общих настройках (Google TTS)</option>
+                  {voiceOptions.map((voiceOption) => (
+                    <option key={voiceOption.id} value={voiceOption.id}>
+                      {voiceOption.label}{voiceOption.gender ? ` (${voiceOption.gender})` : ""}
+                    </option>
+                  ))}
                 </select>
+                <small>Список подобран под язык проекта. Пример голоса генерируется один раз и кэшируется.</small>
               </Field>
+              <button className="outline-button small" disabled={!normalizeVoiceId(settings.voice.voice) || samplePlaying} onClick={() => void playVoiceSample()}>
+                <Volume2 size={15} />
+                {samplePlaying ? "Играет пример…" : "Послушать пример"}
+              </button>
               <ToggleRow label="Цельная озвучка" checked={settings.voice.singleTrack} onChange={(singleTrack) => setSettings({ voice: { ...settings.voice, singleTrack } })} />
             </>
           )}

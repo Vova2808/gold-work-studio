@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { AiChatMessage, AnalyzeReferenceInput, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext, YouTubeChannelContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
@@ -364,14 +365,14 @@ export class AnyModelClient {
     throw new Error("AnyModel не вернул изображение");
   }
 
-  /** Озвучка текста через AnyModel (google-tts/edge-tts/полный id из настроек). Возвращает MP3 (принимает и бинарный ответ, и JSON base64). */
-  async textToSpeech(text: string, languageCode: string): Promise<Buffer> {
+  /** Озвучка текста через AnyModel. Голос проекта (overrideModel) важнее глобальной настройки. Возвращает MP3. */
+  async textToSpeech(text: string, languageCode: string, overrideModel?: string): Promise<Buffer> {
     const input = text.trim().slice(0, 5_000);
     if (!input) throw new Error("Пустой текст для озвучки");
     const settings = await this.store.publicSettings();
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
-      body: JSON.stringify({ model: ttsModelId(settings.ttsModel, languageCode), input })
+      body: JSON.stringify({ model: ttsModelId(overrideModel?.trim() || settings.ttsModel, languageCode), input })
     });
     if (!response.ok) throw new Error(await this.error(response));
     const contentType = response.headers.get("content-type") ?? "";
@@ -383,6 +384,35 @@ export class AnyModelClient {
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.byteLength === 0) throw new Error("AnyModel вернул пустую озвучку");
     return buffer;
+  }
+
+  private static readonly SAMPLE_TEXTS: Record<string, string> = {
+    ru: "Так звучит этот голос. Отлично подходит для озвучки роликов.",
+    en: "This is how this voice sounds. A great fit for video narration.",
+    es: "Así suena esta voz. Perfecta para narrar videos.",
+    de: "So klingt diese Stimme. Ideal für Video-Vertonung.",
+    fr: "Voici comment sonne cette voix. Parfaite pour la narration vidéo.",
+    it: "Ecco come suona questa voce. Perfetta per la narrazione video.",
+    pt: "É assim que esta voz soa. Perfeita para narração de vídeos.",
+    uk: "Так звучить цей голос. Чудово підходить для озвучення роликів."
+  };
+
+  /** Короткий пример голоса (base64 MP3) с кэшем на диске: одна генерация на голос, дальше мгновенно. */
+  async ttsSample(voice: string, languageCode: string, cacheDir: string): Promise<string> {
+    const safeVoice = voice.replace(/[^a-z0-9-]/gi, "_");
+    const safeLanguage = languageCode.replace(/[^a-zA-Z-]/g, "").toLowerCase() || "en";
+    const cachePath = join(cacheDir, `${safeVoice}-${safeLanguage}.mp3`);
+    try {
+      return (await readFile(cachePath)).toString("base64");
+    } catch {
+      // кэша нет — генерируем ниже
+    }
+    const short = safeLanguage.split("-")[0] ?? "en";
+    const text = AnyModelClient.SAMPLE_TEXTS[short] ?? AnyModelClient.SAMPLE_TEXTS.en!;
+    const audio = await this.textToSpeech(text, languageCode, voice);
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(cachePath, audio);
+    return audio.toString("base64");
   }
 
   async generateVideo(prompt: string, duration: number, aspectRatio: string, sourceImage?: Buffer): Promise<Buffer> {
@@ -570,6 +600,8 @@ const EDGE_TTS_VOICES: Record<string, string> = {
 function ttsModelId(setting: string, languageCode: string): string {
   const value = (setting || "google-tts").trim();
   if (value.includes("/")) return value;
+  // Голое имя голоса вида "ru-RU-DmitryNeural" (старые проекты) — это Edge TTS.
+  if (/^[a-z]{2,3}-[A-Za-z]{2,4}-\w+/.test(value)) return `edge-tts/${value}`;
   if (value === "edge-tts") {
     const voice = EDGE_TTS_VOICES[languageCode.split("-")[0]?.toLowerCase() ?? ""];
     if (voice) return `edge-tts/${voice}`;
