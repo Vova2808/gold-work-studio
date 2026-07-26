@@ -297,11 +297,35 @@ function registerIpc(): void {
   handleIpc("chat-topics:append", (_event, topicId: string, message: AiChatMessage) => chatTopics.append(topicId, message));
   handleIpc("chat-topics:save-analysis", (_event, topicId: string, analysis: ReferenceAnalysis | null) => chatTopics.saveAnalysis(topicId, analysis));
   handleIpc("chat-topics:delete", (_event, id: string) => chatTopics.delete(id));
-  handleIpc("projects:apply-chat-topic", async (_event, projectId: string, topicId: string) => {
+  handleIpc("projects:apply-chat-topic", async (event, projectId: string, topicId: string) => {
     const project = await projectService.get(projectId);
     if (!project) throw new Error("Проект не найден");
     const topic = chatTopics.get(topicId);
     if (!topic) throw new Error("Тема чата не найдена");
+    const stage = (text: string) => event.sender.send("director:progress", text);
+
+    // Главное: если в теме сохранён разбор — сценарий пишем ПО НЕМУ (тема ролика, ниша, аудитория,
+    // комментарии зрителей). Пересказ переписки давал сценарий «о том, как делать ролики».
+    if (topic.analysis && await anyModelClient.configured()) {
+      const targetSeconds = Math.max(30, Math.round((project.settings.durationMinutes || 1) * 60));
+      const total = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+      stage(`Пишу сценарий по теме «${topic.analysis.suggestedTitle}»: 0 из ${total} сцен`);
+      const full = await anyModelClient.regenerateScenes(
+        { ...topic.analysis, language: project.language },
+        targetSeconds,
+        (done, count) => stage(`Пишу сценарий: ${done} из ${count} сцен`)
+      );
+      return projectService.mutate(projectId, (current) => ({
+        title: topic.analysis!.suggestedTitle || current.title,
+        topic: topic.analysis!.suggestedAngle || topic.analysis!.niche || current.topic,
+        chatTopicId: topicId,
+        scenes: full.scenes,
+        status: full.scenes.length > 0 ? "ready" as const : current.status,
+        referenceAnalysis: topic.analysis!
+      }));
+    }
+
+    stage("Собираю сценарий из сохранённого диалога…");
     const plan = await createPlanFromTopic(topic, project.language);
     const durationSeconds = plan.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
     // mutate вместо update: за время LLM-вызова настройки могли измениться, снимок project.settings устарел.
@@ -310,6 +334,7 @@ function registerIpc(): void {
       topic: plan.topic,
       chatTopicId: topicId,
       scenes: plan.scenes,
+      status: plan.scenes.length > 0 ? "ready" as const : current.status,
       settings: {
         ...current.settings,
         durationMinutes: Math.max(1, Math.ceil(durationSeconds / 60))

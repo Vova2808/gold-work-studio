@@ -328,13 +328,25 @@ export class AnyModelClient {
   async createProjectPlanFromChat(messages: AiChatMessage[], language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
     const settings = await this.store.publicSettings();
     const content = await this.chat(settings.textModel, [
-      {
-        role: "system",
-        content: "Ты AI-режиссёр. Преврати сохранённый разговор в готовый оригинальный сценарный пресет. Верни только валидный JSON без markdown: title, topic, scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]. Не копируй чужой текст дословно."
-      },
+      { role: "system", content: SCENE_WRITER_SYSTEM },
       {
         role: "user",
-        content: `Язык проекта: ${language}\nСохранённый разговор:\n${messages.map((message) => `${message.role}: ${message.content}`).join("\n\n")}`
+        content: [
+          "# Задача",
+          "Ниже — переписка пользователя с AI-режиссёром. Определи, ПРО ЧТО должен быть ролик, и напиши сценарий именно на эту тему.",
+          "",
+          "# Критично",
+          "Переписка — это служебное обсуждение процесса. НЕ пиши сценарий о том, как делать ролики, как удерживать зрителя, про хуки и монтаж, если сам ролик не об этом.",
+          "Тема ролика — это то, что пользователь просил снять (например разбор ниши, история, обзор). Служебные фразы ассистента вроде «разбор готов», «выбери тему» игнорируй.",
+          "",
+          `# Язык озвучки: ${language}`,
+          "",
+          "# Переписка",
+          messages.map((message) => `${message.role}: ${message.content}`).join("\n\n"),
+          "",
+          "# Формат ответа",
+          'Только JSON: {"title":"заголовок ролика","topic":"о чём ролик одним предложением","scenes":[{"title":"...","narration":"...","imagePrompt":"...","animationPrompt":"...","durationSeconds":5}]}'
+        ].join("\n")
       }
     ]);
     const parsed = extractJson<{
