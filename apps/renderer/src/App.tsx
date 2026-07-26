@@ -828,6 +828,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [selectedTopicId, setSelectedTopicId] = useState(project?.chatTopicId ?? "");
   const [applyingTopic, setApplyingTopic] = useState(false);
   const [samplePlaying, setSamplePlaying] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -905,6 +906,24 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
     if (!path) return;
     setSettings({ music: { ...settings.music, path } });
     onInfo("Фоновая музыка добавлена в проект.");
+  };
+  /** Пересобирает сцены под текущую длину и язык проекта (нужен сохранённый разбор — referenceAnalysis). */
+  const rebuildScenario = async () => {
+    if (!draft.referenceAnalysis) return;
+    setRebuilding(true);
+    try {
+      const saved = await save();
+      if (!saved) return;
+      const targetSeconds = Math.max(30, Math.round((saved.settings.durationMinutes || 1) * 60));
+      const full = await api.regenerateReferenceScenes({ ...draft.referenceAnalysis, language: saved.language }, targetSeconds);
+      const updated = await onSave(saved.id, { scenes: full.scenes });
+      setDraft(structuredClone(updated));
+      onInfo(`Сценарий пересобран: ${full.scenes.length} сцен, язык — ${saved.language}.`);
+    } catch (reason) {
+      onInfo(`Не удалось пересобрать сценарий: ${errorMessage(reason)}`);
+    } finally {
+      setRebuilding(false);
+    }
   };
   const projectLanguageCode = ttsLanguageCode(draft.language).split("-")[0]?.toLowerCase() ?? "en";
   const voiceOptions = TTS_VOICES.filter((voice) => voice.language === "any" || voice.language === projectLanguageCode);
@@ -992,6 +1011,11 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               <option>Русский</option>
               <option>English</option>
               <option>Español</option>
+              <option>Deutsch</option>
+              <option>Français</option>
+              <option>Italiano</option>
+              <option>Português</option>
+              <option>Українська</option>
             </select>
           </Field>
           <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО">
@@ -1002,7 +1026,21 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
                 </button>
               ))}
             </div>
+            <input
+              type="number"
+              min={0.5}
+              step={0.5}
+              value={settings.durationMinutes}
+              onChange={(event) => setSettings({ durationMinutes: Math.max(0.5, Number(event.target.value) || 0.5) })}
+            />
+            <small>Своя длина в минутах — если пресеты не подходят.</small>
           </Field>
+          {draft.referenceAnalysis && (
+            <button className="outline-button small" disabled={busy || saving || rebuilding} onClick={() => void rebuildScenario()}>
+              <RotateCcw size={15} />
+              {rebuilding ? "Пересобираю сценарий…" : "Пересобрать сценарий под длину и язык"}
+            </button>
+          )}
           <Field label="СМЕНА КАДРОВ">
             <select
               value={settings.frameChange}
