@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
 import { createDefaultProjectSettings, parseDurationSeconds, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
@@ -84,6 +84,7 @@ export function App() {
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [uiLog, setUiLog] = useState<Array<{ time: string; level: string; text: string }>>([]);
   const pageScrollRef = useRef<HTMLDivElement>(null);
+  const socketConnectedRef = useRef(false);
 
   /** Пишет действие в Console Output и в лог-файл приложения. */
   function logAction(text: string, level: "UI" | "INFO" | "ERROR" = "UI") {
@@ -112,7 +113,8 @@ export function App() {
     }
     void initialLoad();
     const polling = window.setInterval(() => {
-      const queueRequest = window.goldWork ? Promise.resolve<QueueTask[] | null>(null) : api.getQueue();
+      // Пока живёт сокет — очередь приходит push-ем; при обрыве переходим на поллинг, чтобы прогресс не замерзал.
+      const queueRequest = window.goldWork && socketConnectedRef.current ? Promise.resolve<QueueTask[] | null>(null) : api.getQueue();
       void Promise.all([queueRequest, api.listProjects()])
         .then(([tasks, items]) => {
           if (!mounted) return;
@@ -130,10 +132,16 @@ export function App() {
 
   useEffect(() => {
     if (!appInfo?.realtimeUrl) return;
-    const socket = io(appInfo.realtimeUrl, { transports: ["websocket"] });
+    const socket = io(appInfo.realtimeUrl, { transports: ["websocket", "polling"] });
+    socket.on("connect", () => { socketConnectedRef.current = true; });
+    socket.on("disconnect", () => { socketConnectedRef.current = false; });
     socket.on("queue:snapshot", (tasks: QueueTask[]) => setQueue(tasks));
-    socket.on("connect_error", (reason) => void api.writeLog("warn", "queue.socket_error", { message: reason.message }));
+    socket.on("connect_error", (reason) => {
+      socketConnectedRef.current = false;
+      void api.writeLog("warn", "queue.socket_error", { message: reason.message });
+    });
     return () => {
+      socketConnectedRef.current = false;
       socket.close();
     };
   }, [appInfo?.realtimeUrl]);
@@ -379,6 +387,15 @@ export function App() {
       <div className="app-body">
         <Sidebar active={activeSection} onNavigate={navigate} onInfo={setNotice} />
         <section className="work-area">
+          <div className="top-strips">
+            {!window.goldWork && (
+              <div className="demo-banner">
+                <X size={13} />
+                Демо-режим: нет связи с Electron, все данные и анализы — выдуманные. Реальные функции недоступны.
+              </div>
+            )}
+            <StepHintBar hint={computeStepHint(appInfo, selectedProject, queue, activeSection)} onNavigate={navigate} />
+          </div>
           <div className="page-scroll" ref={pageScrollRef}>
             {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onOpenFolder={(id) => void openProjectFolder(id)} />}
             {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
@@ -418,6 +435,119 @@ export function App() {
           <button onClick={() => setNotice(null)}>×</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Компактная сводка данных YouTube для чата: модель отвечает реальными цифрами, а не догадками. */
+function youtubeChatContext(analysis: ReferenceAnalysis): string | null {
+  const video = analysis.youtubeContext;
+  const channel = analysis.youtubeChannelContext;
+  if (!video && !channel) return null;
+  const payload = video
+    ? {
+        video: { title: video.title, views: video.views, likes: video.likes, comments: video.commentCount, publishedAt: video.publishedAt, durationSeconds: video.durationSeconds },
+        channel: { title: video.channelTitle, subscribers: video.channelSubscribers, totalViews: video.channelViews, videoCount: video.channelVideoCount },
+        topVideos: video.topVideos.slice(0, 10),
+        topComments: video.topComments.slice(0, 10),
+      }
+    : {
+        channel: { title: channel!.title, subscribers: channel!.subscribers, totalViews: channel!.totalViews, videoCount: channel!.videoCount },
+        videosTimeline: channel!.videos.slice(0, 30),
+        topComments: channel!.topComments.slice(0, 15),
+      };
+  return `Реальные данные YouTube по текущему разбору — отвечай по ним точными цифрами, ничего не выдумывай:\n${JSON.stringify(payload)}`;
+}
+
+type StepHint = { now: string; next?: string; action?: { label: string; section: SectionKey } };
+
+/** Определяет по состоянию приложения, что пользователю сделать сейчас и что произойдёт дальше. */
+function computeStepHint(
+  appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null,
+  project: Project | undefined,
+  queue: QueueTask[],
+  activeSection: SectionKey
+): StepHint | null {
+  if (appInfo?.mockMode) {
+    return {
+      now: "подключите ключи AnyModel и YouTube в Настройках — пока работают заглушки без реальной генерации",
+      next: "вставите ссылку на видео или канал в AI Генераторе и получите разбор с 3 темами",
+      action: { label: "Открыть настройки", section: "settings" },
+    };
+  }
+  if (project?.status === "generating") {
+    const tasks = queue.filter((task) => task.projectId === project.id);
+    const done = tasks.filter((task) => task.status === "done").length;
+    const percent = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0;
+    const readyScenes = project.scenes.filter((scene) => scene.status === "ready").length;
+    return {
+      now: `идёт генерация «${project.title}»: ${percent}% — сцен готово ${readyScenes} из ${project.scenes.length}`,
+      next: "когда все сцены будут готовы, соберётся Final.mp4",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (project?.status === "paused") {
+    return {
+      now: `генерация «${project.title}» на паузе`,
+      next: "продолжите или остановите её в Очереди",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (project?.status === "complete" && project.outputPath) {
+    return {
+      now: `«${project.title}» готов — Final.mp4 собран`,
+      next: "откройте предпросмотр или папку проекта, либо начните новый разбор в AI Генераторе",
+      action: { label: "К проектам", section: "projects" },
+    };
+  }
+  if (project?.status === "failed") {
+    return {
+      now: `в «${project.title}» есть незавершённые или упавшие задачи`,
+      next: "откройте Очередь и повторите упавшие задачи или запустите генерацию заново",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (activeSection === "project" && project) {
+    if (project.scenes.length === 0) {
+      return {
+        now: "сценарий собирается в фоне — пока настройте язык, длительность, формат кадра и озвучку",
+        next: "когда сцены появятся, проверьте текст и нажмите «Генерировать видео»",
+      };
+    }
+    return {
+      now: `проверьте сцены (${project.scenes.length} шт.) и настройки: язык, формат, озвучка, референсы`,
+      next: "нажмите «Генерировать видео» — по сценам сгенерируются картинки и озвучка",
+    };
+  }
+  if (activeSection === "director") {
+    return {
+      now: "вставьте ссылку на видео или канал YouTube и напишите задачу: «повтори ролик», «проанализируй канал»",
+      next: "получите разбор и 3 темы — по выбранной теме соберётся сценарий и откроется проект",
+    };
+  }
+  if (!project) {
+    return {
+      now: "начните с разбора: вставьте ссылку на видео или канал в AI Генераторе",
+      next: "по выбранной теме соберётся проект со сценами",
+      action: { label: "Открыть AI Генератор", section: "director" },
+    };
+  }
+  return {
+    now: `проект «${project.title}» ждёт: проверьте сценарий и настройки`,
+    next: "запустите генерацию — прогресс появится в очереди и на подсказке",
+    action: { label: "Открыть проект", section: "project" },
+  };
+}
+
+/** Тонкая строка-подсказка вверху рабочей области: «Сейчас … → Дальше …». */
+function StepHintBar({ hint, onNavigate }: { hint: StepHint | null; onNavigate: (section: SectionKey) => void }) {
+  if (!hint) return null;
+  return (
+    <div className="step-hint-bar">
+      <Lightbulb size={14} />
+      <span className="step-hint-now"><strong>Сейчас:</strong> {hint.now}</span>
+      {hint.next && <span className="step-hint-next"><strong>Дальше:</strong> {hint.next}</span>}
+      {hint.action && <button onClick={() => onNavigate(hint.action!.section)}>{hint.action.label}</button>}
     </div>
   );
 }
@@ -678,8 +808,27 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [applyingTopic, setApplyingTopic] = useState(false);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
+  }, [project?.id]);
+  useEffect(() => {
     setSelectedTopicId(project?.chatTopicId ?? "");
-  }, [project?.id, project?.chatTopicId, project?.updatedAt]);
+  }, [project?.id, project?.chatTopicId]);
+  // Фоновые обновления (сборка сценария, генерация) вливаются в черновик, НЕ затирая редактируемый текст.
+  useEffect(() => {
+    if (!project) return;
+    setDraft((current) => {
+      if (!current || current.id !== project.id) return structuredClone(project);
+      const incoming = structuredClone(project);
+      const sameSceneSet = current.scenes.length === incoming.scenes.length
+        && current.scenes.every((scene, index) => scene.id === incoming.scenes[index]?.id);
+      const scenes = sameSceneSet
+        ? incoming.scenes.map((scene, index) => {
+            const edited = current.scenes[index]!;
+            return { ...scene, title: edited.title, narration: edited.narration, imagePrompt: edited.imagePrompt, animationPrompt: edited.animationPrompt, durationSeconds: edited.durationSeconds };
+          })
+        : incoming.scenes;
+      return { ...current, status: incoming.status, outputPath: incoming.outputPath, updatedAt: incoming.updatedAt, scenes };
+    });
+  }, [project?.id, project?.updatedAt]);
   useEffect(() => {
     void api.listChatTopics().then(setChatTopics).catch(() => setChatTopics([]));
   }, []);
@@ -1441,7 +1590,22 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
         onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
       } else if (analysis) {
         const requestedSeconds = parseDurationSeconds(text);
-        if (requestedSeconds) {
+        const looksLikeQuestion = /\?\s*$/.test(text.trim()) || /^(сколько|что|какой|какая|какие|каков|почему|когда|кто|где|как)\b/i.test(text.trim());
+        const chatContext = !requestedSeconds && looksLikeQuestion ? youtubeChatContext(analysis) : null;
+        if (chatContext && (await api.getAnyModelSettings()).configured) {
+          // Вопрос по данным — отвечаем напрямую с реальной статистикой YouTube, не пересобирая разбор.
+          let streamed = "";
+          const answer = await api.streamChatWithAnyModel([
+            { role: "system", content: chatContext },
+            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
+            { role: "user", content: text },
+          ], (chunk) => {
+            streamed += chunk;
+            setStreamingText(streamed);
+          });
+          await appendAssistant(answer);
+          setStreamingText(null);
+        } else if (requestedSeconds) {
           setStreamingText(`Собираю сцены под ~${Math.round((requestedSeconds / 60) * 10) / 10} мин…`);
           const resized = await api.regenerateReferenceScenes(analysis, requestedSeconds);
           setStreamingText(null);
@@ -1490,7 +1654,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     if (analyzing) return;
     setAnalyzing(true);
     onLog(`Пишу сценарий: ${label}`);
-    setMessages((current) => [...current, { role: "assistant", text: `Пишу сценарий по теме «${label}» на модели cc/claude-sonnet-5. Прогресс — ниже.` }]);
+    setMessages((current) => [...current, { role: "assistant", text: `Пишу сценарий по теме «${label}». Прогресс — ниже.` }]);
     setStreamingText("Пишу сценарий: подготовка…");
     try {
       const targetSeconds = Math.max(30, Math.round(targetMinutes * 60));
@@ -1674,7 +1838,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                 <header>
                   <div>
                     <strong>{analysis.sourceTitle}</strong>
-                    <small>{analysis.provider === "mock-director" ? "Демонстрационный разбор — API ещё не подключён" : `Анализ: ${analysis.provider}`}</small>
+                    <small>{analysis.provider.startsWith("mock") ? "⚠ Демонстрационный разбор с выдуманными данными — API не подключён" : `Анализ: ${analysis.provider}`}</small>
                   </div>
                   <span>{analysis.scenes.length > 0 ? `${analysis.scenes.length} сцен` : "выбери тему ниже"}</span>
                 </header>

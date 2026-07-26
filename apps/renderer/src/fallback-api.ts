@@ -84,7 +84,7 @@ function analyzeReference(url: string, instructions = ""): ReferenceAnalysis {
     language: "Русский",
     instructions,
     scenes,
-    provider: youtubeContext ? "mock-director+youtube-data-v3" : "mock-director",
+    provider: youtubeContext ? "mock-youtube" : "mock-director",
     youtubeContext,
     suggestedTopics: [
       { title: "Главная ошибка новичков в этой нише", hook: "Вы делаете это каждый день и теряете результат.", angle: "Разбор ошибки с быстрым решением" },

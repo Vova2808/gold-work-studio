@@ -304,20 +304,28 @@ async function run() {
   if (!referenceReady) fail("разбор ссылки на ролик не появился");
   await trace("reference-analysis-ready");
 
-  const referenceProjectCreated = await window.webContents.executeJavaScript(`(() => {
-    const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => item.textContent?.includes("Согласен"));
-    if (!button) return false;
-    button.click();
-    return true;
-  })()`);
-  if (!referenceProjectCreated) fail("кнопка согласия с YouTube-разбором не найдена");
-  await wait(350);
-  const referenceScenarioReady = await window.webContents.executeJavaScript(`(() => {
-    const text = document.body.innerText;
-    return text.includes("Локальный конвейер") && text.includes("Сборка Final.mp4") && Boolean(document.querySelector(".global-progress"));
-  })()`);
-  if (!referenceScenarioReady) fail("проект из YouTube-разбора не запустился");
-  await trace("youtube-analysis-generation-ready");
+  // Кнопка разблокируется после «допечатывания» ответа чата — ждём активную и кликаем.
+  let referenceProjectCreated = false;
+  for (let attempt = 0; attempt < 20 && !referenceProjectCreated; attempt += 1) {
+    referenceProjectCreated = await window.webContents.executeJavaScript(`(() => {
+      const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => (item.textContent?.includes("Написать сценарий") || item.textContent?.includes("Согласен")) && !item.disabled);
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    if (!referenceProjectCreated) await wait(300);
+  }
+  if (!referenceProjectCreated) fail("кнопка создания проекта из YouTube-разбора не активировалась");
+  await wait(1200);
+  // Генерация больше не стартует сама: после выбора темы открывается проект с кнопкой запуска.
+  await wait(1500);
+  const afterBuildText = await window.webContents.executeJavaScript("document.body.innerText");
+  if (!afterBuildText.includes("Генерировать видео") && !afterBuildText.includes("Сценарий собирается")) {
+    const chatTail = await window.webContents.executeJavaScript("document.querySelector('.chat-area')?.innerText.slice(-700) ?? 'нет .chat-area'");
+    await trace(`after-build chat tail: ${chatTail.replace(/\n+/g, " | ")}`);
+    fail("проект из YouTube-разбора не открылся");
+  }
+  await trace("youtube-analysis-project-opened");
 
   await window.webContents.executeJavaScript(`(() => {
     [...document.querySelectorAll(".nav-item")].find((item) => item.textContent?.trim() === "Проект")?.click();
