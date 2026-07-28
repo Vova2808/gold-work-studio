@@ -1,6 +1,6 @@
 {
   "name": "gold-work-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Portable Windows studio for AI-assisted video production",
   "type": "module",

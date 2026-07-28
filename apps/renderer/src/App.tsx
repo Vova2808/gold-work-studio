@@ -1,105 +1,40 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import {
-  Bot,
-  Bookmark,
-  Captions,
-  Check,
-  ChevronLeft,
-  CircleUserRound,
-  Clapperboard,
-  Copy,
-  Download,
-  Eye,
-  FileText,
-  Folder,
-  FolderOpen,
-  Gauge,
-  Grid2X2,
-  Image,
-  Languages,
-  Layers3,
-  LayoutDashboard,
-  ListPlus,
-  LogOut,
-  Mic2,
-  Monitor,
-  MoreHorizontal,
-  Music2,
-  Paperclip,
-  Play,
-  Plus,
-  RotateCcw,
-  Save,
-  Search,
-  Send,
-  Settings,
-  SlidersHorizontal,
-  Sparkles,
-  SquareTerminal,
-  Trash2,
-  Upload,
-  Video,
-  Volume2,
-  WandSparkles,
-  X,
-  Zap
-} from "lucide-react";
-import type { CreateProjectInput, DesktopApi, Project, QueueTask } from "@gold-work/shared";
+import type { CSSProperties, ReactNode } from "react";
+import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
+import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type GoogleSettings, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
+import { fallbackApi } from "./fallback-api";
+import { io } from "socket.io-client";
 
-type SectionKey =
-  | "dashboard"
-  | "project"
-  | "scenario"
-  | "clone"
-  | "director"
-  | "projects"
-  | "subtitles"
-  | "thumbnail"
-  | "avatar"
-  | "seo"
-  | "studio"
-  | "queue"
-  | "console"
-  | "settings";
+type SectionKey = "dashboard" | "project" | "scenario" | "clone" | "director" | "projects" | "subtitles" | "thumbnail" | "avatar" | "seo" | "studio" | "queue" | "console" | "settings";
+type Overlay = { type: "preview" | "timeline"; projectId: string };
 
-const fallbackApi: DesktopApi = {
-  listProjects: async () => [],
-  createProject: async (input: CreateProjectInput): Promise<Project> => ({
-    id: `preview_${Date.now()}`,
-    ...input,
-    status: "draft",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    scenes: []
-  }),
-  createDemoProject: async (): Promise<Project> => ({
-    id: `preview_${Date.now()}`,
-    title: "Барсик — космический кот",
-    topic: "Семейный мультфильм о приключении ленивого кота в космосе",
-    aspectRatio: "16:9",
-    language: "Русский",
-    mode: "standard",
-    status: "ready",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    scenes: []
-  }),
-  getQueue: async () => [],
-  getAppInfo: async () => ({ version: "0.1.0", dataPath: "Режим браузерного предпросмотра", mockMode: true })
-};
-
-const navigation: Array<{ label?: string; items: Array<{ key: SectionKey; title: string; icon: ReactNode; beta?: boolean }> }> = [
+const navigation: Array<{
+  label: string;
+  items: Array<{
+    key: SectionKey;
+    title: string;
+    icon: ReactNode;
+    beta?: boolean;
+  }>;
+}> = [
   {
     label: "ГЛАВНОЕ",
     items: [
-      { key: "dashboard", title: "Dashboard", icon: <LayoutDashboard size={17} /> },
+      {
+        key: "dashboard",
+        title: "Dashboard",
+        icon: <LayoutDashboard size={17} />,
+      },
       { key: "project", title: "Проект", icon: <Clapperboard size={17} /> },
       { key: "scenario", title: "Сценарий", icon: <FileText size={17} /> },
       { key: "clone", title: "Клон YouTube", icon: <Copy size={17} /> },
-      { key: "director", title: "AI Генератор", icon: <WandSparkles size={17} /> },
-      { key: "projects", title: "Проекты", icon: <FolderOpen size={17} /> }
-    ]
+      {
+        key: "director",
+        title: "AI Генератор",
+        icon: <WandSparkles size={17} />,
+      },
+      { key: "projects", title: "Проекты", icon: <FolderOpen size={17} /> },
+    ],
   },
   {
     label: "ИНСТРУМЕНТЫ",
@@ -108,47 +43,370 @@ const navigation: Array<{ label?: string; items: Array<{ key: SectionKey; title:
       { key: "thumbnail", title: "Превью", icon: <Image size={17} /> },
       { key: "avatar", title: "Аватарка", icon: <CircleUserRound size={17} /> },
       { key: "seo", title: "SEO", icon: <Search size={17} /> },
-      { key: "studio", title: "Студия", icon: <Sparkles size={17} />, beta: true },
-      { key: "queue", title: "Очередь", icon: <ListPlus size={17} />, beta: true },
-      { key: "console", title: "Консоль", icon: <SquareTerminal size={17} /> }
-    ]
-  }
+      {
+        key: "studio",
+        title: "Студия",
+        icon: <Sparkles size={17} />,
+        beta: true,
+      },
+      {
+        key: "queue",
+        title: "Очередь",
+        icon: <ListPlus size={17} />,
+        beta: true,
+      },
+      { key: "console", title: "Консоль", icon: <SquareTerminal size={17} /> },
+    ],
+  },
 ];
+
+const statusLabels: Record<Project["status"], string> = {
+  draft: "Черновик",
+  ready: "Готов к генерации",
+  generating: "Генерация",
+  paused: "На паузе",
+  complete: "Готов",
+  failed: "Остановлен",
+};
 
 export function App() {
   const api = window.goldWork ?? fallbackApi;
   const [activeSection, setActiveSection] = useState<SectionKey>("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
   const [queue, setQueue] = useState<QueueTask[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [appInfo, setAppInfo] = useState<Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(true);
+  const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [uiLog, setUiLog] = useState<Array<{ time: string; level: string; text: string }>>([]);
   const pageScrollRef = useRef<HTMLDivElement>(null);
+  const socketConnectedRef = useRef(false);
+  const [directorProgress, setDirectorProgress] = useState<string | null>(null);
+  useEffect(() => api.onDirectorProgress((stage) => setDirectorProgress(stage)), []);
+
+  /** Пишет действие в Console Output и в лог-файл приложения. */
+  function logAction(text: string, level: "UI" | "INFO" | "ERROR" = "UI") {
+    setUiLog((current) => [...current.slice(-199), { time: new Date().toLocaleTimeString("ru-RU"), level, text }]);
+    void api.writeLog(level === "ERROR" ? "error" : "info", "ui.action", { text }).catch(() => undefined);
+  }
+  useEffect(() => { if (notice) logAction(notice, "INFO"); }, [notice]);
+  useEffect(() => { if (error) logAction(error, "ERROR"); }, [error]);
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
+  const overlayProject = overlay ? projects.find((project) => project.id === overlay.projectId) : undefined;
 
   useEffect(() => {
-    void api.listProjects().then(setProjects);
-    void api.getQueue().then(setQueue);
-    void api.getAppInfo().then(setAppInfo);
+    let mounted = true;
+    async function initialLoad() {
+      try {
+        const [loadedProjects, loadedQueue, info] = await Promise.all([api.listProjects(), api.getQueue(), api.getAppInfo()]);
+        if (!mounted) return;
+        setProjects(loadedProjects);
+        setQueue(loadedQueue);
+        setAppInfo(info);
+        setSelectedProjectId((current) => (current && loadedProjects.some((project) => project.id === current) ? current : (loadedProjects[0]?.id ?? null)));
+      } catch (reason) {
+        if (mounted) setError(errorMessage(reason));
+      }
+    }
+    void initialLoad();
+    const polling = window.setInterval(() => {
+      // Пока живёт сокет — очередь приходит push-ем; при обрыве переходим на поллинг, чтобы прогресс не замерзал.
+      const queueRequest = window.goldWork && socketConnectedRef.current ? Promise.resolve<QueueTask[] | null>(null) : api.getQueue();
+      void Promise.all([queueRequest, api.listProjects()])
+        .then(([tasks, items]) => {
+          if (!mounted) return;
+          if (tasks) setQueue(tasks);
+          setProjects(items);
+          setSelectedProjectId((current) => (current && items.some((project) => project.id === current) ? current : (items[0]?.id ?? null)));
+        })
+        .catch(() => undefined);
+    }, 750);
+    return () => {
+      mounted = false;
+      window.clearInterval(polling);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!appInfo?.realtimeUrl) return;
+    const socket = io(appInfo.realtimeUrl, { transports: ["websocket", "polling"] });
+    socket.on("connect", () => { socketConnectedRef.current = true; });
+    socket.on("disconnect", () => { socketConnectedRef.current = false; });
+    socket.on("queue:snapshot", (tasks: QueueTask[]) => setQueue(tasks));
+    socket.on("connect_error", (reason) => {
+      socketConnectedRef.current = false;
+      void api.writeLog("warn", "queue.socket_error", { message: reason.message });
+    });
+    return () => {
+      socketConnectedRef.current = false;
+      socket.close();
+    };
+  }, [appInfo?.realtimeUrl]);
 
   useEffect(() => {
     if (pageScrollRef.current) pageScrollRef.current.scrollTop = 0;
   }, [activeSection]);
 
-  async function createDemo(openProject = true) {
-    setCreating(true);
+  useEffect(() => {
+    const reportError = (event: ErrorEvent) => {
+      void api.writeLog("error", "window.error", {
+        message: event.message,
+        filename: event.filename,
+        line: event.lineno,
+        column: event.colno,
+        stack: event.error instanceof Error ? event.error.stack : undefined,
+      });
+    };
+    const reportRejection = (event: PromiseRejectionEvent) => {
+      void api.writeLog("error", "window.unhandled_rejection", {
+        reason: event.reason instanceof Error ? { message: event.reason.message, stack: event.reason.stack } : String(event.reason),
+      });
+    };
+    window.addEventListener("error", reportError);
+    window.addEventListener("unhandledrejection", reportRejection);
+    void api.writeLog("info", "ui.mounted");
+    return () => {
+      window.removeEventListener("error", reportError);
+      window.removeEventListener("unhandledrejection", reportRejection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (error) void api.writeLog("error", "ui.operation_failed", { message: error });
+  }, [error]);
+
+  useEffect(() => {
+    if (!notice) return;
+    void api.writeLog("info", "ui.notice", { message: notice });
+    const timeout = window.setTimeout(() => setNotice(null), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  function upsertProject(project: Project) {
+    setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
+    setSelectedProjectId(project.id);
+  }
+
+  async function refresh() {
+    const [items, tasks] = await Promise.all([api.listProjects(), api.getQueue()]);
+    setProjects(items);
+    setQueue(tasks);
+    setSelectedProjectId((current) => (current && items.some((project) => project.id === current) ? current : (items[0]?.id ?? null)));
+  }
+
+  async function createProject(withDemoScenes = false) {
+    setBusy(true);
+    setError(null);
     try {
-      const project = await api.createDemoProject();
-      setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
-      if (openProject) setActiveSection("project");
+      const project = withDemoScenes
+        ? await api.createDemoProject()
+        : await api.createProject({
+            title: `Новый проект ${projects.length + 1}`,
+            topic: "Опишите тему нового видео",
+            aspectRatio: "16:9",
+            language: "Русский",
+            mode: "standard",
+          });
+      upsertProject(project);
+      setActiveSection(withDemoScenes ? "project" : "scenario");
+    } catch (reason) {
+      setError(errorMessage(reason));
     } finally {
-      setCreating(false);
+      setBusy(false);
+    }
+  }
+
+  async function createReferenceProject(analysis: ReferenceAnalysis) {
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      setSelectedProjectId(project.id);
+      setActiveSection("project");
+      setNotice("Проект создан: сценарий подставлен. Проверьте настройки и нажмите «Генерировать видео».");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptYouTubeAnalysis(analysis: ReferenceAnalysis) {
+    setBusy(true);
+    setError(null);
+    try {
+      // Если пользователь не задавал длину, в разборе лежит короткое превью сцен —
+      // собираем полный сценарий под длину оригинала (+ ~1.5 мин) перед созданием проекта.
+      let finalAnalysis = analysis;
+      const targetSeconds = (analysis.youtubeContext?.durationSeconds ?? 0) + 90;
+      const expectedScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+      if (targetSeconds > 90 && analysis.scenes.length < Math.min(expectedScenes, 9)) {
+        setNotice(`Собираю полный сценарий под длину оригинала (~${Math.round(targetSeconds / 60)} мин, ${expectedScenes} сцен)…`);
+        finalAnalysis = await api.regenerateReferenceScenes(analysis, targetSeconds);
+      }
+      const project = await api.createReferenceProject({ analysis: finalAnalysis, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      setSelectedProjectId(project.id);
+      setActiveSection("project");
+      await refresh();
+      setNotice("Проект создан: сценарий подставлен. Проверьте настройки и запустите генерацию кнопкой в проекте.");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Пересборка только Final.mp4 из готовых материалов — без перегенерации картинок и озвучки. */
+  async function reassembleProject(id: string) {
+    setError(null);
+    try {
+      await api.assembleProject(id);
+      setNotice("Пересборка Final.mp4 запущена — прогресс в очереди.");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function toggleSceneAssembly(projectId: string, sceneId: string, include: boolean) {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) return;
+    try {
+      const updated = await api.updateProject(projectId, {
+        scenes: project.scenes.map((scene) => (scene.id === sceneId ? { ...scene, includeInAssembly: include } : scene))
+      });
+      setProjects((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      setNotice(include ? "Сцена возвращена в сборку." : "Сцена исключена из сборки — нажмите «Пересобрать Final.mp4».");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  /** Мгновенно создаёт проект по выбранной теме и открывает его — длину и язык пользователь выбирает уже в проекте. */
+  async function createProjectFromTopic(analysis: ReferenceAnalysis) {
+    setError(null);
+    // Сбрасываем устаревший текст прогресса анализа — иначе он залипает в подсказке нового проекта.
+    setDirectorProgress(null);
+    try {
+      const project = await api.createReferenceProject({ analysis, aspectRatio: "16:9", mode: "standard" });
+      upsertProject(project);
+      setSelectedProjectId(project.id);
+      setActiveSection("project");
+      logAction(`Проект «${project.title}» создан`);
+      setNotice(project.scenes.length > 0
+        ? `Проект открыт: ${project.scenes.length} сцен. Проверьте настройки и запустите генерацию.`
+        : "Проект открыт. Выберите длину и язык (кнопки с флагами) и нажмите «Собрать сценарий».");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function saveProject(id: string, input: UpdateProjectInput) {
+    setError(null);
+    try {
+      const project = await api.updateProject(id, input);
+      upsertProject(project);
+      return project;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  async function applyChatTopic(projectId: string, topicId: string) {
+    setError(null);
+    try {
+      const project = await api.applyChatTopicToProject(projectId, topicId);
+      upsertProject(project);
+      return project;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  async function duplicateProject(id: string) {
+    try {
+      upsertProject(await api.duplicateProject(id));
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function deleteProject(id: string) {
+    const project = projects.find((candidate) => candidate.id === id);
+    if (!window.confirm(`Удалить проект «${project?.title ?? id}»?`)) return;
+    try {
+      await api.deleteProject(id);
+      if (overlay?.projectId === id) setOverlay(null);
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  function openProject(id: string, section: SectionKey = "project") {
+    setSelectedProjectId(id);
+    setActiveSection(section);
+  }
+
+  async function startGeneration(id: string) {
+    setBusy(true);
+    logAction(`Запуск генерации проекта ${id}`);
+    try {
+      await api.startGeneration(id);
+      setSelectedProjectId(id);
+      setActiveSection("queue");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function queueAction(action: () => Promise<unknown>) {
+    try {
+      await action();
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function regenerateScene(projectId: string, sceneId: string) {
+    setBusy(true);
+    try {
+      await api.regenerateScene(projectId, sceneId);
+      setOverlay(null);
+      setSelectedProjectId(projectId);
+      setActiveSection("queue");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openProjectFolder(projectId: string) {
+    try {
+      await api.openProjectFolder(projectId);
+    } catch (reason) {
+      setError(errorMessage(reason));
     }
   }
 
   function navigate(section: SectionKey) {
+    logAction(`Переход: ${section}`);
     setActiveSection(section);
-    if (section === "queue") void api.getQueue().then(setQueue);
     if (section === "settings") void api.getAppInfo().then(setAppInfo);
   }
 
@@ -156,38 +414,271 @@ export function App() {
     <div className="desktop-frame">
       <TitleBar />
       <div className="app-body">
-        <Sidebar active={activeSection} onNavigate={navigate} />
+        <Sidebar active={activeSection} onNavigate={navigate} onInfo={setNotice} />
         <section className="work-area">
-          <div className="page-scroll" ref={pageScrollRef}>
-            {activeSection === "dashboard" && (
-              <Dashboard projects={projects} creating={creating} onCreate={() => void createDemo(false)} onNavigate={navigate} />
+          <div className="top-strips">
+            {!window.goldWork && (
+              <div className="demo-banner">
+                <X size={13} />
+                Демо-режим: нет связи с Electron, все данные и анализы — выдуманные. Реальные функции недоступны.
+              </div>
             )}
-            {activeSection === "project" && <ProjectEditor project={projects[0]} />}
-            {activeSection === "director" && <Director creating={creating} onCreate={() => void createDemo()} />}
-            {activeSection === "projects" && <ProjectsPage projects={projects} creating={creating} onCreate={() => void createDemo()} />}
-            {activeSection === "queue" && <QueuePage tasks={queue} />}
-            {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
-            {!["dashboard", "project", "director", "projects", "queue", "settings"].includes(activeSection) && (
-              <ToolPage section={activeSection} />
-            )}
+            <StepHintBar hint={computeStepHint(appInfo, selectedProject, queue, activeSection, directorProgress)} onNavigate={navigate} />
           </div>
-          <ConsoleDock open={consoleOpen} onToggle={() => setConsoleOpen((value) => !value)} />
+          <div className="page-scroll" ref={pageScrollRef}>
+            {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onOpenFolder={(id) => void openProjectFolder(id)} />}
+            {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
+            {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
+            {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
+            {/* Director всегда смонтирован (скрывается CSS): чат и разбор не пропадают при переключении вкладок.
+                display:contents — обёртка не создаёт свой блок и не ломает растяжение чата по высоте. */}
+            <div className={activeSection === "director" ? "section-host" : "hidden-section"}>
+              <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
+            </div>
+            {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} onAssemble={(id) => void reassembleProject(id)} onOpenFolder={(id) => void openProjectFolder(id)} onSave={saveProject} />}
+            {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
+            {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
+            {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} onAction={() => setNotice("Этот инструмент подключим после добавления соответствующего API. Экран уже готов к интеграции.")} />}
+          </div>
+          <GlobalProgressBar
+            tasks={queue}
+            projects={projects}
+            collapsed={progressCollapsed}
+            onToggle={() => setProgressCollapsed((value) => !value)}
+            onOpen={(projectId) => {
+              setSelectedProjectId(projectId);
+              setActiveSection("queue");
+            }}
+          />
+          <ConsoleDock open={consoleOpen} queue={queue} log={uiLog} onToggle={() => setConsoleOpen((value) => !value)} />
         </section>
       </div>
+      {overlay && overlayProject && (
+        <ProjectPreviewModal
+          project={overlayProject}
+          initialMode={overlay.type}
+          onClose={() => setOverlay(null)}
+          onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)}
+          onOpenFolder={() => void openProjectFolder(overlayProject.id)}
+          onAssemble={() => void reassembleProject(overlayProject.id)}
+          onEditScenario={() => {
+            setOverlay(null);
+            setSelectedProjectId(overlayProject.id);
+            navigate("scenario");
+          }}
+          onToggleScene={(sceneId, include) => void toggleSceneAssembly(overlayProject.id, sceneId, include)}
+        />
+      )}
+      {error && (
+        <div className="error-toast">
+          <X size={15} />
+          <span>{error}</span>
+          <button onClick={() => setError(null)}>×</button>
+        </div>
+      )}
+      {notice && (
+        <div className="notice-toast">
+          <Check size={15} />
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)}>×</button>
+        </div>
+      )}
     </div>
   );
 }
 
+/** Языки проекта: один клик по кнопке с флагом вместо ручного ввода. */
+const PROJECT_LANGUAGES: Array<{ label: string; flag: string }> = [
+  { label: "Русский", flag: "🇷🇺" },
+  { label: "English", flag: "🇬🇧" },
+  { label: "Español", flag: "🇪🇸" },
+  { label: "Deutsch", flag: "🇩🇪" },
+  { label: "Français", flag: "🇫🇷" },
+  { label: "Italiano", flag: "🇮🇹" },
+  { label: "Português", flag: "🇵🇹" },
+  { label: "Українська", flag: "🇺🇦" },
+];
+
+/** Приводит голос проекта к id каталога: старые голые имена → edge-tts/, "custom" и пустое → глобальная настройка. */
+function normalizeVoiceId(voice: string): string {
+  const value = (voice ?? "").trim();
+  if (!value || value === "custom") return "";
+  if (value.includes("/") || value === "google-tts") return value;
+  return `edge-tts/${value}`;
+}
+
+/** Компактная сводка данных YouTube для чата: модель отвечает реальными цифрами, а не догадками. */
+function youtubeChatContext(analysis: ReferenceAnalysis): string | null {
+  const video = analysis.youtubeContext;
+  const channel = analysis.youtubeChannelContext;
+  if (!video && !channel) return null;
+  const payload = video
+    ? {
+        video: { title: video.title, views: video.views, likes: video.likes, comments: video.commentCount, publishedAt: video.publishedAt, durationSeconds: video.durationSeconds },
+        channel: { title: video.channelTitle, subscribers: video.channelSubscribers, totalViews: video.channelViews, videoCount: video.channelVideoCount },
+        topVideos: video.topVideos.slice(0, 10),
+        topComments: video.topComments.slice(0, 10),
+      }
+    : {
+        channel: { title: channel!.title, subscribers: channel!.subscribers, totalViews: channel!.totalViews, videoCount: channel!.videoCount },
+        videosTimeline: channel!.videos.slice(0, 30),
+        topComments: channel!.topComments.slice(0, 15),
+      };
+  return `Реальные данные YouTube по текущему разбору — отвечай по ним точными цифрами, ничего не выдумывай:\n${JSON.stringify(payload)}`;
+}
+
+type StepHint = { now: string; next?: string; action?: { label: string; section: SectionKey } };
+
+/** Определяет по состоянию приложения, что пользователю сделать сейчас и что произойдёт дальше. */
+function computeStepHint(
+  appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null,
+  project: Project | undefined,
+  queue: QueueTask[],
+  activeSection: SectionKey,
+  directorProgress: string | null
+): StepHint | null {
+  if (appInfo?.mockMode) {
+    return {
+      now: "подключите ключи AnyModel и YouTube в Настройках — пока работают заглушки без реальной генерации",
+      next: "вставите ссылку на видео или канал в AI Генераторе и получите разбор с 3 темами",
+      action: { label: "Открыть настройки", section: "settings" },
+    };
+  }
+  if (project?.status === "generating") {
+    const tasks = queue.filter((task) => task.projectId === project.id);
+    const done = tasks.filter((task) => task.status === "done").length;
+    const percent = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0;
+    const readyScenes = project.scenes.filter((scene) => scene.status === "ready").length;
+    return {
+      now: `идёт генерация «${project.title}»: ${percent}% — сцен готово ${readyScenes} из ${project.scenes.length}`,
+      next: "когда все сцены будут готовы, соберётся Final.mp4",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (project?.status === "paused") {
+    return {
+      now: `генерация «${project.title}» на паузе`,
+      next: "продолжите или остановите её в Очереди",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (project?.status === "complete" && project.outputPath) {
+    return {
+      now: `«${project.title}» готов — Final.mp4 собран`,
+      next: "откройте предпросмотр или папку проекта, либо начните новый разбор в AI Генераторе",
+      action: { label: "К проектам", section: "projects" },
+    };
+  }
+  if (project?.status === "failed") {
+    return {
+      now: `в «${project.title}» есть незавершённые или упавшие задачи`,
+      next: "откройте Очередь и повторите упавшие задачи или запустите генерацию заново",
+      action: { label: "Открыть очередь", section: "queue" },
+    };
+  }
+  if (activeSection === "project" && project) {
+    if (project.scenes.length === 0) {
+      return {
+        now: directorProgress ?? "выберите длину ролика и язык (кнопки с флагами) и нажмите «Собрать сценарий»",
+        next: "когда сцены появятся, проверьте текст и нажмите «Генерировать видео»",
+      };
+    }
+    return {
+      now: `проверьте сцены (${project.scenes.length} шт.) и настройки: язык, формат, озвучка, референсы`,
+      next: "нажмите «Генерировать видео» — по сценам сгенерируются картинки и озвучка",
+    };
+  }
+  if (activeSection === "director") {
+    return {
+      now: "вставьте ссылку на видео или канал YouTube и напишите задачу: «повтори ролик», «проанализируй канал»",
+      next: "получите разбор и 3 темы — по выбранной теме соберётся сценарий и откроется проект",
+    };
+  }
+  if (!project) {
+    return {
+      now: "начните с разбора: вставьте ссылку на видео или канал в AI Генераторе",
+      next: "по выбранной теме соберётся проект со сценами",
+      action: { label: "Открыть AI Генератор", section: "director" },
+    };
+  }
+  return {
+    now: `проект «${project.title}» ждёт: проверьте сценарий и настройки`,
+    next: "запустите генерацию — прогресс появится в очереди и на подсказке",
+    action: { label: "Открыть проект", section: "project" },
+  };
+}
+
+/** Тонкая строка-подсказка вверху рабочей области: «Сейчас … → Дальше …». */
+function StepHintBar({ hint, onNavigate }: { hint: StepHint | null; onNavigate: (section: SectionKey) => void }) {
+  if (!hint) return null;
+  return (
+    <div className="step-hint-bar">
+      <Lightbulb size={14} />
+      <span className="step-hint-now"><strong>Сейчас:</strong> {hint.now}</span>
+      {hint.next && <span className="step-hint-next"><strong>Дальше:</strong> {hint.next}</span>}
+      {hint.action && <button onClick={() => onNavigate(hint.action!.section)}>{hint.action.label}</button>}
+    </div>
+  );
+}
+
+function GlobalProgressBar({ tasks, projects, collapsed, onToggle, onOpen }: { tasks: QueueTask[]; projects: Project[]; collapsed: boolean; onToggle: () => void; onOpen: (projectId: string) => void }) {
+  const activeStatuses = new Set<QueueTask["status"]>(["pending", "running", "retry_wait", "paused", "blocked"]);
+  const activeRunIds = new Set(tasks.filter((task) => activeStatuses.has(task.status)).map((task) => task.runId));
+  const relevant = tasks.filter((task) => activeRunIds.has(task.runId));
+  if (relevant.length === 0) return null;
+  const projectId = relevant.find((task) => activeStatuses.has(task.status))?.projectId ?? relevant[0]?.projectId;
+  if (!projectId) return null;
+  const project = projects.find((item) => item.id === projectId);
+  const summary = (kind: QueueTask["kind"]) => {
+    const items = relevant.filter((task) => task.kind === kind);
+    return { total: items.length, done: items.filter((task) => task.status === "done").length, progress: items.length ? Math.round(items.reduce((sum, task) => sum + (task.status === "done" ? 100 : task.progress), 0) / items.length) : 0 };
+  };
+  const images = summary("image");
+  const speech = summary("speech");
+  const assembly = summary("assemble");
+  const overall = Math.round(relevant.reduce((sum, task) => sum + (task.status === "done" ? 100 : task.progress), 0) / relevant.length);
+  return (
+    <section className={`global-progress${collapsed ? " collapsed" : ""}`}>
+      <button className="global-progress-head" onClick={onToggle}>
+        <span><Zap size={14} />{project?.title ?? "Генерация"}</span>
+        <strong>{overall}%</strong>
+        <span>{collapsed ? "⌃" : "⌄"}</span>
+      </button>
+      {!collapsed && (
+        <div className="global-progress-stages">
+          {images.total > 0 && <button onClick={() => onOpen(projectId)}><Image size={14} /><span>Картинки <b>{images.done}/{images.total}</b></span><i><em style={{ width: `${images.progress}%` }} /></i></button>}
+          {speech.total > 0 && <button onClick={() => onOpen(projectId)}><Mic2 size={14} /><span>Озвучка <b>{speech.done}/{speech.total}</b></span><i><em style={{ width: `${speech.progress}%` }} /></i></button>}
+          {assembly.total > 0 && <button onClick={() => onOpen(projectId)}><Clapperboard size={14} /><span>Сборка <b>{assembly.progress}%</b></span><i><em style={{ width: `${assembly.progress}%` }} /></i></button>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TitleBar() {
+  const api = window.goldWork ?? fallbackApi;
   return (
     <header className="titlebar">
-      <div className="titlebar-brand"><span>GW</span><strong>GOLDWORK STUDIO</strong></div>
-      <div className="window-actions" aria-hidden="true"><button>—</button><button>□</button><button>×</button></div>
+      <div className="titlebar-brand">
+        <span>GW</span>
+        <strong>GOLDWORK STUDIO</strong>
+      </div>
+      <div className="window-actions">
+        <button aria-label="Свернуть" onClick={() => void api.minimizeWindow()}>
+          —
+        </button>
+        <button aria-label="Развернуть" onClick={() => void api.toggleMaximizeWindow()}>
+          □
+        </button>
+        <button aria-label="Закрыть" onClick={() => void api.closeWindow()}>
+          ×
+        </button>
+      </div>
     </header>
   );
 }
 
-function Sidebar({ active, onNavigate }: { active: SectionKey; onNavigate: (section: SectionKey) => void }) {
+function Sidebar({ active, onNavigate, onInfo }: { active: SectionKey; onNavigate: (section: SectionKey) => void; onInfo: (message: string) => void }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-nav">
@@ -196,7 +687,9 @@ function Sidebar({ active, onNavigate }: { active: SectionKey; onNavigate: (sect
             <div className="nav-group-label">{group.label}</div>
             {group.items.map((item) => (
               <button key={item.key} className={`nav-item${active === item.key ? " active" : ""}`} onClick={() => onNavigate(item.key)}>
-                {item.icon}<span>{item.title}</span>{item.beta && <em>BETA</em>}
+                {item.icon}
+                <span>{item.title}</span>
+                {item.beta && <em>BETA</em>}
               </button>
             ))}
           </div>
@@ -204,221 +697,2465 @@ function Sidebar({ active, onNavigate }: { active: SectionKey; onNavigate: (sect
       </div>
       <div className="sidebar-footer">
         <div className="profile-card">
-          <div><CircleUserRound size={16} /><strong>Owner</strong><span>PRO</span></div>
+          <div>
+            <CircleUserRound size={16} />
+            <strong>Owner</strong>
+            <span>PRO</span>
+          </div>
           <small>Локальный профиль</small>
-          <button><LogOut size={14} />Выйти</button>
+          <button onClick={() => onInfo("Авторизация пока не используется: профиль и все данные хранятся только на этом компьютере.")}>
+            <LogOut size={14} />
+            Выйти
+          </button>
         </div>
         <button className={`settings-link${active === "settings" ? " active" : ""}`} onClick={() => onNavigate("settings")}>
-          <Settings size={17} />Настройки
+          <Settings size={17} />
+          Настройки
         </button>
-        <div className="app-stats"><span><i />Готов</span><span>GoldWork Studio v0.1.0</span></div>
+        <div className="app-stats">
+          <span>
+            <i />
+            Готов
+          </span>
+          <span>GoldWork Studio v0.2.0</span>
+        </div>
       </div>
     </aside>
   );
 }
 
-function Dashboard({ projects, creating, onCreate, onNavigate }: {
-  projects: Project[];
-  creating: boolean;
-  onCreate: () => void;
-  onNavigate: (section: SectionKey) => void;
-}) {
-  const visibleProjects = projects.length ? projects : [demoProject("demo-1", "Новый проект"), demoProject("demo-2", "Нет темы")];
-  const tools: Array<{ title: string; subtitle: string; icon: ReactNode; route: SectionKey }> = [
-    { title: "Превью", subtitle: "AI генерация обложек", icon: <Image size={19} />, route: "thumbnail" },
-    { title: "Аватарка", subtitle: "Генератор аватарок", icon: <CircleUserRound size={19} />, route: "avatar" },
-    { title: "Субтитры", subtitle: "POP WORDS стиль", icon: <Captions size={19} />, route: "subtitles" },
-    { title: "SEO", subtitle: "Заголовки и теги", icon: <Search size={19} />, route: "seo" },
-    { title: "Сценарий", subtitle: "Auto / Custom", icon: <FileText size={19} />, route: "scenario" }
+function Dashboard({ projects, selectedId, busy, onCreate, onOpen, onDelete, onPreview, onGenerate, onNavigate, onOpenFolder }: { projects: Project[]; selectedId?: string; busy: boolean; onCreate: () => void; onOpen: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void; onOpenFolder: (id: string) => void }) {
+  const tools: Array<{
+    title: string;
+    subtitle: string;
+    icon: ReactNode;
+    route: SectionKey;
+  }> = [
+    {
+      title: "Превью",
+      subtitle: "AI генерация обложек",
+      icon: <Image size={19} />,
+      route: "thumbnail",
+    },
+    {
+      title: "Аватарка",
+      subtitle: "Генератор аватарок",
+      icon: <CircleUserRound size={19} />,
+      route: "avatar",
+    },
+    {
+      title: "Субтитры",
+      subtitle: "POP WORDS стиль",
+      icon: <Captions size={19} />,
+      route: "subtitles",
+    },
+    {
+      title: "SEO",
+      subtitle: "Заголовки и теги",
+      icon: <Search size={19} />,
+      route: "seo",
+    },
+    {
+      title: "Сценарий",
+      subtitle: "Auto / Custom",
+      icon: <FileText size={19} />,
+      route: "scenario",
+    },
   ];
-
+  const chosenId = selectedId ?? projects[0]?.id;
+  // Батч-запуск: все проекты со сценами, которые сейчас не генерируются.
+  const batchReady = projects.filter((project) => project.scenes.length > 0 && project.status !== "generating" && project.status !== "paused");
   return (
     <div className="dashboard-page page-with-actionbar">
       <PageHeading icon={<Zap size={25} />} title="Dashboard" subtitle="Управление проектами видео" />
       <section className="quick-panel">
-        <h2><Grid2X2 size={16} />Быстрые инструменты</h2>
+        <h2>
+          <Grid2X2 size={16} />
+          Быстрые инструменты
+        </h2>
         <div className="quick-grid">
           {tools.map((tool) => (
             <button className="quick-card" key={tool.title} onClick={() => onNavigate(tool.route)}>
-              <span>{tool.icon}</span><strong>{tool.title}</strong><small>{tool.subtitle}</small>
+              <span>{tool.icon}</span>
+              <strong>{tool.title}</strong>
+              <small>{tool.subtitle}</small>
             </button>
           ))}
         </div>
       </section>
-
       <div className="projects-heading">
-        <h2><Folder size={17} />Проекты <span>({visibleProjects.length})</span></h2>
-        <div><button className="ghost-button"><FolderOpen size={15} />Папка с видео</button><button className="ghost-button" onClick={onCreate}><Plus size={15} />Добавить ({visibleProjects.length}/30)</button></div>
-      </div>
-
-      <div className="project-list">
-        {visibleProjects.map((project, index) => (
-          <button className="project-row" key={project.id} onClick={() => onNavigate("project")}>
-            <span className="project-check"><Check size={12} /></span>
-            <span className="project-number">{index + 1}</span>
-            <span className="project-main"><strong>{project.title}</strong><small><Languages size={12} />{project.language}<i />1 минута<i /><Mic2 size={12} />Edge TTS<i /><Image size={12} />Nano Banana Pro</small></span>
-            <span className="project-actions"><i /><span><FolderOpen size={15} /></span><span className="danger"><Trash2 size={15} /></span></span>
+        <h2>
+          <Folder size={17} />
+          Проекты <span>({projects.length})</span>
+        </h2>
+        <div>
+          <button className="ghost-button" disabled={!chosenId} onClick={() => chosenId && onOpenFolder(chosenId)}>
+            <FolderOpen size={15} />
+            Папка с видео
           </button>
-        ))}
+          <button className="ghost-button" onClick={onCreate}>
+            <Plus size={15} />
+            Добавить ({projects.length}/30)
+          </button>
+        </div>
       </div>
-
+      {projects.length === 0 ? (
+        <EmptyState icon={<Clapperboard size={34} />} title="Пока нет проектов" text="Создайте первый проект и добавьте сцены будущего ролика." action="Новый проект" onAction={onCreate} />
+      ) : (
+        <div className="project-list">
+          {projects.map((project, index) => (
+            <article className={`project-row${project.id === selectedId ? " selected" : ""}`} key={project.id} onClick={() => onOpen(project.id)}>
+              <span className="project-check">
+                <Check size={12} />
+              </span>
+              <span className="project-number">{index + 1}</span>
+              <span className="project-main">
+                <strong>{project.title}</strong>
+                <small>
+                  <Languages size={12} />
+                  {project.language}
+                  <i />
+                  {project.scenes.length} сцен
+                  <i />
+                  <Mic2 size={12} />
+                  {project.settings.voice.provider}
+                  <i />
+                  <Image size={12} />
+                  {project.settings.image.provider}
+                </small>
+              </span>
+              <span className={`project-status status-${project.status}`}>{statusLabels[project.status]}</span>
+              <span className="project-actions">
+                <button
+                  title="Предпросмотр"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPreview(project.id);
+                  }}
+                >
+                  <Eye size={15} />
+                </button>
+                <button
+                  className="danger"
+                  title="Удалить"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(project.id);
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
       <div className="sticky-actions">
-        <div><button className="outline-button" onClick={onCreate} disabled={creating}><Plus size={17} />{creating ? "Создаём..." : "Новый проект"}</button><button className="outline-button gold"><Eye size={17} />Предпросмотр</button></div>
-        <button className="generate-button" onClick={() => onNavigate("project")}><Zap size={17} />ГЕНЕРИРОВАТЬ ВИДЕО</button>
+        <div>
+          <button className="outline-button" onClick={onCreate} disabled={busy}>
+            <Plus size={17} />
+            {busy ? "Подождите..." : "Новый проект"}
+          </button>
+          <button className="outline-button gold" disabled={!chosenId} onClick={() => chosenId && onPreview(chosenId)}>
+            <Eye size={17} />
+            Предпросмотр
+          </button>
+        </div>
+        <div>
+          <button
+            className="outline-button gold"
+            disabled={busy || batchReady.length === 0}
+            title="Запускает генерацию всех проектов, у которых есть сцены — можно оставить на ночь"
+            onClick={() => {
+              if (window.confirm(`Запустить генерацию сразу ${batchReady.length} проектов? Это потратит токены на каждый.`)) {
+                batchReady.forEach((project) => onGenerate(project.id));
+              }
+            }}
+          >
+            <ListPlus size={17} />
+            Сгенерировать все ({batchReady.length})
+          </button>
+          <button className="generate-button" disabled={!chosenId || busy} onClick={() => chosenId && onGenerate(chosenId)}>
+            <Zap size={17} />
+            ГЕНЕРИРОВАТЬ ВИДЕО
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function ProjectEditor({ project }: { project?: Project }) {
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
-  const [startFrame, setStartFrame] = useState(true);
-  const [pairedFrames, setPairedFrames] = useState(false);
-  const [muteVeo, setMuteVeo] = useState(true);
-  const [subtitles, setSubtitles] = useState(false);
-  const [duration, setDuration] = useState("1м");
-  const [topic, setTopic] = useState(project?.topic ?? "Барсик — космический кот");
-
+function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGenerate, onNavigate, onInfo }: { project?: Project; busy: boolean; onBack: () => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onApplyChatTopic: (projectId: string, topicId: string) => Promise<Project>; onGenerate: (id: string) => void; onNavigate: (section: SectionKey) => void; onInfo: (message: string) => void }) {
+  const api = window.goldWork ?? fallbackApi;
+  const [draft, setDraft] = useState<Project | null>(project ? structuredClone(project) : null);
+  const [saving, setSaving] = useState(false);
+  const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
+  const [selectedTopicId, setSelectedTopicId] = useState(project?.chatTopicId ?? "");
+  const [applyingTopic, setApplyingTopic] = useState(false);
+  const [samplePlaying, setSamplePlaying] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [heroBuilding, setHeroBuilding] = useState(false);
+  const [scenarioProgress, setScenarioProgress] = useState<string | null>(null);
+  useEffect(() => api.onDirectorProgress((text) => setScenarioProgress(text)), []);
+  const [voicerTemplates, setVoicerTemplates] = useState<VoicerTemplate[] | null>(null);
+  useEffect(() => {
+    if (draft?.settings.voice.provider !== "elevenlabs" || voicerTemplates !== null) return;
+    api.listVoicerTemplates().then(setVoicerTemplates).catch(() => setVoicerTemplates([]));
+  }, [draft?.settings.voice.provider, voicerTemplates]);
+  useEffect(() => {
+    setDraft(project ? structuredClone(project) : null);
+  }, [project?.id]);
+  useEffect(() => {
+    setSelectedTopicId(project?.chatTopicId ?? "");
+  }, [project?.id, project?.chatTopicId]);
+  // Фоновые обновления (сборка сценария, генерация) вливаются в черновик, НЕ затирая редактируемый текст.
+  useEffect(() => {
+    if (!project) return;
+    setDraft((current) => {
+      if (!current || current.id !== project.id) return structuredClone(project);
+      const incoming = structuredClone(project);
+      const sameSceneSet = current.scenes.length === incoming.scenes.length
+        && current.scenes.every((scene, index) => scene.id === incoming.scenes[index]?.id);
+      const scenes = sameSceneSet
+        ? incoming.scenes.map((scene, index) => {
+            const edited = current.scenes[index]!;
+            return { ...scene, title: edited.title, narration: edited.narration, imagePrompt: edited.imagePrompt, animationPrompt: edited.animationPrompt, durationSeconds: edited.durationSeconds };
+          })
+        : incoming.scenes;
+      return { ...current, status: incoming.status, outputPath: incoming.outputPath, updatedAt: incoming.updatedAt, scenes };
+    });
+  }, [project?.id, project?.updatedAt]);
+  useEffect(() => {
+    void api.listChatTopics().then(setChatTopics).catch(() => setChatTopics([]));
+  }, []);
+  if (!draft) return <EmptyState icon={<Clapperboard size={34} />} title="Проект не выбран" text="Создайте проект на Dashboard или выберите его в списке." action="Вернуться на Dashboard" onAction={onBack} />;
+  const settings = draft.settings ?? createDefaultProjectSettings();
+  const setSettings = (patch: Partial<ProjectSettings>) => setDraft((current) => (current ? { ...current, settings: { ...current.settings, ...patch } } : current));
+  const save = async (): Promise<Project | undefined> => {
+    setSaving(true);
+    try {
+      return await onSave(draft.id, {
+        title: draft.title,
+        topic: draft.topic,
+        language: draft.language,
+        aspectRatio: draft.aspectRatio,
+        mode: draft.mode,
+        settings: draft.settings,
+        chatTopicId: draft.chatTopicId,
+      });
+    } catch {
+      // Корневой компонент уже показывает понятное сообщение об ошибке.
+      return undefined;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const generate = async () => {
+    const saved = await save();
+    if (saved) onGenerate(saved.id);
+  };
+  const saveAndNavigate = async (section: SectionKey) => {
+    const saved = await save();
+    if (saved) onNavigate(section);
+  };
+  const restoreSavedSettings = () => {
+    if (!project) return;
+    setDraft(structuredClone(project));
+    onInfo("Загружены последние сохранённые настройки проекта.");
+  };
+  const chooseReferences = async () => {
+    const selected = await api.pickFiles("image", true);
+    if (selected.length === 0) return;
+    setSettings({
+      image: {
+        ...settings.image,
+        references: [...new Set([...settings.image.references, ...selected])].slice(0, 3),
+      },
+    });
+    onInfo(`Добавлено референсов: ${Math.min(3, settings.image.references.length + selected.length)}.`);
+  };
+  const chooseMusic = async () => {
+    const [path] = await api.pickFiles("audio");
+    if (!path) return;
+    setSettings({ music: { ...settings.music, path } });
+    onInfo("Фоновая музыка добавлена в проект.");
+  };
+  /** Пересобирает сцены под текущую длину и язык проекта (нужен сохранённый разбор — referenceAnalysis). */
+  const rebuildScenario = async () => {
+    if (!draft.referenceAnalysis) return;
+    setRebuilding(true);
+    try {
+      const saved = await save();
+      if (!saved) return;
+      const targetSeconds = Math.max(30, Math.round((saved.settings.durationMinutes || 1) * 60));
+      const full = await api.regenerateReferenceScenes({ ...draft.referenceAnalysis, language: saved.language }, targetSeconds);
+      const updated = await onSave(saved.id, { scenes: full.scenes });
+      setDraft(structuredClone(updated));
+      onInfo(`Сценарий пересобран: ${full.scenes.length} сцен, язык — ${saved.language}.`);
+    } catch (reason) {
+      onInfo(`Не удалось пересобрать сценарий: ${errorMessage(reason)}`);
+    } finally {
+      setRebuilding(false);
+    }
+  };
+  /** Портрет главного героя по сценарию → в референсы: все сцены рисуются с одинаковым персонажем. */
+  const createHero = async () => {
+    setHeroBuilding(true);
+    try {
+      const saved = await save();
+      if (!saved) return;
+      const updated = await api.createCharacterReference(saved.id);
+      setDraft(structuredClone(updated));
+      onInfo("Референс героя создан и добавлен — сцены будут генерироваться с одинаковым персонажем.");
+    } catch (reason) {
+      onInfo(`Не удалось создать референс героя: ${errorMessage(reason)}`);
+    } finally {
+      setHeroBuilding(false);
+    }
+  };
+  const projectLanguageCode = ttsLanguageCode(draft.language).split("-")[0]?.toLowerCase() ?? "en";
+  const voiceOptions = TTS_VOICES.filter((voice) => voice.language === "any" || voice.language === projectLanguageCode);
+  const playVoiceSample = async () => {
+    setSamplePlaying(true);
+    try {
+      const base64 = settings.voice.provider === "elevenlabs"
+        ? await api.voicerSample(settings.voice.voice?.trim() || undefined, ttsLanguageCode(draft.language))
+        : await api.ttsSample(normalizeVoiceId(settings.voice.voice), ttsLanguageCode(draft.language));
+      const audio = new Audio(`data:audio/mpeg;base64,${base64}`);
+      audio.onended = () => setSamplePlaying(false);
+      audio.onerror = () => setSamplePlaying(false);
+      await audio.play();
+    } catch (reason) {
+      setSamplePlaying(false);
+      onInfo(`Не удалось получить пример голоса: ${errorMessage(reason)}`);
+    }
+  };
+  const applyTopic = async (startGeneration: boolean) => {
+    if (!selectedTopicId) return;
+    setApplyingTopic(true);
+    try {
+      const updated = await onApplyChatTopic(draft.id, selectedTopicId);
+      setDraft(structuredClone(updated));
+      onInfo(`Тема чата применена: создано сцен ${updated.scenes.length}.`);
+      if (startGeneration) onGenerate(updated.id);
+    } finally {
+      setApplyingTopic(false);
+    }
+  };
   return (
     <div className="project-page page-with-actionbar">
-      <PageHeading icon={<ChevronLeft size={22} />} title={`Проект #${project ? "1" : "1"}`} subtitle="Настройки генерации видео" />
-      <div className="preset-bar"><Bookmark size={16} /><span>Пресет:</span><select><option>Выбрать пресет... (3)</option></select><button title="Загрузить"><Download size={16} /></button><button title="Сохранить"><Save size={16} /></button><button className="danger" title="Удалить"><Trash2 size={16} /></button></div>
-
+      <PageHeading
+        icon={
+          <button className="back-icon" onClick={onBack}>
+            <ChevronLeft size={22} />
+          </button>
+        }
+        title={draft.title}
+        subtitle="Настройки генерации видео"
+      />
+      <div className="preset-bar">
+        <Bookmark size={16} />
+        <span>Пресет:</span>
+        <select>
+          <option>Рабочий пресет проекта</option>
+        </select>
+        <button title="Вернуть сохранённые настройки" onClick={restoreSavedSettings}>
+          <Download size={16} />
+        </button>
+        <button title="Сохранить" onClick={() => void save()}>
+          <Save size={16} />
+        </button>
+      </div>
+      <div className="chat-topic-source">
+        <div>
+          <FileText size={16} />
+          <span>Тема из чата режиссёра</span>
+          <select value={selectedTopicId} onChange={(event) => setSelectedTopicId(event.target.value)}>
+            <option value="">Выберите сохранённый диалог...</option>
+            {chatTopics.map((topic) => (
+              <option key={topic.id} value={topic.id}>{topic.title} · {topic.messageCount} сообщ.</option>
+            ))}
+          </select>
+        </div>
+        <button className="outline-button small" disabled={!selectedTopicId || applyingTopic || busy} onClick={() => void applyTopic(false)}>
+          <WandSparkles size={14} />
+          {applyingTopic ? "Строим..." : "Построить пресет"}
+        </button>
+        <button className="generate-button compact" disabled={!selectedTopicId || applyingTopic || busy} onClick={() => void applyTopic(true)}>
+          <Zap size={14} />
+          Создать и запустить
+        </button>
+      </div>
       <div className="editor-grid">
         <SettingsPanel icon={<SlidersHorizontal size={16} />} title="ОСНОВНЫЕ">
-          <Field label="ТЕМА ВИДЕО"><input value={topic} onChange={(event) => setTopic(event.target.value)} /></Field>
-          <Field label="ЯЗЫК"><select defaultValue="Русский"><option>Русский</option><option>English</option><option>Español</option></select></Field>
-          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО">
-            <div className="choice-row">{["30с", "1м", "5м", "10м", "15м", "30м", "60м"].map((value) => <button className={duration === value ? "selected" : ""} onClick={() => setDuration(value)} key={value}>{value}</button>)}</div>
+          <Field label="НАЗВАНИЕ ПРОЕКТА">
+            <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
           </Field>
-          <Field label="СМЕНА КАДРОВ"><select><option>По умолчанию (по сценарию)</option></select><small className="hint">Для опытных пользователей</small></Field>
-          <Field label="ФОРМАТ ВИДЕО"><select><option>▣ 16:9 (YouTube)</option><option>▯ 9:16 (Shorts)</option><option>□ 1:1</option></select></Field>
+          <Field label="ТЕМА ВИДЕО">
+            <input value={draft.topic} onChange={(event) => setDraft({ ...draft, topic: event.target.value })} />
+          </Field>
+          <Field label="ЯЗЫК РОЛИКА" hint="Язык сценария и озвучки. Один клик — писать ничего не нужно.">
+            <div className="choice-row language-row">
+              {PROJECT_LANGUAGES.map((item) => (
+                <button
+                  key={item.label}
+                  className={draft.language === item.label ? "selected" : ""}
+                  onClick={() => setDraft({ ...draft, language: item.label })}
+                >
+                  {item.flag} {item.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО" hint="Целевая длина ролика (сцены по 5 секунд). После смены нажмите «Пересобрать сценарий» ниже.">
+            <div className="choice-row">
+              {[0.5, 1, 5, 10, 15, 30, 60].map((value) => (
+                <button className={settings.durationMinutes === value ? "selected" : ""} onClick={() => setSettings({ durationMinutes: value })} key={value}>
+                  {value < 1 ? "30с" : `${value}м`}
+                </button>
+              ))}
+            </div>
+            <input
+              type="number"
+              min={0.5}
+              step={0.5}
+              value={settings.durationMinutes}
+              onChange={(event) => setSettings({ durationMinutes: Math.max(0.5, Number(event.target.value) || 0.5) })}
+            />
+            <small>Своя длина в минутах — если пресеты не подходят.</small>
+          </Field>
+          {draft.referenceAnalysis && (
+            <button className={draft.scenes.length === 0 ? "generate-button" : "outline-button small"} disabled={busy || saving || rebuilding} onClick={() => void rebuildScenario()}>
+              <RotateCcw size={15} />
+              {rebuilding ? "Пишу сценарий…" : draft.scenes.length === 0 ? "Собрать сценарий" : "Пересобрать сценарий под длину и язык"}
+            </button>
+          )}
+          {draft.scenes.length > 0 && (
+            <Field label={`ТЕКСТ СЦЕНАРИЯ (${draft.scenes.length} СЦЕН)`} hint="Текст озвучки каждой сцены. Полное редактирование — в разделе «Сценарий».">
+              <div className="scenario-preview">
+                {draft.scenes.slice(0, 6).map((scene) => (
+                  <p key={scene.id}><b>{scene.order + 1}.</b> {scene.narration || "— без текста —"}</p>
+                ))}
+                {draft.scenes.length > 6 && <p>…и ещё {draft.scenes.length - 6} сцен</p>}
+              </div>
+              <button className="outline-button small" onClick={() => void saveAndNavigate("scenario")}>
+                <FileText size={14} />
+                Открыть редактор сценария
+              </button>
+            </Field>
+          )}
+          <Field label="СМЕНА КАДРОВ" hint="Как часто меняется кадр. Значение по умолчанию настроено под удержание внимания на YouTube.">
+            <select
+              value={settings.frameChange}
+              onChange={(event) =>
+                setSettings({
+                  frameChange: event.target.value as ProjectSettings["frameChange"],
+                })
+              }
+            >
+              <option value="scenario">По сценарию</option>
+              <option value="5s">Каждые 5 секунд</option>
+              <option value="10s">Каждые 10 секунд</option>
+            </select>
+          </Field>
+          <Field label="ФОРМАТ ВИДЕО">
+            <select
+              value={draft.aspectRatio}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  aspectRatio: event.target.value as Project["aspectRatio"],
+                })
+              }
+            >
+              <option value="16:9">▣ 16:9 (YouTube)</option>
+              <option value="9:16">▯ 9:16 (Shorts)</option>
+              <option value="1:1">□ 1:1</option>
+            </select>
+          </Field>
         </SettingsPanel>
-
         <SettingsPanel icon={<Mic2 size={16} />} title="ОЗВУЧКА">
-          <ToggleRow label="Озвучка" checked={voiceEnabled} onChange={setVoiceEnabled} />
-          {voiceEnabled && <>
-            <Field label="ДВИЖОК ОЗВУЧКИ"><select><option>ElevenLabs API</option><option>Edge TTS</option></select><small>Edge TTS бесплатно. ElevenLabs работает по вашему API ключу.</small></Field>
-            <Field label="ШАБЛОН ELEVENLABS"><select><option>ПСИХО</option><option>Мягкий рассказчик</option></select><button className="inline-link">Загрузить шаблоны</button></Field>
-            <ToggleRow label="Цельная озвучка" checked={false} onChange={() => undefined} />
-          </>}
+          <ToggleRow label="Озвучка" checked={settings.voice.enabled} onChange={(enabled) => setSettings({ voice: { ...settings.voice, enabled } })} />
+          {settings.voice.enabled && (
+            <>
+              <Field label="ДВИЖОК ОЗВУЧКИ" hint="Встроенная — голоса Edge/Google через AnyModel. Voicer — премиум-голоса ElevenLabs по шаблонам из Telegram-бота.">
+                <select
+                  value={settings.voice.provider}
+                  onChange={(event) =>
+                    setSettings({
+                      voice: { ...settings.voice, provider: event.target.value as ProjectSettings["voice"]["provider"], voice: "" },
+                    })
+                  }
+                >
+                  <option value="edge-tts">Встроенная (Edge / Google)</option>
+                  <option value="elevenlabs">Lumean (ElevenLabs)</option>
+                </select>
+              </Field>
+              {settings.voice.provider === "elevenlabs" ? (
+                <Field label="ШАБЛОН ГОЛОСА LUMEAN" hint="Шаблон = голос + настройки из кабинета lumean.app. Кнопки подтягиваются с сервиса автоматически.">
+                  <div className="choice-row template-row">
+                    <button
+                      className={!settings.voice.voice ? "selected" : ""}
+                      onClick={() => setSettings({ voice: { ...settings.voice, voice: "" } })}
+                    >
+                      Первый доступный
+                    </button>
+                    {(voicerTemplates ?? []).map((template) => (
+                      <button
+                        key={template.uuid}
+                        className={settings.voice.voice === template.uuid ? "selected" : ""}
+                        onClick={() => setSettings({ voice: { ...settings.voice, voice: template.uuid } })}
+                      >
+                        {template.name}
+                      </button>
+                    ))}
+                    <button title="Обновить список шаблонов с Lumean" onClick={() => setVoicerTemplates(null)}>
+                      <RotateCcw size={12} />
+                    </button>
+                  </div>
+                  <small>{voicerTemplates === null ? "Загружаю шаблоны с Lumean…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — сохраните ключ Lumean в Настройках, и они появятся здесь" : "Ваши шаблоны с lumean.app. Пример генерируется один раз и кэшируется."}</small>
+                </Field>
+              ) : (
+                <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">
+                  <select
+                    value={normalizeVoiceId(settings.voice.voice)}
+                    onChange={(event) =>
+                      setSettings({
+                        voice: { ...settings.voice, voice: event.target.value },
+                      })
+                    }
+                  >
+                    <option value="">Как в общих настройках (Google TTS)</option>
+                    {voiceOptions.map((voiceOption) => (
+                      <option key={voiceOption.id} value={voiceOption.id}>
+                        {voiceOption.label}{voiceOption.gender ? ` (${voiceOption.gender})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <small>Список подобран под язык проекта. Пример голоса генерируется один раз и кэшируется.</small>
+                </Field>
+              )}
+              <button
+                className="outline-button small"
+                disabled={samplePlaying || (settings.voice.provider !== "elevenlabs" && !normalizeVoiceId(settings.voice.voice))}
+                onClick={() => void playVoiceSample()}
+              >
+                <Volume2 size={15} />
+                {samplePlaying ? "Играет пример…" : "Послушать пример"}
+              </button>
+              <ToggleRow label="Цельная озвучка" checked={settings.voice.singleTrack} onChange={(singleTrack) => setSettings({ voice: { ...settings.voice, singleTrack } })} />
+            </>
+          )}
         </SettingsPanel>
-
         <SettingsPanel icon={<Image size={16} />} title="ИЗОБРАЖЕНИЯ">
-          <Field label="ГЕНЕРАТОР ИЗОБРАЖЕНИЙ"><select><option>Nano Banana Pro</option><option>GPT Image</option></select></Field>
-          <Field label="СТИЛЬ ИЗОБРАЖЕНИЙ"><select><option>Photorealistic live-action photography mixed</option><option>Family 3D animation</option></select></Field>
-          <ToggleRow label="Последовательная генерация" checked={false} onChange={() => undefined} />
-          <Field label="РЕФЕРЕНС ИЗОБРАЖЕНИЯ (0/3)"><button className="upload-box"><Plus size={21} /><span>Добавить референс</span></button><small>Nano Banana Pro — максимум 3 референса.</small></Field>
+          <Field label="ГЕНЕРАТОР ИЗОБРАЖЕНИЙ">
+            <select
+              value={settings.image.provider}
+              onChange={(event) =>
+                setSettings({
+                  image: {
+                    ...settings.image,
+                    provider: event.target.value as ProjectSettings["image"]["provider"],
+                  },
+                })
+              }
+            >
+              <option value="mock-image">Mock Image</option>
+              <option value="nano-banana">Nano Banana Pro</option>
+              <option value="gpt-image">GPT Image</option>
+              <option value="anymodel-image">AnyModel API</option>
+            </select>
+          </Field>
+          <Field label="СТИЛЬ — ВЫБЕРИТЕ КАРТИНКОЙ" hint="Единый стиль всех сцен ролика: клик по превью допишет его к каждому промпту изображения.">
+            <div className="style-grid">
+              {IMAGE_STYLES.map((style) => (
+                <button
+                  key={style.id}
+                  className={`style-card${settings.image.style === style.promptSuffix ? " selected" : ""}`}
+                  onClick={() => {
+                    setSettings({ image: { ...settings.image, style: style.promptSuffix } });
+                    onInfo(`Стиль «${style.label}» будет применён ко всем сценам.`);
+                  }}
+                >
+                  <img src={`/styles/${style.id}.jpg`} alt={style.label} loading="lazy" />
+                  <span>{style.label}</span>
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="СВОЙ СТИЛЬ (ТЕКСТОМ)">
+            <input
+              value={settings.image.style}
+              onChange={(event) =>
+                setSettings({
+                  image: { ...settings.image, style: event.target.value },
+                })
+              }
+            />
+          </Field>
+          <ToggleRow label="Последовательная генерация" hint="Каждая картинка генерируется после предыдущей — важно для бесшовных форматов." checked={settings.image.sequential} onChange={(sequential) => setSettings({ image: { ...settings.image, sequential } })} />
+          <Field label={`РЕФЕРЕНСЫ (${settings.image.references.length}/3)`} hint="Опорные изображения: персонаж или стиль сохраняются один в один во всех сценах (генерация переключается на GPT Image).">
+            <button className="upload-box" onClick={() => void chooseReferences()}>
+              <Plus size={21} />
+              <span>Добавить референс</span>
+            </button>
+            <small>С референсами сцены генерируются моделью GPT Image — герой остаётся одинаковым.</small>
+          </Field>
+          <button className="outline-button small" disabled={busy || saving || heroBuilding || draft.scenes.length === 0} onClick={() => void createHero()}>
+            <CircleUserRound size={15} />
+            {heroBuilding ? "Создаю референс героя…" : "Создать референс героя по сценарию"}
+          </button>
         </SettingsPanel>
-
-        <SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ" wide>
-          <Field label="РЕЖИМ ГЕНЕРАЦИИ"><select><option>TURBO</option><option>STANDARD</option></select><small>Максимальная скорость. 4 промпта параллельно.</small></Field>
-          <ToggleRow label="Veo 3.1 (Image-to-Video)" checked={videoEnabled} onChange={setVideoEnabled} />
-          {videoEnabled && <>
-            <Field label="МОДЕЛЬ VEO"><select><option>Lite</option><option>Fast</option><option>Quality</option></select></Field>
-            <ToggleRow label="Анимация от первого кадра" checked={startFrame} onChange={setStartFrame} />
-            <ToggleRow label="Парные кадры (Start + End)" checked={pairedFrames} onChange={setPairedFrames} />
-            <ToggleRow label="Без музыки/звука в видео" checked={muteVeo} onChange={setMuteVeo} />
-            <Field label="ГРОМКОСТЬ ЗВУКА VEO: 15%"><input type="range" defaultValue="15" /></Field>
-          </>}
-          <div className="sub-card"><strong>Анимация</strong><small>Сколько видео из всех сцен:</small><input type="range" defaultValue="100" /><label><input type="radio" name="distribution" />Равномерно</label><label><input type="radio" name="distribution" defaultChecked />Затухание (плавно)</label></div>
+        <SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ">
+          <Field label="РЕЖИМ ГЕНЕРАЦИИ">
+            <select
+              value={settings.video.mode}
+              onChange={(event) =>
+                setSettings({
+                  video: {
+                    ...settings.video,
+                    mode: event.target.value as ProjectSettings["video"]["mode"],
+                  },
+                })
+              }
+            >
+              <option value="turbo">TURBO</option>
+              <option value="standard">STANDARD</option>
+            </select>
+            <small>До четырёх задач одновременно.</small>
+          </Field>
+          <Field label="ДВИЖЕНИЕ КАМЕРЫ (ВЕСЬ РОЛИК)" hint="Ken Burns на всех сценах: постоянное приближение, отдаление или чередование. Отдельную сцену можно переопределить в Сценарии.">
+            <select
+              value={settings.assembly.kenBurnsDirection ?? "in"}
+              onChange={(event) =>
+                setSettings({
+                  assembly: { ...settings.assembly, kenBurnsDirection: event.target.value as ProjectSettings["assembly"]["kenBurnsDirection"] },
+                })
+              }
+            >
+              <option value="in">Постоянное приближение</option>
+              <option value="out">Постоянное отдаление</option>
+              <option value="alternate">Чередование (приближение/отдаление)</option>
+            </select>
+          </Field>
+          <ToggleRow
+            label="Генерировать AI-видео"
+            hint="Оживляет картинку сцены (image-to-video). Veo — ключ Google AI Studio; AnyModel — grok-imagine. Внимание: видео заметно дороже картинок."
+            checked={settings.video.enabled}
+            onChange={(enabled) => {
+              // mock-video остался в старых проектах и молча отключал реальную генерацию — переводим на Google.
+              const provider = settings.video.provider === "anymodel-video" ? "anymodel-video" : "veo";
+              setSettings({ video: { ...settings.video, enabled, provider } });
+              onInfo(enabled ? "AI-видео включено: выбранные сцены будут оживлены из своих картинок." : "AI-видео выключено — сцены соберутся из картинок с движением камеры.");
+            }}
+          />
+          {settings.video.enabled && (
+            <>
+              <Field label="ДВИЖОК ВИДЕО" hint="Google — Omni Flash / Veo по ключу AI Studio (нужен VPN). AnyModel — grok-imagine-video с баланса AnyModel.">
+                <select
+                  value={settings.video.provider === "anymodel-video" ? "anymodel-video" : "veo"}
+                  onChange={(event) => setSettings({ video: { ...settings.video, provider: event.target.value as ProjectSettings["video"]["provider"] } })}
+                >
+                  <option value="veo">Google (Omni Flash / Veo)</option>
+                  <option value="anymodel-video">AnyModel (grok-imagine)</option>
+                </select>
+              </Field>
+              <Field label={`АНИМИРОВАТЬ СЦЕН: ${settings.video.animationPercent}%`} hint="Экономия: оживляются только самые важные сцены, остальные идут картинкой с движением камеры.">
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={10}
+                  value={settings.video.animationPercent}
+                  onChange={(event) => setSettings({ video: { ...settings.video, animationPercent: Number(event.target.value) } })}
+                />
+                <small>
+                  {draft.scenes.length === 0
+                    ? "Соберите сценарий — и здесь появится, сколько сцен получат видео."
+                    : `Примерно ${Math.max(1, Math.round((draft.scenes.length * settings.video.animationPercent) / 100))} из ${draft.scenes.length} сцен получат видео, остальные — картинка с движением камеры.`}
+                </small>
+              </Field>
+              <ToggleRow label="Анимация от первого кадра" hint="Кадр сцены становится первым кадром видео — движение продолжает картинку, а не рисует новую." checked={settings.video.startFrame} onChange={(startFrame) => setSettings({ video: { ...settings.video, startFrame } })} />
+              <ToggleRow label="Без звука из видео" hint="Модель добавляет к клипу свой звук. Обычно его убирают, чтобы слышать только озвучку сцены." checked={settings.video.muteSource} onChange={(muteSource) => setSettings({ video: { ...settings.video, muteSource } })} />
+              {!settings.video.muteSource && (
+                <Field label={`ГРОМКОСТЬ ЗВУКА ИЗ ВИДЕО: ${settings.video.sourceVolume}%`} hint="Насколько слышен звук, сгенерированный видео-моделью, под озвучкой сцены.">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={settings.video.sourceVolume}
+                    onChange={(event) =>
+                      setSettings({
+                        video: {
+                          ...settings.video,
+                          sourceVolume: Number(event.target.value),
+                        },
+                      })
+                    }
+                  />
+                </Field>
+              )}
+            </>
+          )}
         </SettingsPanel>
       </div>
-
       <div className="editor-secondary">
-        <SettingsPanel icon={<Music2 size={16} />} title="ФОНОВАЯ МУЗЫКА"><p className="empty-note"><Music2 size={21} />Нет добавленных треков</p><button className="outline-button small"><Upload size={15} />Выбрать трек</button><Field label="ГРОМКОСТЬ: 0.1"><input type="range" defaultValue="10" /></Field></SettingsPanel>
-        <SettingsPanel icon={<Captions size={16} />} title="СУБТИТРЫ"><ToggleRow label="Включить субтитры" checked={subtitles} onChange={setSubtitles} /><button className="outline-button small"><SlidersHorizontal size={15} />Настроить стиль субтитров</button></SettingsPanel>
-        <SettingsPanel icon={<Sparkles size={16} />} title="КОНТЕНТ"><div className="content-mode">Режим: Custom — 120 сцен</div><button className="outline-button small"><FileText size={15} />Настроить сценарий</button><button className="outline-button small"><Sparkles size={15} />AI Автозаполнение</button><button className="outline-button small"><WandSparkles size={15} />AI Улучшение</button></SettingsPanel>
+        <SettingsPanel icon={<Music2 size={16} />} title="ФОНОВАЯ МУЗЫКА">
+          <ToggleRow
+            label="Добавлять музыку в сборку"
+            checked={settings.music.enabled !== false}
+            onChange={(enabled) => {
+              setSettings({ music: { ...settings.music, enabled } });
+              onInfo(enabled ? "Музыка будет подмешана в финальный ролик." : "Ролик соберётся без музыки — добавите её сами, например в CapCut.");
+            }}
+          />
+          <p className="empty-note">
+            <Music2 size={21} />
+            {settings.music.path ?? "Нет добавленных треков — ролик соберётся без музыки"}
+          </p>
+          <button className="outline-button small" onClick={() => void chooseMusic()}>
+            <Upload size={15} />
+            Выбрать трек
+          </button>
+          {settings.music.path && (
+            <button
+              className="outline-button small"
+              onClick={() => {
+                setSettings({ music: { ...settings.music, path: undefined } });
+                onInfo("Трек убран из проекта — ролик соберётся без музыки.");
+              }}
+            >
+              <Trash2 size={15} />
+              Убрать трек
+            </button>
+          )}
+          <Field label={`ГРОМКОСТЬ: ${settings.music.volume}%`}>
+            <input
+              type="range"
+              value={settings.music.volume}
+              onChange={(event) =>
+                setSettings({
+                  music: {
+                    ...settings.music,
+                    volume: Number(event.target.value),
+                  },
+                })
+              }
+            />
+          </Field>
+        </SettingsPanel>
+        <SettingsPanel icon={<Captions size={16} />} title="СУБТИТРЫ">
+          <ToggleRow label="Включить субтитры" checked={settings.subtitles.enabled} onChange={(enabled) => setSettings({ subtitles: { ...settings.subtitles, enabled } })} />
+          <button className="outline-button small" onClick={() => void saveAndNavigate("subtitles")}>
+            <SlidersHorizontal size={15} />
+            Настроить стиль
+          </button>
+        </SettingsPanel>
+        <SettingsPanel icon={<Sparkles size={16} />} title="КОНТЕНТ">
+          <div className="content-mode">Custom — {draft.scenes.length} сцен</div>
+          <button className="outline-button small" onClick={() => void saveAndNavigate("scenario")}>
+            <FileText size={15} />
+            Настроить сценарий
+          </button>
+          <button className="outline-button small" onClick={() => void saveAndNavigate("director")}>
+            <Sparkles size={15} />
+            Открыть AI-генератор
+          </button>
+        </SettingsPanel>
       </div>
-
-      <div className="sticky-actions editor-actions"><span>Все изменения сохраняются локально</span><div><button className="outline-button"><Save size={16} />Сохранить</button><button className="generate-button"><Zap size={17} />Генерировать видео</button></div></div>
+      <div className="sticky-actions editor-actions">
+        <span className="scenario-progress-line">
+          {rebuilding
+            ? (() => {
+                const match = scenarioProgress ? /(\d+)\s+из\s+(\d+)/.exec(scenarioProgress) : null;
+                const percent = match ? Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100) : 0;
+                return (
+                  <>
+                    {scenarioProgress ?? "Пишу сценарий…"} · {percent}%
+                    <i className="scenario-progress-bar"><em style={{ width: `${percent}%` }} /></i>
+                  </>
+                );
+              })()
+            : draft.scenes.length > 0
+              ? `${draft.scenes.length} сцен · данные сохраняются локально`
+              : "Сценария пока нет — выберите длину и язык и нажмите «Собрать сценарий»"}
+        </span>
+        <div>
+          <button className="outline-button" disabled={saving} onClick={() => void save()}>
+            <Save size={16} />
+            {saving ? "Сохраняем..." : "Сохранить"}
+          </button>
+          <button className="generate-button" disabled={busy || saving || draft.scenes.length === 0} onClick={() => void generate()}>
+            <Zap size={17} />
+            {draft.scenes.length === 0 ? "Сценарий собирается…" : "Генерировать видео"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function Director({ creating, onCreate }: { creating: boolean; onCreate: () => void }) {
+function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onBack: () => void }) {
+  const api = window.goldWork ?? fallbackApi;
+  const [scenes, setScenes] = useState<Scene[]>(project?.scenes ? structuredClone(project.scenes) : []);
+  const [selectedId, setSelectedId] = useState<string | null>(project?.scenes[0]?.id ?? null);
+  const [saving, setSaving] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [improveHint, setImproveHint] = useState("");
+  useEffect(() => {
+    const next = project?.scenes ? structuredClone(project.scenes) : [];
+    setScenes(next);
+    setSelectedId(next[0]?.id ?? null);
+  }, [project?.id]);
+  // Сценарий, дописанный в фоне, вливается в открытый пустой редактор — иначе сохранение затёрло бы его пустотой.
+  useEffect(() => {
+    if (!project || project.scenes.length === 0) return;
+    setScenes((current) => (current.length === 0 ? structuredClone(project.scenes) : current));
+    setSelectedId((current) => current ?? project.scenes[0]?.id ?? null);
+  }, [project?.id, project?.updatedAt]);
+  if (!project) return <EmptyState icon={<FileText size={34} />} title="Проект не выбран" text="Выберите проект перед редактированием сценария." action="Назад" onAction={onBack} />;
+  if (project.status === "generating" || project.status === "paused") return <EmptyState icon={<Pause size={34} />} title="Сценарий временно заблокирован" text="Во время активной генерации нельзя менять состав сцен. Остановите очередь или дождитесь завершения." action="Назад к проекту" onAction={onBack} />;
+  const selected = scenes.find((scene) => scene.id === selectedId);
+  const reindex = (items: Scene[]) => items.map((scene, order) => ({ ...scene, order }));
+  const addScene = () => {
+    const scene: Scene = {
+      id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      order: scenes.length,
+      title: `Сцена ${scenes.length + 1}`,
+      narration: "",
+      imagePrompt: "",
+      animationPrompt: "",
+      durationSeconds: 5,
+      status: "draft",
+    };
+    setScenes([...scenes, scene]);
+    setSelectedId(scene.id);
+  };
+  const updateScene = (patch: Partial<Scene>) =>
+    setScenes((current) =>
+      current.map((scene) =>
+        scene.id === selectedId
+          ? {
+              ...scene,
+              ...patch,
+              status: "draft",
+              imagePath: undefined,
+              videoPath: undefined,
+              audioPath: undefined,
+            }
+          : scene,
+      ),
+    );
+  // Монтажные свойства (участие в сборке, переход, Ken Burns) не трогают сгенерированные медиа —
+  // в отличие от updateScene, который сбрасывает сцену в draft.
+  const updateSceneMeta = (patch: Partial<Scene>) =>
+    setScenes((current) => current.map((scene) => (scene.id === selectedId ? { ...scene, ...patch } : scene)));
+  const removeScene = (id: string) => {
+    const next = reindex(scenes.filter((scene) => scene.id !== id));
+    setScenes(next);
+    setSelectedId(next[0]?.id ?? null);
+  };
+  const duplicateScene = (scene: Scene) => {
+    const copy: Scene = {
+      ...structuredClone(scene),
+      id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title: `${scene.title} — копия`,
+      status: "draft",
+      imagePath: undefined,
+      videoPath: undefined,
+      audioPath: undefined,
+    };
+    const index = scenes.findIndex((item) => item.id === scene.id);
+    const next = [...scenes];
+    next.splice(index + 1, 0, copy);
+    setScenes(reindex(next));
+    setSelectedId(copy.id);
+  };
+  const move = (id: string, direction: -1 | 1) => {
+    const index = scenes.findIndex((scene) => scene.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= scenes.length) return;
+    const next = [...scenes];
+    const current = next[index];
+    const other = next[target];
+    if (!current || !other) return;
+    next[index] = other;
+    next[target] = current;
+    setScenes(reindex(next));
+  };
+  /** Просит модель переписать выбранную сцену: сначала сохраняем текущие правки, потом применяем ответ. */
+  const improveSelected = async () => {
+    if (!selected) return;
+    setImproving(true);
+    try {
+      await onSave(project.id, { scenes: reindex(scenes) });
+      const updated = await api.improveScene(project.id, selected.id, improveHint);
+      const improved = updated.scenes.find((scene) => scene.id === selected.id);
+      if (improved) {
+        setScenes((current) => current.map((scene) => (scene.id === selected.id
+          ? { ...scene, narration: improved.narration, imagePrompt: improved.imagePrompt, status: "draft", imagePath: undefined, audioPath: undefined, videoPath: undefined }
+          : scene)));
+      }
+      setImproveHint("");
+    } catch {
+      // Сообщение об ошибке показывает корневой компонент.
+    } finally {
+      setImproving(false);
+    }
+  };
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave(project.id, {
+        scenes: reindex(scenes),
+        status: scenes.length ? "ready" : "draft",
+      });
+    } catch {
+      /* Ошибка показана в общем уведомлении. */
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="scenario-page page-with-actionbar">
+      <PageHeading
+        icon={
+          <button className="back-icon" onClick={onBack}>
+            <ChevronLeft size={22} />
+          </button>
+        }
+        title="Редактор сценария"
+        subtitle={`${project.title} · ${scenes.length} сцен`}
+        actions={
+          <>
+            <button className="ghost-button" onClick={() => void (window.goldWork ?? fallbackApi).openProjectFolder(project.id)}>
+              <FolderOpen size={15} />
+              Папка проекта
+            </button>
+            <button className="ghost-button" onClick={addScene}>
+              <Plus size={15} />
+              Добавить сцену
+            </button>
+          </>
+        }
+      />
+      {scenes.length === 0 ? (
+        <EmptyState icon={<FileText size={34} />} title="Сценарий пуст" text="Добавьте первую сцену. Для каждой сцены можно задать текст, изображение и движение." action="Добавить сцену" onAction={addScene} />
+      ) : (
+        <div className="scenario-layout">
+          <aside className="scene-list">
+            {scenes.map((scene, index) => (
+              <article className={`scene-list-item${scene.id === selectedId ? " selected" : ""}`} key={scene.id} onClick={() => setSelectedId(scene.id)}>
+                <span>{index + 1}</span>
+                <div>
+                  <strong>{scene.title}</strong>
+                  <small>
+                    {scene.durationSeconds} сек · {scene.status}{scene.includeInAssembly === false ? " · вне сборки" : ""}
+                  </small>
+                </div>
+                <div className="scene-mini-actions">
+                  <button
+                    title="Вверх"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      move(scene.id, -1);
+                    }}
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                  <button
+                    title="Вниз"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      move(scene.id, 1);
+                    }}
+                  >
+                    <ArrowDown size={13} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </aside>
+          {selected && (
+            <section className="scene-editor">
+              <div className="scene-editor-head">
+                <div>
+                  <strong>Сцена {selected.order + 1}</strong>
+                  <small>ID: {selected.id}</small>
+                </div>
+                <div>
+                  <button className="ghost-button" onClick={() => void (window.goldWork ?? fallbackApi).openSceneFolder(project.id, selected.id)}>
+                    <FolderOpen size={14} />
+                    Папка сцены
+                  </button>
+                  <button className="ghost-button" onClick={() => duplicateScene(selected)}>
+                    <Copy size={14} />
+                    Копировать
+                  </button>
+                  <button className="ghost-button" disabled={improving} onClick={() => void improveSelected()}>
+                    <WandSparkles size={14} />
+                    {improving ? "AI улучшает…" : "Улучшить через AI"}
+                  </button>
+                  <button className="danger-button" onClick={() => removeScene(selected.id)}>
+                    <Trash2 size={14} />
+                    Удалить
+                  </button>
+                </div>
+              </div>
+              <div className="scene-form-grid">
+                <Field label="НАЗВАНИЕ СЦЕНЫ">
+                  <input value={selected.title} onChange={(event) => updateScene({ title: event.target.value })} />
+                </Field>
+                <Field label="ДЛИТЕЛЬНОСТЬ, СЕК">
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={selected.durationSeconds}
+                    onChange={(event) =>
+                      updateScene({
+                        durationSeconds: Math.max(1, Number(event.target.value)),
+                      })
+                    }
+                  />
+                </Field>
+              </div>
+              <ToggleRow
+                label="Сцена участвует в сборке"
+                hint="Выключите — сцена не попадёт в Final.mp4, но останется в проекте и её можно вернуть."
+                checked={selected.includeInAssembly !== false}
+                onChange={(included) => updateSceneMeta({ includeInAssembly: included })}
+              />
+              <div className="scene-form-grid">
+                <Field label="ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ" hint="Смешивание — кадры плавно перетекают друг в друга; затухание — уход в чёрный.">
+                  <select
+                    value={selected.transition ?? "auto"}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      updateSceneMeta({ transition: value === "auto" ? undefined : (value as Scene["transition"]) });
+                    }}
+                  >
+                    <option value="auto">Как в проекте (смешивание)</option>
+                    <option value="mix">Смешивание (mix)</option>
+                    <option value="fade">Затухание в чёрный</option>
+                    <option value="none">Без перехода</option>
+                  </select>
+                </Field>
+                <Field label="ДВИЖЕНИЕ КАМЕРЫ (KEN BURNS)" hint="Эффект живой камеры на картинке сцены: плавное приближение или отдаление.">
+                  <select value={selected.kenBurnsDirection ?? "auto"} onChange={(event) => updateSceneMeta({ kenBurnsDirection: event.target.value as Scene["kenBurnsDirection"] })}>
+                    <option value="auto">Как в проекте</option>
+                    <option value="in">Приближение</option>
+                    <option value="out">Отдаление</option>
+                    <option value="off">Без движения</option>
+                  </select>
+                </Field>
+              </div>
+              <Field label="ТЕКСТ ОЗВУЧКИ">
+                <textarea rows={5} value={selected.narration} onChange={(event) => updateScene({ narration: event.target.value })} placeholder="Текст, который прозвучит в этой сцене" />
+              </Field>
+              <Field label="ПРОМПТ ИЗОБРАЖЕНИЯ">
+                <textarea rows={5} value={selected.imagePrompt} onChange={(event) => updateScene({ imagePrompt: event.target.value })} placeholder="Опишите кадр, персонажей, локацию и стиль" />
+              </Field>
+              <Field label="ПРОМПТ АНИМАЦИИ / ВИДЕО">
+                <textarea rows={4} value={selected.animationPrompt} onChange={(event) => updateScene({ animationPrompt: event.target.value })} placeholder="Движение камеры и объектов в кадре" />
+              </Field>
+              <Field label="ЧТО ПОПРАВИТЬ В СЦЕНЕ (ДЛЯ AI)" hint="Опишите словами — модель перепишет текст озвучки и промпт кадра с учётом соседних сцен.">
+                <input value={improveHint} onChange={(event) => setImproveHint(event.target.value)} placeholder="Например: «жёстче формулировку», «крупный план лица», «добавь цифру»" />
+              </Field>
+            </section>
+          )}
+        </div>
+      )}
+      <div className="sticky-actions editor-actions">
+        <span>
+          {scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0)} секунд · {scenes.length} сцен
+        </span>
+        <div>
+          <button className="outline-button" onClick={onBack}>
+            Отмена
+          </button>
+          <button className="generate-button" disabled={saving} onClick={() => void save()}>
+            <Save size={16} />
+            {saving ? "Сохраняем..." : "Сохранить сценарий"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project> }) {
+  const defaults = createDefaultProjectSettings().subtitles;
+  const [draft, setDraft] = useState<SubtitleSettings>(project?.settings.subtitles ?? defaults);
+  const [saving, setSaving] = useState(false);
+  const [presets, setPresets] = useState<Record<string, SubtitleSettings>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gw-subtitle-presets") ?? "{}") as Record<string, SubtitleSettings>;
+    } catch {
+      return {};
+    }
+  });
+  const [presetName, setPresetName] = useState("");
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+    const next = { ...presets, [name]: structuredClone(draft) };
+    setPresets(next);
+    localStorage.setItem("gw-subtitle-presets", JSON.stringify(next));
+    setPresetName("");
+  };
+  useEffect(() => setDraft(structuredClone(project?.settings.subtitles ?? defaults)), [project?.id]);
+  if (!project) return <EmptyState icon={<Captions size={34} />} title="Проект не выбран" text="Создайте или выберите проект для настройки субтитров." action="Понятно" onAction={() => undefined} />;
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave(project.id, {
+        settings: { ...project.settings, subtitles: draft },
+      });
+    } catch {
+      /* Ошибка показана в общем уведомлении. */
+    } finally {
+      setSaving(false);
+    }
+  };
+  const previewStyle: CSSProperties = {
+    fontFamily: draft.fontFamily,
+    fontSize: `${Math.max(20, draft.fontSize / 2)}px`,
+    color: draft.textColor,
+    WebkitTextStroke: `${draft.outlineWidth}px ${draft.outlineColor}`,
+    bottom: `${draft.bottomMargin}%`,
+    textShadow: draft.shadow ? "0 6px 12px #000" : "none",
+  };
+  return (
+    <div className="subtitle-page page-with-actionbar">
+      <PageHeading icon={<Captions size={24} />} title="Студия субтитров" subtitle="Настройка стиля с живым предпросмотром" />
+      <div className="subtitle-studio">
+        <section className="subtitle-controls">
+          <ToggleRow label="Включить субтитры" checked={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} />
+          <Field label="ШРИФТ">
+            <select value={draft.fontFamily} onChange={(event) => setDraft({ ...draft, fontFamily: event.target.value })}>
+              <option>Montserrat ExtraBold</option>
+              <option>Arial Black</option>
+              <option>Impact</option>
+              <option>Segoe UI</option>
+            </select>
+          </Field>
+          <Field label={`РАЗМЕР: ${draft.fontSize}`}>
+            <input type="range" min="24" max="110" value={draft.fontSize} onChange={(event) => setDraft({ ...draft, fontSize: Number(event.target.value) })} />
+          </Field>
+          <div className="color-grid">
+            <Field label="ЦВЕТ ТЕКСТА">
+              <input type="color" value={draft.textColor} onChange={(event) => setDraft({ ...draft, textColor: event.target.value })} />
+            </Field>
+            <Field label="КАРАОКЕ-АКЦЕНТ">
+              <input type="color" value={draft.accentColor} onChange={(event) => setDraft({ ...draft, accentColor: event.target.value })} />
+            </Field>
+            <Field label="ОБВОДКА">
+              <input type="color" value={draft.outlineColor} onChange={(event) => setDraft({ ...draft, outlineColor: event.target.value })} />
+            </Field>
+          </div>
+          <Field label={`ТОЛЩИНА ОБВОДКИ: ${draft.outlineWidth}`}>
+            <input type="range" min="0" max="10" value={draft.outlineWidth} onChange={(event) => setDraft({ ...draft, outlineWidth: Number(event.target.value) })} />
+          </Field>
+          <Field label={`ОТСТУП СНИЗУ: ${draft.bottomMargin}%`}>
+            <input type="range" min="2" max="35" value={draft.bottomMargin} onChange={(event) => setDraft({ ...draft, bottomMargin: Number(event.target.value) })} />
+          </Field>
+          <ToggleRow label="Тень" checked={draft.shadow} onChange={(shadow) => setDraft({ ...draft, shadow })} />
+          <ToggleRow label="POP WORDS" hint="Караоке-подсветка: произносимые слова окрашиваются в акцентный цвет." checked={draft.popWords} onChange={(popWords) => setDraft({ ...draft, popWords })} />
+          <Field label="ПРЕСЕТЫ СТИЛЯ" hint="Сохраните подобранные настройки и загружайте их в других проектах одним кликом.">
+            <div className="preset-row">
+              <select
+                value=""
+                onChange={(event) => {
+                  const preset = presets[event.target.value];
+                  if (preset) {
+                    setDraft(structuredClone(preset));
+                  }
+                }}
+              >
+                <option value="">Загрузить пресет…</option>
+                {Object.keys(presets).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+              <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder="Название пресета" />
+              <button className="outline-button small" disabled={!presetName.trim()} onClick={savePreset}>
+                <Save size={14} />
+                Сохранить
+              </button>
+            </div>
+          </Field>
+        </section>
+        <section className="subtitle-preview-panel">
+          <div className={`subtitle-video aspect-${project.aspectRatio.replace(":", "-")}`}>
+            <div className="preview-orbit">
+              <span />
+              <span />
+              <span />
+            </div>
+            <p style={previewStyle}>
+              КОСМИЧЕСКИЙ <em style={{ color: draft.accentColor }}>КОТ</em>
+            </p>
+          </div>
+          <small>Предпросмотр {project.aspectRatio}. Текст будет синхронизирован после генерации озвучки.</small>
+        </section>
+      </div>
+      <div className="sticky-actions editor-actions">
+        <span>Стиль хранится внутри проекта</span>
+        <div>
+          <button className="generate-button" disabled={saving} onClick={() => void save()}>
+            <Save size={16} />
+            {saving ? "Сохраняем..." : "Сохранить стиль"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
+  const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
+  const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [streamingText, setStreamingText] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    if (!analyzing) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => clearInterval(timer);
+  }, [analyzing]);
+  useEffect(() => api.onDirectorProgress((stage) => setStreamingText(stage)), []);
+  const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
+  const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [pending, setPending] = useState<{ title: string; hook: string; angle: string } | null>(null);
 
-  function sendPrompt() {
-    if (!prompt.trim()) return;
-    setMessages((current) => [...current, { role: "user", text: prompt }, { role: "assistant", text: "Я подготовлю идею, персонажей, локации и полный сценарий. Пока API не подключён, можно создать демонстрационный проект." }]);
+  async function refreshChatTopics() {
+    setChatTopics(await api.listChatTopics());
+  }
+
+  useEffect(() => {
+    void refreshChatTopics().catch(() => setChatTopics([]));
+  }, []);
+
+  async function sendPrompt() {
+    const text = prompt.trim();
+    if (!text || analyzing) return;
+    setMessages((current) => [...current, { role: "user", text }]);
     setPrompt("");
+    setAnalyzing(true);
+    let topicId = currentTopicId;
+    try {
+      if (!topicId) {
+        const created = await api.createChatTopic(text);
+        topicId = created.id;
+        setCurrentTopicId(created.id);
+      }
+      try {
+        await api.appendChatMessage(topicId, { role: "user", content: text });
+      } catch {
+        // Тема могла быть удалена — создаём новую и продолжаем, не роняя запрос.
+        const created = await api.createChatTopic(text);
+        topicId = created.id;
+        setCurrentTopicId(created.id);
+        await api.appendChatMessage(topicId, { role: "user", content: text });
+      }
+      await refreshChatTopics();
+      const appendAssistant = async (answer: string) => {
+        // Плавное появление ответа (эффект печати), затем фиксация сообщения.
+        const step = Math.max(6, Math.ceil(answer.length / 70));
+        for (let index = step; index < answer.length; index += step) {
+          setStreamingText(answer.slice(0, index));
+          await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        setStreamingText(null);
+        setMessages((current) => [...current, { role: "assistant", text: answer }]);
+        await api.appendChatMessage(topicId!, { role: "assistant", content: answer });
+        await refreshChatTopics();
+      };
+      const url = text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "");
+      if (url) {
+        setStreamingText("Собираю данные ролика и канала, пишу разбор и превью сцен…");
+        const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
+        setStreamingText(null);
+        setAnalysis(result);
+        await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
+        await appendAssistant(`Разбор готов: ниша, аудитория, сильные стороны, что улучшить — всё в карточке ниже.\n\nНа основе данных канала я предложил ${result.suggestedTopics?.length ?? 0} темы для нового ролика — выбери одну кнопкой в карточке, и я соберу полный сценарий и открою проект. Либо напиши свою длину («5 минут») или пожелание («сделай хук жёстче»).`);
+        onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
+      } else if (analysis) {
+        const requestedSeconds = parseDurationSeconds(text);
+        const looksLikeQuestion = /\?\s*$/.test(text.trim()) || /^(сколько|что|какой|какая|какие|каков|почему|когда|кто|где|как)\b/i.test(text.trim());
+        const chatContext = !requestedSeconds && looksLikeQuestion ? youtubeChatContext(analysis) : null;
+        if (chatContext && (await api.getAnyModelSettings()).configured) {
+          // Вопрос по данным — отвечаем напрямую с реальной статистикой YouTube, не пересобирая разбор.
+          let streamed = "";
+          const answer = await api.streamChatWithAnyModel([
+            { role: "system", content: chatContext },
+            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
+            { role: "user", content: text },
+          ], (chunk) => {
+            streamed += chunk;
+            setStreamingText(streamed);
+          });
+          await appendAssistant(answer);
+          setStreamingText(null);
+        } else if (requestedSeconds) {
+          setStreamingText(`Собираю сцены под ~${Math.round((requestedSeconds / 60) * 10) / 10} мин…`);
+          const resized = await api.regenerateReferenceScenes(analysis, requestedSeconds);
+          setStreamingText(null);
+          setAnalysis(resized);
+          await api.saveChatTopicAnalysis(topicId!, resized).catch(() => undefined);
+          const minutes = Math.round((requestedSeconds / 60) * 10) / 10;
+          await appendAssistant(`Пересобрал сценарий под ~${minutes} мин: ${resized.scenes.length} сцен по 5 секунд. Можешь уточнить длину ещё раз, поправить хук или нажать «Согласен — запустить генерацию».`);
+        } else {
+          setStreamingText("Обновляю разбор с учётом пожелания…");
+          const refined = await api.refineReferenceAnalysis(analysis, text);
+          setStreamingText(null);
+          setAnalysis(refined);
+          await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
+          await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
+        }
+      } else {
+        const provider = await api.getAnyModelSettings();
+        if (provider.configured) {
+          let streamed = "";
+          const answer = await api.streamChatWithAnyModel([
+            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
+            { role: "user", content: text },
+          ], (chunk) => {
+            streamed += chunk;
+            setStreamingText(streamed);
+          });
+          await appendAssistant(answer);
+          setStreamingText(null);
+        } else {
+          await appendAssistant("Опишите тему подробнее или пришлите ссылку на YouTube, Rutube или другой открытый ролик. Я подготовлю нишу, хук, структуру и сценарий. Сейчас используется демонстрационный анализатор; добавьте AnyModel API в настройках для настоящего диалога.");
+        }
+      }
+    } catch (reason) {
+      setStreamingText(null);
+      const message = errorMessage(reason);
+      const answer = `Ошибка AI-провайдера: ${message}`;
+      setMessages((current) => [...current, { role: "assistant", text: answer }]);
+      if (topicId) await api.appendChatMessage(topicId, { role: "assistant", content: answer }).catch(() => undefined);
+    } finally {
+      setAnalyzing(false);
+      setStreamingText(null);
+    }
+  }
+
+  function buildAndOpen(base: ReferenceAnalysis, label: string) {
+    if (analyzing) return;
+    onLog(`Открываю проект: ${label}`);
+    setMessages((current) => [...current, {
+      role: "assistant",
+      text: `Открываю проект по теме «${label}». Выбери в проекте длину ролика и язык (кнопки с флагами) и нажми «Собрать сценарий» — прогресс будет виден внизу проекта в процентах.`
+    }]);
+    onPickTopic(base);
+  }
+
+  /** Подтверждение темы: показываем, что именно уйдёт в сценарий, и даём поправить одной строкой. */
+  function confirmPending(extraInstructions: string) {
+    if (!pending || !analysis) return;
+    const base: ReferenceAnalysis = {
+      ...analysis,
+      suggestedTitle: pending.title,
+      hook: pending.hook || analysis.hook,
+      suggestedAngle: pending.angle || analysis.suggestedAngle,
+      instructions: [analysis.instructions, extraInstructions.trim()].filter(Boolean).join("\n") || undefined
+    };
+    setPending(null);
+    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${pending.title}»${extraInstructions.trim() ? ` (правка: ${extraInstructions.trim()})` : ""}` }]);
+    buildAndOpen(base, pending.title);
+  }
+
+  function pickTopic(topic: { title: string; hook: string; angle: string }) {
+    if (!analysis) return;
+    setPending({ title: topic.title, hook: topic.hook, angle: topic.angle });
+  }
+
+  async function openTopic(id: string) {
+    const topic = await api.getChatTopic(id);
+    if (!topic) return;
+    setCurrentTopicId(topic.id);
+    setMessages(topic.messages.filter((message) => message.role !== "system").map((message) => ({
+      role: message.role as "user" | "assistant",
+      text: message.content
+    })));
+    setAnalysis(topic.analysis ?? null);
+    setHistoryOpen(false);
+    onInfo(`Открыта тема «${topic.title}»`);
+  }
+
+  async function attachFile(kind: "image" | "video") {
+    const paths = await api.pickFiles(kind, kind === "image");
+    if (paths.length === 0) {
+      onInfo("Файл не выбран");
+      return;
+    }
+    const names = paths.map((path) => path.split(/[\\/]/).pop() ?? path);
+    setPrompt((current) => [current, `Референсы: ${names.join(", ")}`].filter(Boolean).join(" "));
+    onInfo(`Добавлено файлов: ${paths.length}`);
   }
 
   return (
     <div className="director-page">
-      <PageHeading icon={<WandSparkles size={24} />} title="AI Генератор пресетов" subtitle="Создавай сценарии через чат с AI" actions={<><button className="icon-button"><Bot size={16} /></button><button className="icon-button"><SlidersHorizontal size={16} /></button><button className="ghost-button"><RotateCcw size={15} />История</button><button className="ghost-button"><Plus size={15} />Новый</button></>} />
+      <PageHeading
+        icon={<WandSparkles size={24} />}
+        title="AI Генератор пресетов"
+        subtitle="Создавай сценарии через чат с AI"
+        actions={
+          <>
+            <button className="icon-button" title="Статус AI-провайдера" onClick={() => onInfo("Сейчас активен локальный mock-режим. Gemini или Claude подключатся через адаптер провайдера.")}>
+              <Bot size={16} />
+            </button>
+            <button className={`ghost-button${historyOpen ? " active" : ""}`} onClick={() => setHistoryOpen((value) => !value)}>
+              <RotateCcw size={15} />
+              История
+            </button>
+            <button
+              className="ghost-button"
+              onClick={() => {
+                setMessages([]);
+                setPrompt("");
+                setAnalysis(null);
+                setCurrentTopicId(null);
+                setHistoryOpen(false);
+                onInfo("Создана новая тема чата");
+              }}
+            >
+              <Plus size={15} />
+              Новый
+            </button>
+          </>
+        }
+      />
       <div className="chat-area">
-        {messages.length === 0 ? <div className="chat-empty"><WandSparkles size={38} /><h2>Создай сценарий</h2><p>Опиши нишу или идею. AI поможет придумать сюжет и подготовит полный пресет проекта.</p><div><button className="ghost-button" onClick={onCreate}>Сделай сценарий</button><button className="ghost-button">Анализ ниши</button></div><small>Недавние диалоги</small>{["Мультфильм о космическом коте", "История для YouTube", "Первое видео канала"].map((text) => <button className="recent-chat" key={text}><FileText size={13} />{text}<span>сегодня</span></button>)}</div> : <div className="messages">{messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${index}`}>{message.text}{message.role === "assistant" && <div className="message-files"><span>characters.json</span><span>locations.json</span><span>scenario.json</span></div>}</article>)}</div>}
+        {pending && analysis && <TopicConfirmModal analysis={analysis} topic={pending} onCancel={() => setPending(null)} onConfirm={confirmPending} />}
+        {historyOpen && (
+          <aside className="chat-history-panel">
+            <header>
+              <div><RotateCcw size={15} /><strong>Темы чата</strong></div>
+              <span>{chatTopics.length}</span>
+            </header>
+            {chatTopics.length === 0 ? <p>Сохранённых диалогов пока нет.</p> : chatTopics.map((topic) => (
+              <div className={topic.id === currentTopicId ? "active" : ""} key={topic.id}>
+                <button onClick={() => void openTopic(topic.id)}>
+                  <strong>{topic.title}</strong>
+                  <span>{topic.preview || "Пустой диалог"}</span>
+                  <small>{new Date(topic.updatedAt).toLocaleString("ru-RU")} · {topic.messageCount} сообщ.</small>
+                </button>
+                <button
+                  className="delete-topic"
+                  title="Удалить тему"
+                  onClick={() => void api.deleteChatTopic(topic.id).then(async () => {
+                    if (currentTopicId === topic.id) {
+                      setCurrentTopicId(null);
+                      setMessages([]);
+                    }
+                    await refreshChatTopics();
+                  })}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </aside>
+        )}
+        {messages.length === 0 ? (
+          <div className="chat-empty">
+            <WandSparkles size={38} />
+            <h2>Создай сценарий</h2>
+            <p>Опиши нишу или пришли ссылку на ролик. Чат разберёт хук, аудиторию, структуру и подготовит улучшенный самостоятельный сценарий.</p>
+            <div>
+              <button className="ghost-button" disabled={busy} onClick={onCreate}>
+                Сделай сценарий
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setPrompt("Проанализируй нишу и предложи темы, формат роликов, аудиторию и структуру первого выпуска.");
+                  onInfo("Шаблон анализа ниши добавлен в поле сообщения");
+                }}
+              >
+                Анализ ниши
+              </button>
+            </div>
+            <small>Недавние диалоги</small>
+            {chatTopics.slice(0, 3).map((topic) => (
+              <button className="recent-chat" key={topic.id} onClick={() => void openTopic(topic.id)}>
+                <FileText size={13} />
+                {topic.title}
+                <span>{topic.messageCount} сообщ.</span>
+              </button>
+            ))}
+            {chatTopics.length === 0 && <p className="no-recent-chat">Первый диалог сохранится автоматически после отправки сообщения.</p>}
+          </div>
+        ) : (
+          <div className="messages">
+            {messages.map((message, index) => (
+              <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
+                {message.text}
+                {message.role === "assistant" && (
+                  <div className="message-files">
+                    <span>characters.json</span>
+                    <span>locations.json</span>
+                    <span>scenario.json</span>
+                  </div>
+                )}
+              </article>
+            ))}
+            {analyzing && streamingText === null && (
+              <article className="message assistant thinking-message">
+                <span>Думаю над запросом · {elapsedSeconds} с</span>
+                <i /><i /><i />
+              </article>
+            )}
+            {streamingText !== null && (() => {
+              const match = /(\d+)\s*из\s*(\d+)/.exec(streamingText);
+              const percent = match ? Math.min(100, Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100)) : null;
+              return (
+                <article className="message assistant streaming-message">
+                  {streamingText || <span className="stream-caret">▋</span>}
+                  <div className="script-progress">
+                    <div className="script-progress-bar">
+                      <span className={percent === null ? "indeterminate" : ""} style={percent === null ? undefined : { width: `${percent}%` }} />
+                    </div>
+                    <small>{percent === null ? `⏱ ${elapsedSeconds} с` : `${percent}% · ⏱ ${elapsedSeconds} с`}</small>
+                  </div>
+                </article>
+              );
+            })()}
+            {analysis && (
+              <article className="reference-analysis">
+                <header>
+                  <div>
+                    <strong>{analysis.sourceTitle}</strong>
+                    <small>{analysis.provider.startsWith("mock") ? "⚠ Демонстрационный разбор с выдуманными данными — API не подключён" : `Анализ: ${analysis.provider}`}</small>
+                  </div>
+                  <span>{analysis.scenes.length > 0 ? `${analysis.scenes.length} сцен` : "выбери тему ниже"}</span>
+                </header>
+                <div className="analysis-grid">
+                  <section><small>НИША</small><p>{analysis.niche}</p></section>
+                  <section><small>АУДИТОРИЯ</small><p>{analysis.targetAudience}</p></section>
+                  <section className="wide"><small>УЛУЧШЕННЫЙ ХУК</small><p>{analysis.hook}</p></section>
+                  <section><small>СИЛЬНЫЕ СТОРОНЫ</small><ul>{analysis.strengths.map((item, index) => <li key={index}>{typeof item === "string" ? item : JSON.stringify(item)}</li>)}</ul></section>
+                  <section><small>ЧТО УЛУЧШИТЬ</small><ul>{analysis.improvements.map((item, index) => <li key={index}>{typeof item === "string" ? item : JSON.stringify(item)}</li>)}</ul></section>
+                  <section className="wide"><small>НОВЫЙ УГОЛ ПОДАЧИ</small><p>{analysis.suggestedAngle}</p></section>
+                </div>
+                {analysis.youtubeContext && (
+                  <div className="youtube-analysis-details">
+                    <div className="youtube-metrics">
+                      <span><strong>{analysis.youtubeContext.views.toLocaleString("ru-RU")}</strong> просмотров</span>
+                      <span><strong>{analysis.youtubeContext.likes.toLocaleString("ru-RU")}</strong> лайков</span>
+                      <span><strong>{analysis.youtubeContext.commentCount.toLocaleString("ru-RU")}</strong> комментариев</span>
+                      <span><strong>{analysis.youtubeContext.channelSubscribers.toLocaleString("ru-RU")}</strong> подписчиков</span>
+                    </div>
+                    <div className="youtube-context-grid">
+                      <section>
+                        <small>ТРАНСКРИПТ С ТАЙМКОДАМИ</small>
+                        <div className="transcript-preview">
+                          {analysis.youtubeContext.transcript.slice(0, 12).map((segment, index) => (
+                            <p key={`${segment.startSeconds}-${index}`}>
+                              <b>{formatTimestamp(segment.startSeconds)}</b>{segment.text}
+                            </p>
+                          ))}
+                          {analysis.youtubeContext.transcript.length === 0 && (
+                            <p>Текст ролика недоступен без входа в аккаунт YouTube. Разбор построен на метаданных и комментариях. Чтобы анализировать по тексту, добавьте cookies.txt в Настройки → AI и сценарии.</p>
+                          )}
+                        </div>
+                      </section>
+                      <section>
+                        <small>ТОП-КОММЕНТАРИИ</small>
+                        {analysis.youtubeContext.topComments.slice(0, 5).map((comment, index) => (
+                          <p key={`${comment.author}-${index}`}><b>♥ {comment.likes}</b>{comment.text}</p>
+                        ))}
+                        {analysis.youtubeContext.topComments.length === 0 && <p>Комментарии отключены или отсутствуют.</p>}
+                      </section>
+                      <section>
+                        <small>ЧТО ВЫСТРЕЛИЛО НА КАНАЛЕ</small>
+                        {analysis.youtubeContext.topVideos.slice(0, 5).map((video) => (
+                          <p key={video.id}><b>{video.views.toLocaleString("ru-RU")}</b>{video.title}</p>
+                        ))}
+                      </section>
+                    </div>
+                    <p className="analysis-disclaimer">
+                      Кадры ролика не анализировались. Источник текста: {({ captions: "субтитры", "yt-dlp-captions": "субтитры (yt-dlp)", "gemini-audio": "аудио → Gemini", none: "недоступен (нужен вход/cookies)" } as const)[analysis.youtubeContext.transcriptSource]}.
+                      {analysis.youtubeContext.transcriptionAudioMegabytes ? ` Аудио для Gemini: ${analysis.youtubeContext.transcriptionAudioMegabytes} МБ — расход токенов учитывается провайдером.` : " Транскрибация аудио не потребовалась, дополнительных токенов на неё нет."}
+                    </p>
+                  </div>
+                )}
+                {analysis.suggestedTopics && analysis.suggestedTopics.length > 0 && (
+                  <div className="suggested-topics">
+                    <small>ТЕМЫ ДЛЯ НОВОГО РОЛИКА — НАЖМИ, ЧТОБЫ СОБРАТЬ СЦЕНАРИЙ И ОТКРЫТЬ ПРОЕКТ</small>
+                    {analysis.suggestedTopics.map((topic, index) => (
+                      <button key={index} className="suggested-topic" disabled={busy || analyzing} onClick={() => pickTopic(topic)}>
+                        <strong>{index + 1}. {topic.title}</strong>
+                        <span>{topic.hook}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <footer>
+                  <span>Можно написать: «сделай хук жёстче», «сократи до Shorts» или «добавь больше интриги»</span>
+                  <button
+                    className="generate-button"
+                    disabled={busy || analyzing}
+                    onClick={() => setPending({ title: analysis.suggestedTitle || "Улучшенный ролик", hook: analysis.hook, angle: analysis.suggestedAngle })}
+                  >
+                    <WandSparkles size={15} />
+                    Написать сценарий и создать проект
+                  </button>
+                </footer>
+              </article>
+            )}
+          </div>
+        )}
       </div>
-      <div className="chat-composer"><button><Paperclip size={19} /></button><button><Video size={19} /></button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendPrompt()} placeholder="Опиши что нужно или вставь скрин..." /><button className="send" onClick={sendPrompt} disabled={!prompt.trim()}>{creating ? <MoreHorizontal size={19} /> : <Send size={19} />}</button></div>
+      <div className="chat-composer">
+        <button title="Добавить изображения" onClick={() => void attachFile("image")}>
+          <Paperclip size={19} />
+        </button>
+        <button title="Добавить видео-референс" onClick={() => void attachFile("video")}>
+          <Video size={19} />
+        </button>
+        <input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void sendPrompt()} placeholder="Опиши идею или вставь ссылку на ролик..." />
+        <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim() || analyzing}>
+          <Send size={19} />
+        </button>
+      </div>
     </div>
   );
 }
 
-function ProjectsPage({ projects, creating, onCreate }: { projects: Project[]; creating: boolean; onCreate: () => void }) {
-  return <div><PageHeading icon={<FolderOpen size={24} />} title="Проекты" subtitle="Все сохранённые проекты и материалы" actions={<button className="generate-button" onClick={onCreate}><Plus size={16} />{creating ? "Создаём..." : "Новый проект"}</button>} /><div className="projects-cards">{(projects.length ? projects : [demoProject("empty", "Проект #1")]).map((project) => <article key={project.id}><div><Clapperboard size={26} /><span>{project.aspectRatio}</span></div><h3>{project.title}</h3><p>{project.topic}</p><footer><span><i />{project.status === "ready" ? "Готов к генерации" : "Черновик"}</span><button><MoreHorizontal size={16} /></button></footer></article>)}</div></div>;
+/** Карточка подтверждения перед сборкой сценария: что именно уйдёт в генерацию и как это поправить. */
+function TopicConfirmModal({ analysis, topic, onCancel, onConfirm }: { analysis: ReferenceAnalysis; topic: { title: string; hook: string; angle: string }; onCancel: () => void; onConfirm: (instructions: string) => void }) {
+  const [instructions, setInstructions] = useState("");
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <section className="topic-modal">
+        <header>
+          <div>
+            <WandSparkles size={18} />
+            <div>
+              <strong>Проверьте пресет перед сборкой</strong>
+              <small>Сценарий соберётся именно по этим данным</small>
+            </div>
+          </div>
+          <button className="modal-close" onClick={onCancel}><X size={18} /></button>
+        </header>
+        <div className="topic-modal-body">
+          <Field label="ТЕМА РОЛИКА"><div className="topic-value strong">{topic.title}</div></Field>
+          <Field label="ХУК (ПЕРВЫЕ СЕКУНДЫ)"><div className="topic-value">{topic.hook || "—"}</div></Field>
+          <Field label="УГОЛ ПОДАЧИ"><div className="topic-value">{topic.angle || "—"}</div></Field>
+          <div className="topic-grid">
+            <Field label="НИША"><div className="topic-value">{analysis.niche}</div></Field>
+            <Field label="АУДИТОРИЯ"><div className="topic-value">{analysis.targetAudience}</div></Field>
+          </div>
+          {analysis.structure.length > 0 && (
+            <Field label="СТРУКТУРА">
+              <div className="topic-value">{analysis.structure.slice(0, 6).map((item, index) => <div key={index}>• {item}</div>)}</div>
+            </Field>
+          )}
+          <Field label="ЧТО ИЗМЕНИТЬ (НЕОБЯЗАТЕЛЬНО)" hint="Например: «сделай хук жёстче», «больше конкретики и цифр», «от лица новичка».">
+            <textarea rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Пожелания к сценарию — учтутся при генерации" />
+          </Field>
+          <small className="topic-note">Длину ролика и язык выберете в проекте — он откроется сразу, а сцены будут писаться с прогрессом внизу.</small>
+        </div>
+        <footer>
+          <button className="outline-button" onClick={onCancel}>Отмена</button>
+          <button className="generate-button" onClick={() => onConfirm(instructions)}>
+            <Check size={15} />
+            Согласен — собрать сценарий
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
-function QueuePage({ tasks }: { tasks: QueueTask[] }) {
-  const mockTasks = tasks.length ? tasks : [
-    { id: "audio", label: "Аудио", progress: 0, detail: "Ожидает запуска", icon: <Volume2 size={18} /> },
-    { id: "images", label: "Картинки", progress: 35, detail: "42 / 120 сцен", icon: <Image size={18} /> },
-    { id: "video", label: "AI Видео", progress: 0, detail: "После изображений", icon: <Video size={18} /> },
-    { id: "assemble", label: "Сборка", progress: 0, detail: "Финальный этап", icon: <Clapperboard size={18} /> }
-  ];
-  return <div><PageHeading icon={<ListPlus size={24} />} title="Очередь" subtitle="Задачи генерации и повторные попытки" actions={<button className="danger-button"><X size={15} />Остановить всё</button>} /><section className="queue-board"><div className="queue-summary"><Stat label="Ожидают" value="3" /><Stat label="В работе" value="1" /><Stat label="Завершено" value="0" /><Stat label="Ошибки" value="0" /></div><div className="queue-cards">{mockTasks.map((task: any) => <article key={task.id}><div className="queue-card-head"><span>{task.icon}</span><div><strong>{task.label ?? task.kind}</strong><small>{task.detail ?? task.status}</small></div><em>{task.progress}%</em></div><div className="progress"><span style={{ width: `${task.progress}%` }} /></div><footer><span>{task.progress ? "Выполняется" : "В очереди"}</span><button><MoreHorizontal size={15} /></button></footer></article>)}</div></section></div>;
+function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete, onPreview, onTimeline, onGenerate, onAssemble, onOpenFolder, onSave }: { projects: Project[]; busy: boolean; onCreate: () => void; onOpen: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onPreview: (id: string) => void; onTimeline: (id: string) => void; onGenerate: (id: string) => void; onAssemble: (id: string) => void; onOpenFolder: (id: string) => void; onSave: (id: string, input: UpdateProjectInput) => Promise<Project> }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const expanded = projects.find((project) => project.id === expandedId);
+  const patchAssembly = (project: Project, patch: Partial<ProjectSettings["assembly"]>) =>
+    void onSave(project.id, { settings: { ...project.settings, assembly: { ...project.settings.assembly, ...patch } } });
+  const patchSubtitles = (project: Project, patch: Partial<SubtitleSettings>) =>
+    void onSave(project.id, { settings: { ...project.settings, subtitles: { ...project.settings.subtitles, ...patch } } });
+  return (
+    <div>
+      <PageHeading
+        icon={<FolderOpen size={24} />}
+        title="Проекты"
+        subtitle="Клик по строке раскрывает управление генерацией и сборкой"
+        actions={
+          <button className="generate-button" disabled={busy} onClick={onCreate}>
+            <Plus size={16} />
+            Новый проект
+          </button>
+        }
+      />
+      {projects.length === 0 ? (
+        <EmptyState icon={<FolderOpen size={34} />} title="Список пуст" text="Созданные проекты появятся здесь." action="Создать проект" onAction={onCreate} />
+      ) : (
+        <div className="projects-table">
+          <div className="projects-table-head">
+            <span>Название</span>
+            <span title="Картинок готово">🖼</span>
+            <span title="Озвучек готово">🔊</span>
+            <span title="Final.mp4">🎬</span>
+            <span>Статус</span>
+            <span>Дата</span>
+          </div>
+          {projects.map((project) => (
+            <div key={project.id}>
+              <button className={`projects-table-row${project.id === expandedId ? " open" : ""}`} onClick={() => setExpandedId(project.id === expandedId ? null : project.id)}>
+                <span className="cell-name">{project.title}</span>
+                <span>{project.scenes.filter((scene) => scene.imagePath).length}/{project.scenes.length}</span>
+                <span>{project.scenes.filter((scene) => scene.audioPath).length}/{project.scenes.length}</span>
+                <span>{project.outputPath ? "✅" : "—"}</span>
+                <span className={`status-${project.status}`}>{statusLabels[project.status]}</span>
+                <span className="cell-date">{new Date(project.updatedAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+              </button>
+              {project.id === expandedId && expanded && (
+                <div className="project-expand">
+                  <div className="expand-block">
+                    <small>ГЕНЕРАЦИЯ</small>
+                    <div className="expand-actions">
+                      <button className="generate-button compact" disabled={busy || project.status === "generating"} onClick={() => onGenerate(project.id)}>
+                        <Play size={14} />
+                        {project.scenes.some((scene) => !scene.imagePath) ? "Сгенерировать" : "Перегенерировать сцены"}
+                      </button>
+                      <button className="outline-button small" disabled={busy || project.status === "generating" || project.scenes.length === 0} onClick={() => onAssemble(project.id)}>
+                        <RotateCcw size={14} />
+                        Пересобрать Final.mp4
+                      </button>
+                    </div>
+                  </div>
+                  <div className="expand-block">
+                    <small>СБОРКА</small>
+                    <div className="expand-checks">
+                      <label><input type="checkbox" checked={project.settings.assembly.kenBurns} onChange={(event) => patchAssembly(project, { kenBurns: event.target.checked })} /> Ken Burns</label>
+                      <label><input type="checkbox" checked={project.settings.assembly.fadeTransitions} onChange={(event) => patchAssembly(project, { fadeTransitions: event.target.checked })} /> Переходы (mix)</label>
+                      <label><input type="checkbox" checked={project.settings.subtitles.enabled} onChange={(event) => patchSubtitles(project, { enabled: event.target.checked })} /> Субтитры</label>
+                      <label><input type="checkbox" checked={project.settings.subtitles.popWords} onChange={(event) => patchSubtitles(project, { popWords: event.target.checked })} /> Pop Words</label>
+                      <label>
+                        Качество:
+                        <select value={project.settings.assembly.quality} onChange={(event) => patchAssembly(project, { quality: event.target.value as ProjectSettings["assembly"]["quality"] })}>
+                          <option value="preview">Черновик</option>
+                          <option value="standard">Стандарт</option>
+                          <option value="high">Высокое</option>
+                        </select>
+                      </label>
+                      <span className="expand-music">
+                        <Music2 size={13} />
+                        {project.settings.music.path && project.settings.music.enabled !== false ? "Музыка: есть" : "Музыка: нет"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="expand-block">
+                    <small>ДЕЙСТВИЯ</small>
+                    <div className="expand-actions">
+                      <button className="outline-button small" onClick={() => onTimeline(project.id)}><Clock3 size={14} />Таймлайн</button>
+                      <button className="outline-button small" onClick={() => onPreview(project.id)}><Eye size={14} />Предпросмотр</button>
+                      <button className="outline-button small" onClick={() => onOpen(project.id)}><Settings size={14} />Настроить</button>
+                      <button className="outline-button small" onClick={() => onOpenFolder(project.id)}><FolderOpen size={14} />Открыть папку</button>
+                      <button className="outline-button small" onClick={() => onDuplicate(project.id)}><Copy size={14} />Копия</button>
+                      <button className="outline-button small danger" onClick={() => onDelete(project.id)}><Trash2 size={14} />Удалить</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QueuePage({ tasks, projects, onPause, onResume, onStop, onRetry, onClear }: { tasks: QueueTask[]; projects: Project[]; onPause: (id: string) => void; onResume: (id: string) => void; onStop: (id: string) => void; onRetry: (id: string) => void; onClear: () => void }) {
+  const counts = {
+    pending: tasks.filter((task) => task.status === "pending" || task.status === "retry_wait").length,
+    running: tasks.filter((task) => task.status === "running").length,
+    done: tasks.filter((task) => task.status === "done").length,
+    failed: tasks.filter((task) => task.status === "failed" || task.status === "cancelled" || task.status === "blocked").length,
+  };
+  const activeProjectIds = [...new Set(tasks.filter((task) => !["done", "cancelled", "failed", "blocked"].includes(task.status)).map((task) => task.projectId))];
+  const icons: Record<QueueTask["kind"], ReactNode> = {
+    director: <WandSparkles size={18} />,
+    image: <Image size={18} />,
+    video: <Video size={18} />,
+    speech: <Volume2 size={18} />,
+    assemble: <Clapperboard size={18} />,
+  };
+  return (
+    <div>
+      <PageHeading
+        icon={<ListPlus size={24} />}
+        title="Очередь"
+        subtitle="Локальный конвейер, прогресс и повторные попытки"
+        actions={
+          <button className="ghost-button" onClick={onClear}>
+            <Trash2 size={15} />
+            Очистить завершённые
+          </button>
+        }
+      />
+      {activeProjectIds.length > 0 && (
+        <div className="queue-project-controls">
+          {activeProjectIds.map((id) => {
+            const project = projects.find((item) => item.id === id);
+            const paused = project?.status === "paused";
+            return (
+              <div key={id}>
+                <span>
+                  <Clapperboard size={15} />
+                  {project?.title ?? id}
+                </span>
+                <button onClick={() => (paused ? onResume(id) : onPause(id))}>
+                  {paused ? <Play size={14} /> : <Pause size={14} />}
+                  {paused ? "Продолжить" : "Пауза"}
+                </button>
+                <button className="danger" onClick={() => onStop(id)}>
+                  <Square size={13} />
+                  Стоп
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <section className="queue-board">
+        <div className="queue-summary">
+          <Stat label="Ожидают" value={String(counts.pending)} />
+          <Stat label="В работе" value={String(counts.running)} />
+          <Stat label="Завершено" value={String(counts.done)} />
+          <Stat label="Ошибки / стоп" value={String(counts.failed)} />
+        </div>
+        {tasks.length === 0 ? (
+          <EmptyState icon={<ListPlus size={34} />} title="Очередь пуста" text="Откройте проект и нажмите «Генерировать видео»." action="Готово" onAction={() => undefined} />
+        ) : (
+          <div className="queue-cards">
+            {tasks.map((task) => (
+              <article key={task.id} className={`queue-task status-${task.status}`}>
+                <div className="queue-card-head">
+                  <span>{icons[task.kind]}</span>
+                  <div>
+                    <strong>{task.label}</strong>
+                    <small>{projects.find((project) => project.id === task.projectId)?.title ?? task.projectId}</small>
+                  </div>
+                  <em>{task.progress}%</em>
+                </div>
+                <div className="progress">
+                  <span style={{ width: `${task.progress}%` }} />
+                </div>
+                <footer>
+                  <span className="queue-status">
+                    {taskStatusLabel(task.status)} · попытка {task.attempts}/{task.maxAttempts}
+                  </span>
+                  {task.error && <span className="queue-error">{task.error}</span>}
+                  {task.status === "failed" && (
+                    <button className="retry-button" onClick={() => onRetry(task.id)}>
+                      <RotateCcw size={13} />
+                      Повторить
+                    </button>
+                  )}
+                </footer>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder, onAssemble, onEditScenario, onToggleScene }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string) => void; onOpenFolder: () => void; onAssemble: () => void; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void }) {
+  const api = window.goldWork ?? fallbackApi;
+  const [mode, setMode] = useState(initialMode);
+  const [menu, setMenu] = useState<{ x: number; y: number; scene: Scene } | null>(null);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const busyGenerating = project.status === "generating" || project.status === "paused";
+  const selectedScene = project.scenes.find((scene) => scene.id === selectedSceneId);
+  const totalDuration = Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0));
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="preview-modal">
+        <header>
+          <div>
+            <Clapperboard size={20} />
+            <div>
+              <strong>{project.title}</strong>
+              <small>{project.outputPath ?? "Final.mp4 ещё не собран"}</small>
+            </div>
+          </div>
+          <div>
+            <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}>
+              <Grid2X2 size={14} />
+              Сцены
+            </button>
+            <button className={mode === "timeline" ? "active" : ""} onClick={() => setMode("timeline")}>
+              <Clock3 size={14} />
+              Таймлайн
+            </button>
+            <button className="modal-close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </div>
+        </header>
+        <div className="preview-stats">
+          <Stat label="Сцен" value={String(project.scenes.length)} />
+          <Stat label="Изображений" value={String(project.scenes.filter((scene) => scene.imagePath).length)} />
+          <Stat label="Видео" value={String(project.scenes.filter((scene) => scene.videoPath).length)} />
+          <Stat label="Длительность" value={`${totalDuration} сек`} />
+        </div>
+        <div className="preview-player">
+          {selectedScene?.imagePath ? (
+            <img src={api.mediaUrl(selectedScene.imagePath)} alt={selectedScene.title} />
+          ) : project.outputPath ? (
+            <video key={project.outputPath} controls src={api.mediaUrl(project.outputPath)} />
+          ) : project.scenes[0]?.imagePath ? (
+            <img src={api.mediaUrl(project.scenes[0].imagePath)} alt="Первая сцена" />
+          ) : (
+            <div className="scene-placeholder"><Image size={34} /><span>Медиа появится после генерации</span></div>
+          )}
+          <small>
+            {selectedScene
+              ? `Сцена ${selectedScene.order + 1} из ${project.scenes.length} · клик по дорожке выбирает сцену, правый клик — меню`
+              : project.outputPath
+                ? "Final.mp4 · правый клик по сцене в дорожке — меню действий"
+                : "Final.mp4 ещё не собран"}
+          </small>
+        </div>
+        {mode === "preview" ? (
+          <div className="scene-gallery">
+            {project.scenes.length === 0 ? (
+              <EmptyState icon={<Image size={32} />} title="Нет сцен" text="Добавьте сцены в редакторе сценария." action="Закрыть" onAction={onClose} />
+            ) : (
+              project.scenes.map((scene) => (
+                <article className="preview-scene" key={scene.id}>
+                  {scene.imagePath ? (
+                    <img className="scene-thumb" src={api.mediaUrl(scene.imagePath)} alt={scene.title} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, scene }); }} />
+                  ) : (
+                    <div className="scene-placeholder">
+                      <Image size={28} />
+                      <span>{scene.status}</span>
+                    </div>
+                  )}
+                  <div>
+                    <strong>
+                      Сцена {scene.order + 1}: {scene.title}{scene.includeInAssembly === false ? " · вне сборки" : ""}
+                    </strong>
+                    <p>{scene.narration || "Текст озвучки не задан"}</p>
+                    <small>
+                      {scene.durationSeconds} сек · {scene.imagePath ? "изображение готово" : "изображение ожидается"} · {scene.audioPath ? "озвучка готова" : "озвучка ожидается"}
+                    </small>
+                    <button className="retry-button" disabled={busyGenerating} onClick={() => onRegenerate(scene.id)}>
+                      <RotateCcw size={13} />
+                      Перегенерировать сцену
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="timeline-tracks">
+            <div className="timeline-track-row">
+              <strong>Видео/Фото</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <button
+                    key={scene.id}
+                    className={`track-thumb${scene.includeInAssembly === false ? " excluded" : ""}${scene.id === selectedSceneId ? " selected" : ""}`}
+                    title={`${scene.order + 1}. ${scene.title}`}
+                    onClick={() => setSelectedSceneId(scene.id === selectedSceneId ? null : scene.id)}
+                    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, scene }); }}
+                  >
+                    <i>{scene.order + 1}</i>
+                    {scene.imagePath ? <img src={api.mediaUrl(scene.imagePath)} alt="" loading="lazy" /> : <Image size={16} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="timeline-track-row">
+              <strong>Audio TTS</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <span key={scene.id} className={`track-cell audio${scene.audioPath ? " ready" : ""}`} title={scene.narration.slice(0, 120)}>
+                    <Volume2 size={13} />
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="timeline-track-row">
+              <strong>Музыка</strong>
+              <div className="track-cells single">
+                <span className={`track-cell music${project.settings.music.path && project.settings.music.enabled !== false ? " ready" : ""}`}>
+                  <Music2 size={13} />
+                  {project.settings.music.path && project.settings.music.enabled !== false ? "Трек добавлен" : "Нет музыки"}
+                </span>
+              </div>
+            </div>
+            <div className="timeline-track-row">
+              <strong>Субтитры</strong>
+              <div className="track-cells">
+                {project.scenes.map((scene) => (
+                  <span key={scene.id} className={`track-cell subs${project.settings.subtitles.enabled && scene.narration ? " ready" : ""}`}>
+                    {project.settings.subtitles.enabled && scene.narration ? "≡" : "—"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {menu && (
+          <div className="context-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
+            <div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 190) }} onMouseDown={(event) => event.stopPropagation()}>
+              <button onClick={() => { setMenu(null); onEditScenario(); }}>
+                <FileText size={14} />
+                Редактировать сцену
+              </button>
+              <button disabled={busyGenerating} onClick={() => { onRegenerate(menu.scene.id); setMenu(null); }}>
+                <RotateCcw size={14} />
+                Перегенерировать сцену
+              </button>
+              <button onClick={() => { onToggleScene(menu.scene.id, menu.scene.includeInAssembly === false); setMenu(null); }}>
+                {menu.scene.includeInAssembly === false ? <Check size={14} /> : <X size={14} />}
+                {menu.scene.includeInAssembly === false ? "Вернуть в сборку" : "Исключить из сборки"}
+              </button>
+            </div>
+          </div>
+        )}
+        <footer>
+          <button className="outline-button" onClick={onOpenFolder}>
+            <FolderOpen size={15} />
+            Открыть папку
+          </button>
+          <button className="outline-button" disabled={busyGenerating} onClick={onAssemble}>
+            <RotateCcw size={15} />
+            Пересобрать Final.mp4
+          </button>
+          <button className="outline-button" onClick={onClose}>
+            Закрыть
+          </button>
+          <button className="generate-button" onClick={() => setMode(mode === "preview" ? "timeline" : "preview")}>
+            {mode === "preview" ? <Clock3 size={15} /> : <Grid2X2 size={15} />}
+            {mode === "preview" ? "Открыть таймлайн" : "Показать сцены"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["getAppInfo"]>> | null }) {
-  return <div><PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" /><div className="settings-layout"><section className="settings-menu"><button className="active">Общие</button><button>AI и сценарии</button><button>Изображения</button><button>Озвучка</button><button>Видео</button><button>Папки и хранение</button></section><section className="settings-content"><h2>Состояние приложения</h2><p>Сейчас работает безопасный mock-режим. Реальные API подключим через отдельные адаптеры.</p><InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} /><InfoRow label="Режим" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} /><InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} /><h2>Очередь</h2><InfoRow label="Параллельные изображения" value="4" /><InfoRow label="Повторные попытки" value="3" /></section></div></div>;
+  const api = window.goldWork ?? fallbackApi;
+  const [activeTab, setActiveTab] = useState<"general" | "ai" | "images" | "voice" | "video" | "storage">("general");
+  const [anyModel, setAnyModel] = useState<AnyModelSettings>({ configured: false, baseUrl: "https://anymodel.org/v1", textModel: "cc/claude-opus-5", imageModel: "ag/gemini-3.1-flash-image", videoModel: "xai/grok-imagine-video", ttsModel: "google-tts", imageRefModel: "gpt-image-2", transcriptionModel: "gc/gemini-2.5-flash" });
+  const [apiKey, setApiKey] = useState("");
+  const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
+  const [youtubeApiKey, setYouTubeApiKey] = useState("");
+  const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, baseUrl: "" });
+  const [voicerKey, setVoicerKey] = useState("");
+  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" });
+  const [googleKey, setGoogleKey] = useState("");
+  const [connectionMessage, setConnectionMessage] = useState("");
+  useEffect(() => {
+    void Promise.all([api.getAnyModelSettings(), api.getYouTubeSettings(), api.getVoicerSettings(), api.getGoogleSettings()]).then(([anyModelSettings, youtubeSettings, voicerSettings, googleSettings]) => {
+      setAnyModel(anyModelSettings);
+      setYouTube(youtubeSettings);
+      setVoicer(voicerSettings);
+      setGoogle(googleSettings);
+    });
+  }, []);
+  const saveVoicer = async () => {
+    const saved = await api.saveVoicerSettings({ baseUrl: voicer.baseUrl, apiKey: voicerKey || undefined });
+    setVoicer(saved);
+    setVoicerKey("");
+    setConnectionMessage("Настройки Voicer сохранены, ключ зашифрован Windows");
+  };
+  const saveAnyModel = async () => {
+    const saved = await api.saveAnyModelSettings({ ...anyModel, apiKey: apiKey || undefined });
+    setAnyModel(saved); setApiKey(""); setConnectionMessage("Настройки сохранены локально и зашифрованы Windows");
+  };
+  const saveYouTube = async () => {
+    const saved = await api.saveYouTubeSettings({ apiKey: youtubeApiKey || undefined });
+    setYouTube(saved);
+    setYouTubeApiKey("");
+    setConnectionMessage("Ключ YouTube Data API сохранён локально и зашифрован Windows");
+  };
+  const chooseYouTubeCookies = async () => {
+    const [cookiesFilePath] = await api.pickFiles("cookies");
+    if (!cookiesFilePath) return;
+    const saved = await api.saveYouTubeSettings({ cookiesFilePath });
+    setYouTube(saved);
+    setConnectionMessage("cookies.txt сохранён локально и будет использоваться только yt-dlp");
+  };
+  const chooseWorkDir = async () => {
+    const dir = await api.pickDirectory();
+    if (!dir) return;
+    const saved = await api.saveYouTubeSettings({ workDirPath: dir });
+    setYouTube(saved);
+    setConnectionMessage("Рабочая папка сохранена — yt-dlp будет использовать её для временных файлов");
+  };
+  const tabs = [
+    ["general", "Общие"],
+    ["ai", "AI и сценарии"],
+    ["images", "Изображения"],
+    ["voice", "Озвучка"],
+    ["video", "Видео"],
+    ["storage", "Папки и хранение"],
+  ] as const;
+
+  return (
+    <div>
+      <PageHeading icon={<Settings size={24} />} title="Настройки" subtitle="Провайдеры и параметры приложения" />
+      <div className="settings-layout">
+        <section className="settings-menu">
+          {tabs.map(([key, label]) => (
+            <button key={key} className={activeTab === key ? "active" : ""} onClick={() => setActiveTab(key)}>
+              {label}
+            </button>
+          ))}
+        </section>
+        <section className="settings-content">
+          {activeTab === "general" && (
+            <>
+              <h2>Состояние приложения</h2>
+              <p>Локальная сборка Standard уже работает. Внешние нейросети пока работают через безопасные mock-адаптеры и не расходуют деньги.</p>
+              <InfoRow label="Версия" value={appInfo?.version ?? "Загрузка..."} />
+              <InfoRow label="Провайдеры нейросетей" value={appInfo?.mockMode ? "Mock — без расходов" : "API"} />
+              <InfoRow label="FFmpeg" value={appInfo?.ffmpegAvailable ? "Готов к сборке MP4" : "Недоступен"} />
+              <h2>Очередь</h2>
+              <InfoRow label="Параллельные задачи" value={String(appInfo?.queuePolicy.concurrency ?? 4)} />
+              <InfoRow label="Максимум попыток" value={String(appInfo?.queuePolicy.maxAttempts ?? 3)} />
+              <InfoRow label="Интервалы повтора" value={(appInfo?.queuePolicy.retryDelaysMs ?? []).map((value) => `${value / 1000}с`).join(", ") || "—"} />
+            </>
+          )}
+          {activeTab === "ai" && (
+            <>
+              <h2>AnyModel API</h2>
+              <p>Ключ передаётся только из Electron и хранится зашифрованным через Windows safeStorage. Он не попадает в проекты, логи или GitHub.</p>
+              <InfoRow label="Статус" value={anyModel.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="НОВЫЙ API-КЛЮЧ">
+                <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={anyModel.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте новый ключ после отзыва старого"} />
+              </Field>
+              <Field label="BASE URL"><input value={anyModel.baseUrl} onChange={(event) => setAnyModel({ ...anyModel, baseUrl: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ СЦЕНАРИЯ"><input value={anyModel.textModel} onChange={(event) => setAnyModel({ ...anyModel, textModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ"><input value={anyModel.imageModel} onChange={(event) => setAnyModel({ ...anyModel, imageModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ИЗОБРАЖЕНИЙ С РЕФЕРЕНСОМ"><input value={anyModel.imageRefModel} onChange={(event) => setAnyModel({ ...anyModel, imageRefModel: event.target.value })} placeholder="gpt-image-2 — включается сама, если в проекте заданы референсы" /></Field>
+              <Field label="МОДЕЛЬ ТРАНСКРИПЦИИ"><input value={anyModel.transcriptionModel} onChange={(event) => setAnyModel({ ...anyModel, transcriptionModel: event.target.value })} placeholder="gc/gemini-2.5-flash — нужна модель с поддержкой аудио" /></Field>
+              <Field label="МОДЕЛЬ ВИДЕО"><input value={anyModel.videoModel} onChange={(event) => setAnyModel({ ...anyModel, videoModel: event.target.value })} /></Field>
+              <Field label="МОДЕЛЬ ОЗВУЧКИ"><input value={anyModel.ttsModel} onChange={(event) => setAnyModel({ ...anyModel, ttsModel: event.target.value })} placeholder="google-tts, edge-tts или edge-tts/ru-RU-DmitryNeural" /></Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveAnyModel()}><Save size={15} />Сохранить</button>
+                <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.testAnyModelConnection().then((result) => setConnectionMessage(result.message))}>Проверить подключение</button>
+                <button className="outline-button small" disabled={!anyModel.configured} onClick={() => void api.clearAnyModelKey().then(setAnyModel)}>Удалить ключ</button>
+              </div>
+              {connectionMessage && <p>{connectionMessage}</p>}
+              <h2>Lumean — премиум-озвучка (ElevenLabs)</h2>
+              <p>Голоса ElevenLabs через Lumean API (lumean.app). Ключ создаётся в кабинете Lumean → API ключи; шаблоны голосов выбираются в настройках проекта (движок «Lumean»).</p>
+              <InfoRow label="Статус Lumean" value={voicer.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="BASE URL LUMEAN"><input value={voicer.baseUrl} onChange={(event) => setVoicer({ ...voicer, baseUrl: event.target.value })} placeholder="https://api.lumean.app/api/public" /></Field>
+              <Field label="API-КЛЮЧ LUMEAN (X-API-KEY)">
+                <input type="password" value={voicerKey} onChange={(event) => setVoicerKey(event.target.value)} placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ из кабинета Lumean"} />
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveVoicer()}><Save size={15} />Сохранить Lumean</button>
+                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.testVoicerConnection().then((result) => setConnectionMessage(result.message))}>Проверить Lumean</button>
+                <button className="outline-button small" disabled={!voicer.configured} onClick={() => void api.clearVoicerKey().then(setVoicer)}>Удалить ключ</button>
+              </div>
+              <h2>Google AI Studio — видео (Omni Flash / Veo)</h2>
+              <p>Ключ из aistudio.google.com → Get API key. Оживляет картинки сцен (image-to-video). Google не обслуживает запросы из РФ — нужен VPN. Лимиты видео на подписке AI Pro небольшие: анимируйте часть сцен.</p>
+              <InfoRow label="Статус Google" value={google.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="КЛЮЧ GOOGLE AI STUDIO">
+                <input type="password" value={googleKey} onChange={(event) => setGoogleKey(event.target.value)} placeholder={google.configured ? "Оставьте пустым, чтобы не менять" : "AIza… или AQ.…"} />
+              </Field>
+              <Field label="МОДЕЛЬ ВИДЕО" hint="gemini-omni-flash-preview — Omni Flash (быстро, image-to-video, звук). veo-3.1-fast-generate-preview — классический Veo.">
+                <select value={google.veoModel} onChange={(event) => setGoogle({ ...google, veoModel: event.target.value })}>
+                  <option value="gemini-omni-flash-preview">Gemini Omni Flash (рекомендуется)</option>
+                  <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
+                  <option value="veo-3.1-generate-preview">Veo 3.1 (максимальное качество)</option>
+                </select>
+              </Field>
+              <Field label="SOCKS5-ПРОКСИ ДЛЯ GOOGLE" hint="Обходит региональную блокировку без системного VPN. Формат: socks5://логин:пароль@хост:порт. Пусто — прямое соединение.">
+                <input value={google.proxyUrl} onChange={(event) => setGoogle({ ...google, proxyUrl: event.target.value })} placeholder="socks5://логин:пароль@хост:порт" />
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void api.saveGoogleSettings({ apiKey: googleKey || undefined, veoModel: google.veoModel, proxyUrl: google.proxyUrl }).then((saved) => { setGoogle(saved); setGoogleKey(""); setConnectionMessage("Настройки Google сохранены, ключ зашифрован Windows"); })}><Save size={15} />Сохранить Google</button>
+                <button className="outline-button small" disabled={!google.configured} onClick={() => void api.testGoogleConnection().then((result) => setConnectionMessage(result.message))}>Проверить Google</button>
+                <button className="outline-button small" disabled={!google.configured} onClick={() => void api.clearGoogleKey().then(setGoogle)}>Удалить ключ</button>
+              </div>
+              <h2>YouTube Data API v3 (BYOK)</h2>
+              <p>Используется только официальный API Google: метаданные, просмотры, лайки, комментарии и статистика канала. Ключ не попадает в проекты и логи.</p>
+              <InfoRow label="Статус YouTube" value={youtube.configured ? "Ключ сохранён" : "Не настроен"} />
+              <Field label="КЛЮЧ YOUTUBE DATA API V3">
+                <input type="password" value={youtubeApiKey} onChange={(event) => setYouTubeApiKey(event.target.value)} placeholder={youtube.configured ? "Оставьте пустым, чтобы не менять" : "AIza..."} />
+              </Field>
+              <div className="provider-actions">
+                <button className="generate-button" onClick={() => void saveYouTube()}><Save size={15} />Сохранить YouTube</button>
+                <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.testYouTubeConnection().then((result) => setConnectionMessage(result.message))}>Проверить YouTube</button>
+                <button className="outline-button small" disabled={!youtube.configured} onClick={() => void api.clearYouTubeKey().then(setYouTube)}>Удалить ключ</button>
+              </div>
+              <h2>Авторизация yt-dlp</h2>
+              <p>Если YouTube показывает «Sign in to confirm you’re not a bot», экспортируйте свежий cookies.txt из браузера в формате Netscape и выберите его здесь. Файл остаётся на вашем компьютере. Не отправляйте его другим людям и не добавляйте в GitHub.</p>
+              <InfoRow label="Cookies YouTube" value={youtube.cookiesFileConfigured ? youtube.cookiesFileName ?? "Настроены" : "Не настроены"} />
+              <div className="provider-actions">
+                <button className="outline-button small" onClick={() => void chooseYouTubeCookies()}>Выбрать cookies.txt</button>
+                <button className="outline-button small" disabled={!youtube.cookiesFileConfigured} onClick={() => void api.saveYouTubeSettings({ clearCookiesFile: true }).then(setYouTube)}>Удалить cookies</button>
+              </div>
+              <h2>Рабочая папка yt-dlp</h2>
+              <p>Папка для временных файлов yt-dlp: распаковка исполняемого файла и загрузки. Выберите папку на диске с достаточным свободным местом (например, D:\GoldWorkTemp), если системный диск переполнен. Если не задана — используется системная временная папка.</p>
+              <InfoRow label="Рабочая папка" value={youtube.workDirConfigured ? youtube.workDirPath ?? "Настроена" : "Системная временная папка"} />
+              <div className="provider-actions">
+                <button className="outline-button small" onClick={() => void chooseWorkDir()}>Выбрать папку</button>
+                <button className="outline-button small" disabled={!youtube.workDirConfigured} onClick={() => void api.saveYouTubeSettings({ clearWorkDir: true }).then(setYouTube)}>Сбросить папку</button>
+              </div>
+              <p>Транскрипт сначала берётся из субтитров. Если их нет, используется yt-dlp и аудио→Gemini через настроенную модель AnyModel. Этот фолбэк расходует токены; анализ кадров пока не выполняется. Получение субтитров и аудио через yt-dlp не является официальным YouTube API и может перестать работать при изменении правил или сайта.</p>
+            </>
+          )}
+          {activeTab === "images" && (
+            <>
+              <h2>Изображения</h2>
+              <p>Каждая сцена получает собственный промпт и отдельную картинку. Неудачный кадр можно будет перегенерировать независимо.</p>
+              <InfoRow label="Без референсов" value={anyModel.imageModel} />
+              <InfoRow label="С референсами" value={anyModel.imageRefModel} />
+              <InfoRow label="Референсы" value="До 3 изображений" />
+              <InfoRow label="Сохранение" value="Сразу в папку сцены" />
+            </>
+          )}
+          {activeTab === "voice" && (
+            <>
+              <h2>Озвучка</h2>
+              <p>Озвучка создаётся по сценам, поэтому работу можно продолжить после перезапуска и повторить только проблемный фрагмент. Модель меняется в «AI и сценарии»: google-tts (язык проекта подставится сам), edge-tts (нейроголос по языку) или полный id вида edge-tts/ru-RU-DmitryNeural.</p>
+              <InfoRow label="Текущая модель" value={anyModel.ttsModel} />
+              <InfoRow label="Бесплатный вариант" value="Microsoft Edge TTS" />
+              <InfoRow label="Выход" value="Отдельные аудиофайлы сцен" />
+            </>
+          )}
+          {activeTab === "video" && (
+            <>
+              <h2>Видео</h2>
+              <p>Standard собирает ролик из картинок с движением камеры. Pro дополнительно оживляет выбранные сцены через Veo.</p>
+              <InfoRow label="Standard" value="Ken Burns и переходы" />
+              <InfoRow label="Pro" value="Veo image-to-video" />
+              <InfoRow label="AnyModel" value={anyModel.videoModel} />
+              <InfoRow label="Финальная сборка" value="FFmpeg" />
+            </>
+          )}
+          {activeTab === "storage" && (
+            <>
+              <h2>Папки и хранение</h2>
+              <p>Проекты, исходники, очередь и журнал сохраняются локально. Закрытие программы не удаляет готовые сцены.</p>
+              <InfoRow label="Папка проектов" value={appInfo?.workspacePath ?? "Загрузка..."} />
+              <InfoRow label="Папка данных" value={appInfo?.dataPath ?? "Загрузка..."} />
+              <InfoRow label="TXT-лог программы" value={appInfo?.logPath ?? "Загрузка..."} />
+              <button className="outline-button small" disabled={!appInfo} onClick={() => void api.openLogFile()}>
+                <FileText size={15} />
+                Открыть TXT-лог
+              </button>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
+  );
 }
 
-function ToolPage({ section }: { section: SectionKey }) {
+function ToolPage({ section, onAction }: { section: SectionKey; onAction: () => void }) {
   const definitions: Partial<Record<SectionKey, { title: string; subtitle: string; icon: ReactNode; action: string }>> = {
-    scenario: { title: "Сценарий", subtitle: "Редактирование сцен и текста озвучки", icon: <FileText size={25} />, action: "Создать сценарий" },
-    clone: { title: "Клон YouTube", subtitle: "Анализ структуры референсного ролика", icon: <Copy size={25} />, action: "Добавить ссылку" },
-    subtitles: { title: "Субтитры", subtitle: "Стилизация и синхронизация текста", icon: <Captions size={25} />, action: "Загрузить видео" },
-    thumbnail: { title: "Превью", subtitle: "AI генерация обложек для YouTube", icon: <Image size={25} />, action: "Создать превью" },
-    avatar: { title: "Аватарка", subtitle: "Генератор аватаров канала", icon: <CircleUserRound size={25} />, action: "Создать аватар" },
-    seo: { title: "SEO", subtitle: "Заголовки, описание и теги", icon: <Search size={25} />, action: "Проанализировать тему" },
-    studio: { title: "Студия", subtitle: "Ручная работа со сценами и медиа", icon: <Sparkles size={25} />, action: "Открыть проект" },
-    console: { title: "Консоль", subtitle: "Системные события и журнал генерации", icon: <SquareTerminal size={25} />, action: "Очистить журнал" }
+    clone: {
+      title: "Клон YouTube",
+      subtitle: "Анализ структуры референсного ролика",
+      icon: <Copy size={25} />,
+      action: "Добавить ссылку",
+    },
+    thumbnail: {
+      title: "Превью",
+      subtitle: "AI генерация обложек для YouTube",
+      icon: <Image size={25} />,
+      action: "Создать превью",
+    },
+    avatar: {
+      title: "Аватарка",
+      subtitle: "Генератор аватаров канала",
+      icon: <CircleUserRound size={25} />,
+      action: "Создать аватар",
+    },
+    seo: {
+      title: "SEO",
+      subtitle: "Заголовки, описание и теги",
+      icon: <Search size={25} />,
+      action: "Проанализировать тему",
+    },
+    studio: {
+      title: "Студия",
+      subtitle: "Ручная работа со сценами и медиа",
+      icon: <Sparkles size={25} />,
+      action: "Открыть проект",
+    },
+    console: {
+      title: "Консоль",
+      subtitle: "Системные события и журнал генерации",
+      icon: <SquareTerminal size={25} />,
+      action: "Очистить журнал",
+    },
   };
   const definition = definitions[section] ?? definitions.studio!;
-  return <div><PageHeading icon={definition.icon} title={definition.title} subtitle={definition.subtitle} /><section className="tool-workspace"><div className="tool-hero">{definition.icon}<h2>{definition.title} готов к работе</h2><p>Интерфейс уже подключён к навигации. Функциональность будет добавляться по этапам вместе с API провайдеров.</p><button className="generate-button"><Plus size={16} />{definition.action}</button></div></section></div>;
+  return (
+    <div>
+      <PageHeading icon={definition.icon} title={definition.title} subtitle={definition.subtitle} />
+      <section className="tool-workspace">
+        <div className="tool-hero">
+          {definition.icon}
+          <h2>{definition.title} готов к подключению</h2>
+          <p>Экран повторяет структуру исходной программы. Провайдер будет подключён после добавления API-ключа.</p>
+          <button className="generate-button" onClick={onAction}>
+            <Plus size={16} />
+            {definition.action}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
-function ConsoleDock({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return <div className={`console-dock${open ? " open" : ""}`}><button className="console-head" onClick={onToggle}><span><SquareTerminal size={14} />CONSOLE OUTPUT <em>4</em></span><span><Search size={13} /><Copy size={13} /><Save size={13} />{open ? "⌄" : "⌃"}</span></button>{open && <div className="console-lines"><p><time>22:18:04</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p><p><time>22:18:05</time><b>QUEUE</b> Очередь готова · 4 параллельных задачи</p></div>}</div>;
+function ConsoleDock({ open, queue, log, onToggle }: { open: boolean; queue: QueueTask[]; log: Array<{ time: string; level: string; text: string }>; onToggle: () => void }) {
+  const running = queue.filter((task) => task.status === "running").length;
+  const linesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open && linesRef.current) linesRef.current.scrollTop = linesRef.current.scrollHeight;
+  }, [log, open]);
+  return (
+    <div className={`console-dock${open ? " open" : ""}`}>
+      <button className="console-head" onClick={onToggle}>
+        <span>
+          <SquareTerminal size={14} />
+          CONSOLE OUTPUT <em>{log.length}</em>
+        </span>
+        <span>
+          <b style={{ opacity: 0.7 }}>очередь: {running}/{queue.length}</b>
+          {open ? "⌄" : "⌃"}
+        </span>
+      </button>
+      {open && (
+        <div className="console-lines" ref={linesRef}>
+          {log.length === 0 && (
+            <p><time>{new Date().toLocaleTimeString("ru-RU")}</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p>
+          )}
+          {log.map((line, index) => (
+            <p key={index}>
+              <time>{line.time}</time>
+              <b>{line.level}</b> {line.text}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function SettingsPanel({ icon, title, children, wide }: { icon: ReactNode; title: string; children: ReactNode; wide?: boolean }) {
-  return <section className={`settings-panel${wide ? " wide" : ""}`}><h2>{icon}{title}</h2><div className="panel-content">{children}</div></section>;
+function SettingsPanel({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <section className="settings-panel">
+      <h2>
+        {icon}
+        {title}
+      </h2>
+      <div className="panel-content">{children}</div>
+    </section>
+  );
 }
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="field">
+      <span>
+        {label}
+        {hint && <i className="field-hint" title={hint}>?</i>}
+      </span>
+      {children}
+    </label>
+  );
 }
-
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <div className="toggle-row"><span>{label}</span><button className={`toggle${checked ? " on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}><i /></button></div>;
+function ToggleRow({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <div className="toggle-row">
+      <span>
+        {label}
+        {hint && <i className="field-hint" title={hint}>?</i>}
+      </span>
+      <button className={`toggle${checked ? " on" : ""}`} onClick={() => onChange(!checked)} aria-pressed={checked}>
+        <i />
+      </button>
+    </div>
+  );
 }
-
 function PageHeading({ icon, title, subtitle, actions }: { icon: ReactNode; title: string; subtitle: string; actions?: ReactNode }) {
-  return <header className="page-heading"><div className="page-title-icon">{icon}</div><div><h1>{title}</h1><p>{subtitle}</p></div>{actions && <div className="heading-actions">{actions}</div>}</header>;
+  return (
+    <header className="page-heading">
+      <div className="page-title-icon">{icon}</div>
+      <div>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      {actions && <div className="heading-actions">{actions}</div>}
+    </header>
+  );
 }
-
 function Stat({ label, value }: { label: string; value: string }) {
-  return <article><span>{label}</span><strong>{value}</strong></article>;
+  return (
+    <article>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
 }
-
 function InfoRow({ label, value }: { label: string; value: string }) {
-  return <div className="info-row"><span>{label}</span><strong title={value}>{value}</strong></div>;
+  return (
+    <div className="info-row">
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+    </div>
+  );
 }
-
-function demoProject(id: string, title: string): Project {
-  return { id, title, topic: "Проект для автоматической генерации видео", aspectRatio: "16:9", language: "Русский", mode: "standard", status: "draft", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), scenes: [] };
+function EmptyState({ icon, title, text, action, onAction }: { icon: ReactNode; title: string; text: string; action: string; onAction: () => void }) {
+  return (
+    <section className="empty-state">
+      {icon}
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <button className="outline-button" onClick={onAction}>
+        <Plus size={15} />
+        {action}
+      </button>
+    </section>
+  );
+}
+function errorMessage(reason: unknown) {
+  return reason instanceof Error ? reason.message : "Произошла неизвестная ошибка";
+}
+function formatTimestamp(seconds: number) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+function taskStatusLabel(status: QueueTask["status"]) {
+  return (
+    {
+      pending: "Ожидает",
+      running: "Выполняется",
+      retry_wait: "Ждёт повтора",
+      paused: "Пауза",
+      blocked: "Заблокировано",
+      done: "Готово",
+      failed: "Ошибка",
+      cancelled: "Остановлено",
+    } satisfies Record<QueueTask["status"], string>
+  )[status];
 }
