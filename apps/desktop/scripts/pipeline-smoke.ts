@@ -89,7 +89,7 @@ try {
   // popWords включён по умолчанию: караоке-теги {\k..} разбивают фразу, проверяем по словам.
   assert.ok(assContent.includes("Dialogue:") && assContent.includes("локального") && assContent.includes("\\k"), "субтитры сцены должны содержать текст озвучки с караоке-разметкой");
 
-  await pipeline.regenerateScene(project.id, secondScene.id);
+  await pipeline.regenerateScene(project.id, completed.scenes.map((scene) => scene.id));
   await pipeline.drain();
   const regenerated = await projectService.get(project.id);
   assert.equal(regenerated?.status, "complete");

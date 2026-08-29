@@ -27,30 +27,121 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-/** Длительность медиафайла в секундах: парсим Duration из stderr ffmpeg -i (ffprobe в сборке нет). */
-function mediaDurationSeconds(path: string): Promise<number> {
+interface MediaInfo {
+  durationSeconds: number;
+  hasAudio: boolean;
+}
+
+/** Метаданные медиа: парсим stderr ffmpeg -i, потому что ffprobe в сборке нет. */
+function inspectMedia(path: string): Promise<MediaInfo> {
   const executable = executablePath();
-  if (!executable) return Promise.resolve(0);
+  if (!executable) return Promise.resolve({ durationSeconds: 0, hasAudio: false });
   return new Promise((resolve) => {
     const child = spawn(executable, ["-i", path], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr = `${stderr}${chunk}`.slice(-4000);
+      stderr = `${stderr}${chunk}`.slice(-12_000);
     });
-    child.once("error", () => resolve(0));
+    child.once("error", () => resolve({ durationSeconds: 0, hasAudio: false }));
     child.once("close", () => {
       const match = /Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/.exec(stderr);
-      if (!match) return resolve(0);
-      resolve(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 100);
+      const durationSeconds = match
+        ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 100
+        : 0;
+      resolve({ durationSeconds, hasAudio: /Stream\s+#[^\r\n]+Audio:/i.test(stderr) });
     });
   });
+}
+
+async function mediaDurationSeconds(path: string): Promise<number> {
+  return (await inspectMedia(path)).durationSeconds;
 }
 
 function videoSize(project: Project): { width: number; height: number } {
   if (project.aspectRatio === "9:16") return { width: 720, height: 1280 };
   if (project.aspectRatio === "1:1") return { width: 900, height: 900 };
   return { width: 1280, height: 720 };
+}
+
+export interface TimelineTiming {
+  trimStartSeconds: number;
+  trimEndSeconds?: number;
+  playbackRate: number;
+  durationSeconds: number;
+}
+
+const finiteNumber = (value: number | undefined): value is number => typeof value === "number" && Number.isFinite(value);
+const clamp = (value: number, minimum: number, maximum: number): number => Math.min(maximum, Math.max(minimum, value));
+
+/** Нормализует монтажный диапазон и сохраняет прежнюю длительность, пока пользователь не менял тайминг. */
+export function resolveTimelineTiming(scene: Scene, sourceDurationSeconds: number, kind: "photo" | "video"): TimelineTiming {
+  const sourceDuration = finiteNumber(sourceDurationSeconds) && sourceDurationSeconds > 0 ? sourceDurationSeconds : 0;
+  const playbackRate = clamp(finiteNumber(scene.playbackRate) ? scene.playbackRate : 1, 0.25, 4);
+  const trimStartSeconds = sourceDuration > 0
+    ? clamp(finiteNumber(scene.trimStartSeconds) ? scene.trimStartSeconds : 0, 0, Math.max(0, sourceDuration - 0.01))
+    : Math.max(0, finiteNumber(scene.trimStartSeconds) ? scene.trimStartSeconds : 0);
+  const requestedEnd = finiteNumber(scene.trimEndSeconds) && scene.trimEndSeconds > trimStartSeconds
+    ? scene.trimEndSeconds
+    : undefined;
+  const trimEndSeconds = sourceDuration > 0
+    ? clamp(requestedEnd ?? sourceDuration, trimStartSeconds + 0.01, sourceDuration)
+    : requestedEnd;
+  const rangeDuration = trimEndSeconds !== undefined
+    ? Math.max(0.01, trimEndSeconds - trimStartSeconds)
+    : Math.max(0.01, scene.durationSeconds);
+  const hasEffectiveTimingEdit = trimStartSeconds > 0
+    || playbackRate !== 1
+    || (requestedEnd !== undefined && (sourceDuration <= 0 || Math.abs(requestedEnd - sourceDuration) > 0.01));
+  const legacyDuration = kind === "photo" && sourceDuration > 0.2
+    ? sourceDuration + 0.5
+    : Math.max(1, scene.durationSeconds);
+  const durationOverride = finiteNumber(scene.durationOverrideSeconds) && scene.durationOverrideSeconds > 0
+    ? clamp(scene.durationOverrideSeconds, 0.1, 86_400)
+    : undefined;
+  return {
+    trimStartSeconds,
+    trimEndSeconds,
+    playbackRate,
+    durationSeconds: durationOverride ?? (hasEffectiveTimingEdit ? rangeDuration / playbackRate : legacyDuration)
+  };
+}
+
+/** FFmpeg atempo принимает только 0.5..2.0, поэтому крайние скорости раскладываются в цепочку. */
+export function atempoFactors(rate: number): number[] {
+  let remaining = clamp(finiteNumber(rate) ? rate : 1, 0.25, 4);
+  const factors: number[] = [];
+  while (remaining > 2) {
+    factors.push(2);
+    remaining /= 2;
+  }
+  while (remaining < 0.5) {
+    factors.push(0.5);
+    remaining /= 0.5;
+  }
+  if (Math.abs(remaining - 1) > 0.0001 || factors.length === 0) factors.push(remaining);
+  return factors;
+}
+
+export function resolveTransitionDuration(scene: Scene): number {
+  return clamp(finiteNumber(scene.transitionDurationSeconds) ? scene.transitionDurationSeconds : 0.5, 0.05, 5);
+}
+
+export function resolveKenBurnsZoom(scene: Scene): number {
+  return clamp(finiteNumber(scene.kenBurnsZoom) ? scene.kenBurnsZoom : 1.1, 1, 1.5);
+}
+
+export function resolveVolumePercent(value: number | undefined, fallback: number): number {
+  return clamp(finiteNumber(value) ? value : fallback, 0, 200);
+}
+
+function trimSuffix(timing: TimelineTiming): string {
+  return `start=${timing.trimStartSeconds.toFixed(3)}${timing.trimEndSeconds !== undefined ? `:end=${timing.trimEndSeconds.toFixed(3)}` : ""}`;
+}
+
+function audioTimelineFilters(timing: TimelineTiming, volumePercent: number): string {
+  const tempo = atempoFactors(timing.playbackRate).map((factor) => `atempo=${factor.toFixed(5)}`).join(",");
+  return `atrim=${trimSuffix(timing)},asetpts=PTS-STARTPTS,${tempo},volume=${(volumePercent / 100).toFixed(4)}`;
 }
 
 /** Направление камеры сцены: личная настройка сцены → настройка проекта (в т.ч. чередование) → приближение. */
@@ -78,25 +169,26 @@ export class StandardRenderer {
     const outputPath = this.storage.sceneVideoPath(project, scene);
     await mkdir(dirname(outputPath), { recursive: true });
     const { width, height } = videoSize(project);
-    // Кадр живёт ровно столько, сколько звучит его озвучка (+0.5с воздуха на переход):
-    // у каждого голоса своя скорость чтения, фиксированная длительность резала или тянула сцену.
     const audioSeconds = await mediaDurationSeconds(audioPath);
-    const duration = audioSeconds > 0.2 ? audioSeconds + 0.5 : Math.max(1, scene.durationSeconds);
+    const timing = resolveTimelineTiming(scene, audioSeconds, "photo");
+    const duration = timing.durationSeconds;
     const direction = resolveKenBurnsDirection(project, scene);
-    // Дрожание при зуме лечится двумя вещами: работой на удвоенном разрешении (субпиксельное движение
+    // Дрожание при зуме лечится двумя вещами: работой на четырёхкратном разрешении (субпиксельное движение
     // округляется мягче) и линейной формулой от номера кадра вместо накопления pzoom.
-    const superScale = direction === "off" ? 1 : 2;
-    const base = `scale=${width * superScale}:${height * superScale}:force_original_aspect_ratio=increase,crop=${width * superScale}:${height * superScale}`;
+    const superScale = direction === "off" ? 1 : 4;
+    const base = `scale=${width * superScale}:${height * superScale}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width * superScale}:${height * superScale}`;
     const totalFrames = Math.max(2, Math.round(duration * 30));
+    const maximumZoom = resolveKenBurnsZoom(scene);
+    const zoomDelta = maximumZoom - 1;
     const zoomExpression = direction === "out"
-      ? `1.10-0.10*on/${totalFrames}`
-      : `1+0.10*on/${totalFrames}`;
+      ? `${maximumZoom.toFixed(4)}-${zoomDelta.toFixed(4)}*on/${totalFrames}`
+      : `1+${zoomDelta.toFixed(4)}*on/${totalFrames}`;
     const motion = direction !== "off"
       ? `,zoompan=z='${zoomExpression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30`
       : "";
     // Затухания краёв решает сборка (первый/последний кадр, явный fade-переход) — между сценами теперь crossfade.
     const fadeInDuration = Math.min(fadeInSeconds, duration / 3);
-    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(resolveTransitionDuration(scene), duration / 3) : 0);
     const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
     let subtitles = "";
     if (project.settings.subtitles.enabled && scene.narration.trim().length > 0) {
@@ -113,10 +205,11 @@ export class StandardRenderer {
       "-i", imagePath,
       "-i", audioPath,
       "-vf", `${base}${motion}${fades}${subtitles},format=yuv420p`,
-      "-af", `apad=pad_dur=${duration},atrim=0:${duration}`,
+      "-af", `${audioTimelineFilters(timing, resolveVolumePercent(scene.narrationVolume, 100))},apad=pad_dur=${duration},atrim=0:${duration}`,
       "-t", String(duration),
       "-r", "30",
       "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
       "-preset", preset,
       "-crf", crf,
       "-c:a", "aac",
@@ -148,8 +241,8 @@ export class StandardRenderer {
     let offset = 0;
     for (let index = 1; index < clips.length; index += 1) {
       const junctionScene = scenes[index - 1]!;
-      // mix — заметное смешивание 0.5с; fade/none — почти мгновенный стык (fade уже вшит в сам клип).
-      const wanted = transitionOf(junctionScene) === "mix" ? 0.5 : 0.05;
+      // fade/none уже обработаны внутри клипов, а mix использует выбранную длительность склейки.
+      const wanted = transitionOf(junctionScene) === "mix" ? resolveTransitionDuration(junctionScene) : 0.05;
       const junction = Math.max(0.02, Math.min(wanted, durations[index - 1]! - 0.1, durations[index]! - 0.1));
       offset += durations[index - 1]! - junction;
       const videoOut = `[vx${index}]`;
@@ -169,6 +262,7 @@ export class StandardRenderer {
       "-map", audioLabel,
       "-r", "30",
       "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
       "-preset", preset,
       "-crf", crf,
       "-c:a", "aac",
@@ -179,24 +273,88 @@ export class StandardRenderer {
     ]);
   }
 
+  /** Ограничивает размер одного filter graph, но сохраняет переходы и на границах блоков. */
+  private async assembleWithChunkedCrossfade(
+    project: Project,
+    scenes: Scene[],
+    clips: string[],
+    transitionOf: (scene: Scene) => "none" | "fade" | "mix",
+    outputPath: string,
+    level = 0
+  ): Promise<void> {
+    const maximumInputs = 32;
+    if (clips.length <= maximumInputs) {
+      await this.assembleWithCrossfade(project, scenes, clips, transitionOf, outputPath);
+      return;
+    }
+
+    const chunkPaths: string[] = [];
+    const boundaryScenes: Scene[] = [];
+    try {
+      for (let start = 0; start < clips.length; start += maximumInputs) {
+        const chunkClips = clips.slice(start, start + maximumInputs);
+        const chunkScenes = scenes.slice(start, start + maximumInputs);
+        const chunkPath = join(this.storage.projectDirectory(project.id), `timeline-chunk-${level}-${chunkPaths.length}.mp4`);
+        if (chunkClips.length === 1) await copyFile(chunkClips[0] as string, chunkPath);
+        else await this.assembleWithCrossfade(project, chunkScenes, chunkClips, transitionOf, chunkPath);
+        chunkPaths.push(chunkPath);
+        boundaryScenes.push(chunkScenes.at(-1) as Scene);
+      }
+      await this.assembleWithChunkedCrossfade(project, boundaryScenes, chunkPaths, transitionOf, outputPath, level + 1);
+    } finally {
+      await Promise.all(chunkPaths.map((path) => rm(path, { force: true }).catch(() => undefined)));
+    }
+  }
+
   /** Приводит готовое AI-видео сцены к формату сборки, НЕ перезаписывая исходный scene.mp4. */
   private async normalizeVideoClip(project: Project, scene: Scene, fadeInSeconds: number, fadeOutSeconds = 0): Promise<string> {
     const sourcePath = scene.videoPath as string;
     const outputPath = join(dirname(this.storage.sceneVideoPath(project, scene)), "scene-clip.mp4");
+    await mkdir(dirname(outputPath), { recursive: true });
     const { width, height } = videoSize(project);
-    const duration = Math.max(1, scene.durationSeconds);
+    const sourceInfo = await inspectMedia(sourcePath);
+    const timing = resolveTimelineTiming(scene, sourceInfo.durationSeconds, "video");
+    const duration = timing.durationSeconds;
     const fadeInDuration = Math.min(fadeInSeconds, duration / 3);
-    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(0.5, duration / 3) : 0);
+    const fadeOutDuration = Math.max(Math.min(fadeOutSeconds, duration / 3), scene.transition === "fade" ? Math.min(resolveTransitionDuration(scene), duration / 3) : 0);
     const fades = `${fadeInDuration > 0 ? `,fade=t=in:st=0:d=${fadeInDuration}` : ""}${fadeOutDuration > 0 ? `,fade=t=out:st=${Math.max(0, duration - fadeOutDuration)}:d=${fadeOutDuration}` : ""}`;
-    const sourceVolume = project.settings.video.muteSource ? 0 : Math.min(100, Math.max(0, project.settings.video.sourceVolume)) / 100;
+    const projectSourceVolume = project.settings.video.muteSource ? 0 : project.settings.video.sourceVolume;
+    const sourceVolume = resolveVolumePercent(scene.sourceVolume, projectSourceVolume);
+    const narrationPath = scene.audioPath && existsSync(scene.audioPath) ? scene.audioPath : undefined;
+    const inputs = ["-i", sourcePath];
+    if (narrationPath) inputs.push("-i", narrationPath);
+
+    const filters = [
+      `[0:v]trim=${trimSuffix(timing)},setpts=(PTS-STARTPTS)/${timing.playbackRate.toFixed(5)},scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30,tpad=stop_mode=clone:stop=-1,trim=duration=${duration}${fades},format=yuv420p[vout]`
+    ];
+    const audioLabels: string[] = [];
+    if (sourceInfo.hasAudio) {
+      filters.push(`[0:a]${audioTimelineFilters(timing, sourceVolume)}[sourcea]`);
+      audioLabels.push("[sourcea]");
+    }
+    if (narrationPath) {
+      filters.push(`[1:a]${audioTimelineFilters(timing, resolveVolumePercent(scene.narrationVolume, 100))}[narrationa]`);
+      audioLabels.push("[narrationa]");
+    }
+    if (audioLabels.length === 0) {
+      const silentInput = inputs.length / 2;
+      inputs.push("-f", "lavfi", "-t", String(duration), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+      filters.push(`[${silentInput}:a]atrim=0:${duration},asetpts=PTS-STARTPTS[aout]`);
+    } else if (audioLabels.length === 1) {
+      filters.push(`${audioLabels[0]}apad=pad_dur=${duration},atrim=0:${duration},aresample=48000[aout]`);
+    } else {
+      filters.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,apad=pad_dur=${duration},atrim=0:${duration},aresample=48000[aout]`);
+    }
     await runFfmpeg([
       "-y",
-      "-i", sourcePath,
+      ...inputs,
+      "-filter_complex", filters.join(";"),
+      "-map", "[vout]",
+      "-map", "[aout]",
       "-t", String(duration),
-      "-vf", `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},fps=30,tpad=stop_mode=clone:stop=-1${fades},format=yuv420p`,
-      "-af", `volume=${sourceVolume},apad=pad_dur=${duration},atrim=0:${duration},aresample=48000`,
       "-r", "30",
       "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
       "-preset", "veryfast",
       "-crf", "22",
       "-c:a", "aac",
@@ -225,10 +383,17 @@ export class StandardRenderer {
     for (let index = 0; index < included.length; index += 1) {
       const scene = included[index]!;
       const previous = index > 0 ? included[index - 1]! : undefined;
-      // Вход: мягкое появление первого кадра; после fade-перехода — выход из чёрного.
-      const fadeIn = index === 0 ? edgeFade : previous && transitionOf(previous) === "fade" ? 0.5 : 0;
-      // Выход: только у последнего кадра (fade-переход сцена добавляет сама).
-      const fadeOut = index === included.length - 1 ? edgeFade : 0;
+      const personalEdgeFade = scene.fadeEdges === true ? resolveTransitionDuration(scene) : 0;
+      // Явный fadeEdges добавляет края любой сцене; false отключает только автоматические края ролика.
+      const fadeIn = Math.max(
+        personalEdgeFade,
+        index === 0 && scene.fadeEdges !== false ? edgeFade : 0,
+        previous && transitionOf(previous) === "fade" ? resolveTransitionDuration(previous) : 0
+      );
+      const fadeOut = Math.max(
+        personalEdgeFade,
+        index === included.length - 1 && scene.fadeEdges !== false ? edgeFade : 0
+      );
       // Готовое AI-видео сцены используется как есть (нормализация в общий формат), не затираясь Ken Burns-рендером.
       const hasAiVideo = Boolean(scene.videoPath && existsSync(scene.videoPath));
       clips.push(hasAiVideo
@@ -241,13 +406,13 @@ export class StandardRenderer {
     const withMusic = project.settings.music.enabled !== false && Boolean(musicPath && existsSync(musicPath));
     const assembledPath = withMusic ? join(this.storage.projectDirectory(project.id), "Final.tmp.mp4") : finalPath;
 
-    const useCrossfade = included.length > 1 && included.length <= 60
+    const useCrossfade = included.length > 1
       && included.some((scene, index) => index < included.length - 1 && transitionOf(scene) === "mix");
 
     if (clips.length === 1) {
       await copyFile(clips[0] as string, assembledPath);
     } else if (useCrossfade) {
-      await this.assembleWithCrossfade(project, included, clips, transitionOf, assembledPath);
+      await this.assembleWithChunkedCrossfade(project, included, clips, transitionOf, assembledPath);
     } else {
       const listPath = join(this.storage.projectDirectory(project.id), "concat.txt");
       const content = clips

@@ -6,6 +6,14 @@ export type TaskKind = "director" | "image" | "video" | "speech" | "assemble";
 export type AspectRatio = "9:16" | "16:9" | "1:1";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+export interface ConsoleLogEntry {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 export interface SubtitleSettings {
   enabled: boolean;
   fontFamily: string;
@@ -84,6 +92,24 @@ export interface Scene {
   transition?: "none" | "fade" | "mix";
   /** Движение камеры сцены: по настройке проекта (auto), приближение, отдаление или без движения. */
   kenBurnsDirection?: "auto" | "in" | "out" | "off";
+  /** Явная длительность сцены в монтаже. Отсутствие сохраняет автоматический расчёт старых проектов. */
+  durationOverrideSeconds?: number;
+  /** Скорость воспроизведения исходного видео и звука: 1 — без изменения. */
+  playbackRate?: number;
+  /** Начало используемого фрагмента исходного медиа, в секундах. */
+  trimStartSeconds?: number;
+  /** Конец используемого фрагмента исходного медиа, в секундах; отсутствие — до конца. */
+  trimEndSeconds?: number;
+  /** Громкость озвучки сцены в процентах. */
+  narrationVolume?: number;
+  /** Громкость исходного звука AI-видео в процентах. */
+  sourceVolume?: number;
+  /** Длительность перехода к следующей сцене, в секундах. */
+  transitionDurationSeconds?: number;
+  /** Добавить затемнение на входе и выходе именно этой сцены. */
+  fadeEdges?: boolean;
+  /** Максимальный масштаб Ken Burns как множитель, например 1.1 = 10% приближения. */
+  kenBurnsZoom?: number;
   imagePath?: string;
   videoPath?: string;
   audioPath?: string;
@@ -111,6 +137,8 @@ export interface ReferenceAnalysis {
   instructions?: string;
   scenes: Scene[];
   provider: string;
+  /** Модель, выбранная в AI-чате для анализа и последующей сборки сценария. */
+  modelId?: string;
   youtubeContext?: YouTubeAnalysisContext;
   youtubeChannelContext?: YouTubeChannelContext;
   suggestedTopics?: SuggestedTopic[];
@@ -120,6 +148,8 @@ export interface AnalyzeReferenceInput {
   url: string;
   instructions?: string;
   language?: string;
+  /** Модель чата, выбранная для текущей темы. Пусто — модель из настроек. */
+  modelId?: string;
 }
 
 export interface CreateReferenceProjectInput {
@@ -179,7 +209,7 @@ export interface YouTubeAnalysisContext {
   channelViews: number;
   channelVideoCount: number;
   transcript: TranscriptSegment[];
-  transcriptSource: "captions" | "yt-dlp-captions" | "gemini-audio" | "none";
+  transcriptSource: "captions" | "yt-dlp-captions" | "gemini-audio" | "pasted" | "none";
   transcriptionAudioMegabytes?: number;
   topComments: Array<{ author: string; text: string; likes: number; publishedAt: string }>;
   topVideos: Array<{ id: string; title: string; publishedAt: string; views: number; likes: number; commentCount: number }>;
@@ -313,6 +343,19 @@ export interface ChatTopicSummary {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  modelId?: string;
+}
+
+export interface CharacterReference {
+  name: string;
+  prompt: string;
+  imagePath: string;
+  updatedAt: string;
+}
+
+export interface CharacterReferenceResult {
+  project: Project;
+  character: CharacterReference;
 }
 
 export interface ChatTopic extends ChatTopicSummary {
@@ -334,6 +377,8 @@ export interface Project {
   settings: ProjectSettings;
   chatTopicId?: string;
   referenceAnalysis?: ReferenceAnalysis;
+  /** Последний подтверждённый образ главного героя. Хранится вместе с проектом. */
+  characterReference?: CharacterReference;
   outputPath?: string;
 }
 
@@ -375,6 +420,7 @@ export interface UpdateProjectInput {
   scenes?: Scene[];
   settings?: ProjectSettings;
   chatTopicId?: string;
+  characterReference?: CharacterReference;
   outputPath?: string;
 }
 
@@ -390,9 +436,9 @@ export interface DesktopApi {
   createProject(input: CreateProjectInput): Promise<Project>;
   createDemoProject(): Promise<Project>;
   analyzeReference(input: AnalyzeReferenceInput): Promise<ReferenceAnalysis>;
-  refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis>;
+  refineReferenceAnalysis(analysis: ReferenceAnalysis, instructions: string, modelId?: string): Promise<ReferenceAnalysis>;
   createReferenceProject(input: CreateReferenceProjectInput): Promise<Project>;
-  regenerateReferenceScenes(analysis: ReferenceAnalysis, targetSeconds: number): Promise<ReferenceAnalysis>;
+  regenerateReferenceScenes(analysis: ReferenceAnalysis, targetSeconds: number, modelId?: string): Promise<ReferenceAnalysis>;
   onDirectorProgress(listener: (stage: string) => void): () => void;
   getAnyModelSettings(): Promise<AnyModelSettings>;
   saveAnyModelSettings(input: SaveAnyModelSettingsInput): Promise<AnyModelSettings>;
@@ -412,7 +458,7 @@ export interface DesktopApi {
   clearGoogleKey(): Promise<GoogleSettings>;
   testGoogleConnection(): Promise<{ ok: boolean; message: string }>;
   /** Создаёт портрет главного героя по сценарию и добавляет его в референсы проекта. */
-  createCharacterReference(projectId: string): Promise<Project>;
+  createCharacterReference(projectId: string): Promise<CharacterReferenceResult>;
   /** Пересобирает только Final.mp4 из готовых материалов (без перегенерации картинок и озвучки). */
   assembleProject(projectId: string): Promise<QueueTask[]>;
   /** Переписывает текст и промпт одной сцены по пожеланию пользователя. */
@@ -423,12 +469,13 @@ export interface DesktopApi {
   saveYouTubeSettings(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings>;
   clearYouTubeKey(): Promise<YouTubeSettings>;
   testYouTubeConnection(): Promise<{ ok: boolean; message: string }>;
-  chatWithAnyModel(messages: AiChatMessage[]): Promise<string>;
-  streamChatWithAnyModel(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string>;
+  chatWithAnyModel(messages: AiChatMessage[], modelId?: string): Promise<string>;
+  streamChatWithAnyModel(messages: AiChatMessage[], onChunk: (chunk: string) => void, modelId?: string): Promise<string>;
   listChatTopics(): Promise<ChatTopicSummary[]>;
   getChatTopic(id: string): Promise<ChatTopic | undefined>;
-  createChatTopic(title?: string): Promise<ChatTopic>;
+  createChatTopic(title?: string, modelId?: string): Promise<ChatTopic>;
   appendChatMessage(topicId: string, message: AiChatMessage): Promise<ChatTopic>;
+  setChatTopicModel(topicId: string, modelId: string): Promise<ChatTopic>;
   saveChatTopicAnalysis(topicId: string, analysis: ReferenceAnalysis | null): Promise<ChatTopic>;
   deleteChatTopic(id: string): Promise<void>;
   applyChatTopicToProject(projectId: string, topicId: string): Promise<Project>;
@@ -442,10 +489,12 @@ export interface DesktopApi {
   stopGeneration(projectId: string): Promise<QueueTask[]>;
   retryTask(taskId: string): Promise<QueueTask>;
   clearFinishedTasks(): Promise<QueueTask[]>;
-  regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]>;
+  regenerateScene(projectId: string, sceneId: string | string[], target?: "image" | "video" | "audio" | "all"): Promise<QueueTask[]>;
   openProjectFolder(projectId: string): Promise<void>;
   openSceneFolder(projectId: string, sceneId: string): Promise<void>;
   writeLog(level: LogLevel, message: string, details?: Record<string, unknown>): Promise<void>;
+  readLogs(limit?: number): Promise<ConsoleLogEntry[]>;
+  onLogEntry(listener: (entry: ConsoleLogEntry) => void): () => void;
   openLogFile(): Promise<void>;
   pickFiles(kind: "image" | "audio" | "video" | "json" | "cookies", multiple?: boolean): Promise<string[]>;
   pickDirectory(): Promise<string | undefined>;
@@ -638,6 +687,56 @@ export function parseDurationSeconds(text: string): number | null {
     return Math.round(amount <= 60 ? amount * 60 : amount);
   }
   return null;
+}
+
+/** Разбирает вставленную расшифровку с таймкодами вида [0:00] или [01:23:45]. */
+export function parsePastedTranscript(text: string): TranscriptSegment[] {
+  const value = text.trim();
+  if (!value) return [];
+  const matches = [...value.matchAll(/\[(?:(\d{1,2}):)?(\d{1,3}):(\d{2})\]/g)];
+  if (matches.length < 3) {
+    if (value.length < 300 || !/(транскрипц|расшифровк|озвучк|текст ролика)/i.test(value)) return [];
+    const clean = value.replace(/^(?:вот\s+)?(?:полная\s+)?(?:транскрипция|расшифровка|озвучка)(?:\s+ролика)?\s*[:—-]?\s*/i, "").trim();
+    return clean ? [{ startSeconds: 0, durationSeconds: Math.max(5, Math.round(clean.split(/\s+/).length / 2)), text: clean }] : [];
+  }
+  const segments: TranscriptSegment[] = [];
+  for (const [index, match] of matches.entries()) {
+    const hours = Number(match[1] ?? 0);
+    const minutes = Number(match[2] ?? 0);
+    const seconds = Number(match[3] ?? 0);
+    const startSeconds = hours * 3600 + minutes * 60 + seconds;
+    const contentStart = (match.index ?? 0) + match[0].length;
+    const contentEnd = index + 1 < matches.length ? (matches[index + 1]?.index ?? value.length) : value.length;
+    const segmentText = value.slice(contentStart, contentEnd).replace(/\s+/g, " ").trim();
+    if (segmentText) segments.push({ startSeconds, durationSeconds: 0, text: segmentText });
+  }
+  for (let index = 0; index < segments.length; index += 1) {
+    const next = segments[index + 1];
+    const current = segments[index]!;
+    current.durationSeconds = Math.max(1, next ? next.startSeconds - current.startSeconds : 5);
+  }
+  return segments;
+}
+
+/** Длительность принимаем только из короткой явной команды, а не из текста транскрипции. */
+export function parseExplicitDurationSeconds(text: string): number | null {
+  const value = text.trim();
+  if (value.length > 240 || (value.match(/\[?\d{1,3}:\d{2}\]?/g) ?? []).length > 2) return null;
+  if (!/(минут|мин\b|секунд|сек\b|\bmin\b|\bsec\b|\d{1,3}:\d{2}|\bshorts?\b|коротк)/i.test(value)) return null;
+  return parseDurationSeconds(value);
+}
+
+/**
+ * Делит целевую длину ролика между сценами. Короткие сцены остаются около 5 секунд,
+ * а длинный ролик не раздувается больше чем до 200 дорогих генераций.
+ */
+export function allocateSceneDurations(targetSeconds: number, maxScenes = 200): number[] {
+  const total = Math.max(30, Math.round(Number.isFinite(targetSeconds) ? targetSeconds : 30));
+  const safeMax = Math.max(6, Math.round(maxScenes));
+  const count = Math.min(safeMax, Math.max(6, Math.round(total / 5)));
+  const base = Math.floor(total / count);
+  const remainder = total % count;
+  return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0));
 }
 
 /** Сопоставляет язык проекта коду для TTS (google-tts/<code>). По умолчанию — ru. */

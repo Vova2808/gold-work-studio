@@ -1,4 +1,5 @@
 import {
+  allocateSceneDurations,
   createDefaultProjectSettings,
   type CreateProjectInput,
   type ChatTopic,
@@ -167,8 +168,9 @@ function advanceQueue(): void {
       return { ...scene, status, imagePath: image ?? scene.imagePath, videoPath: video ?? scene.videoPath, audioPath: audio ?? scene.audioPath };
     });
     if (projectTasks.every((task) => task.status === "done")) {
-      project.status = "complete";
-      project.outputPath = `mock://${project.id}/Final.mp4`;
+      const assembled = projectTasks.some((task) => task.kind === "assemble");
+      project.status = assembled ? "complete" : "ready";
+      if (assembled) project.outputPath = `mock://${project.id}/Final.mp4`;
     } else if (projectTasks.some((task) => task.status === "running")) {
       project.status = "generating";
     }
@@ -226,11 +228,10 @@ export const fallbackApi: DesktopApi = {
     });
   },
   onDirectorProgress() { return () => undefined; },
-  async regenerateReferenceScenes(analysis, targetSeconds) {
-    const sceneDurationSeconds = 5;
-    const count = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
-    const source = analysis.scenes.length > 0 ? analysis.scenes : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: sceneDurationSeconds, status: "draft" as const }];
-    const scenes = Array.from({ length: count }, (_unused, index) => {
+  async regenerateReferenceScenes(analysis, targetSeconds, modelId) {
+    const durations = allocateSceneDurations(targetSeconds);
+    const source = analysis.scenes.length > 0 ? analysis.scenes : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: durations[0]!, status: "draft" as const }];
+    const scenes = durations.map((duration, index) => {
       const base = source[index % source.length]!;
       return {
         id: createId("scene"),
@@ -239,11 +240,11 @@ export const fallbackApi: DesktopApi = {
         narration: base.narration,
         imagePrompt: base.imagePrompt,
         animationPrompt: base.animationPrompt || "Плавное движение камеры и естественное движение объектов",
-        durationSeconds: sceneDurationSeconds,
+        durationSeconds: duration,
         status: "draft" as const
       };
     });
-    return clone({ ...analysis, scenes, recommendedDurationSeconds: count * sceneDurationSeconds });
+    return clone({ ...analysis, scenes, modelId: modelId || analysis.modelId, recommendedDurationSeconds: durations.reduce((sum, duration) => sum + duration, 0) });
   },
   async createReferenceProject(input) {
     const project = makeProject({
@@ -271,9 +272,9 @@ export const fallbackApi: DesktopApi = {
   async improveScene() {
     throw new Error("Улучшение сцены доступно только в приложении с ключом AnyModel");
   },
-  async getGoogleSettings() { return { configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" }; },
-  async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "gemini-omni-flash-preview", proxyUrl: input.proxyUrl ?? "" }; },
-  async clearGoogleKey() { return { configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" }; },
+  async getGoogleSettings() { return { configured: false, veoModel: "veo-3.1-lite-generate-preview", proxyUrl: "" }; },
+  async saveGoogleSettings(input) { return { configured: Boolean(input.apiKey), veoModel: input.veoModel ?? "veo-3.1-lite-generate-preview", proxyUrl: input.proxyUrl ?? "" }; },
+  async clearGoogleKey() { return { configured: false, veoModel: "veo-3.1-lite-generate-preview", proxyUrl: "" }; },
   async testGoogleConnection() { return { ok: false, message: "Veo доступен только в приложении" }; },
   mediaUrl(path: string) { return path; },
   async getVoicerSettings() { return { configured: false, baseUrl: "" }; },
@@ -334,7 +335,7 @@ export const fallbackApi: DesktopApi = {
     const topic = chatTopics.find((item) => item.id === id);
     return topic ? clone(topic) : undefined;
   },
-  async createChatTopic(title = "Новая тема") {
+  async createChatTopic(title = "Новая тема", modelId) {
     const now = new Date().toISOString();
     const topic: ChatTopic = {
       id: createId("topic"),
@@ -343,6 +344,7 @@ export const fallbackApi: DesktopApi = {
       createdAt: now,
       updatedAt: now,
       messageCount: 0,
+      modelId: modelId?.trim() || undefined,
       messages: []
     };
     chatTopics.unshift(topic);
@@ -358,6 +360,13 @@ export const fallbackApi: DesktopApi = {
     topic.preview = content.replace(/\s+/g, " ").slice(0, 180);
     topic.updatedAt = now;
     topic.messageCount = topic.messages.length;
+    return clone(topic);
+  },
+  async setChatTopicModel(topicId, modelId) {
+    const topic = chatTopics.find((item) => item.id === topicId);
+    if (!topic) throw new Error("Тема чата не найдена");
+    topic.modelId = modelId.trim() || undefined;
+    topic.updatedAt = new Date().toISOString();
     return clone(topic);
   },
   async saveChatTopicAnalysis(topicId, analysis) {
@@ -405,7 +414,7 @@ export const fallbackApi: DesktopApi = {
       createdAt: project.createdAt,
       updatedAt: new Date().toISOString(),
       status: input.status ?? (contentChanged && !active ? (input.scenes ?? project.scenes).length ? "ready" : "draft" : project.status),
-      outputPath: contentChanged ? undefined : input.outputPath ?? project.outputPath
+      outputPath: contentChanged ? input.outputPath : input.outputPath ?? project.outputPath
     });
     project.scenes = project.scenes
       .slice()
@@ -507,39 +516,58 @@ export const fallbackApi: DesktopApi = {
     tasks = tasks.filter((task) => !removableRuns.has(task.runId));
     return clone(tasks);
   },
-  async regenerateScene(projectId, sceneId) {
+  async regenerateScene(projectId, sceneId, target = "all") {
     const project = requireProject(projectId);
-    const scene = project.scenes.find((candidate) => candidate.id === sceneId);
-    if (!scene) throw new Error("Сцена не найдена");
-    const runId = tasks.find((task) => task.projectId === projectId)?.runId ?? createId("run");
+    if (!(["image", "video", "audio", "all"] as const).includes(target)) throw new Error("Неизвестный режим перегенерации");
+    if (target === "video" && !project.settings.video.enabled) throw new Error("AI-видео отключено в настройках проекта");
+    if (target === "audio" && !project.settings.voice.enabled) throw new Error("Озвучка отключена в настройках проекта");
+    const requestedIds = [...new Set(Array.isArray(sceneId) ? sceneId : [sceneId])];
+    const selectedIds = new Set(requestedIds);
+    const selectedScenes = project.scenes.filter((candidate) => selectedIds.has(candidate.id));
+    if (selectedScenes.length === 0 || selectedScenes.length !== requestedIds.length) throw new Error("Одна или несколько сцен не найдены");
+    const runId = createId("run");
+    const replacedKinds = new Set<TaskKind>(target === "all" ? ["speech", "image", "video"] : [target === "audio" ? "speech" : target]);
     tasks = tasks.filter(
-      (task) => task.projectId !== projectId || (task.sceneId !== sceneId && task.kind !== "assemble")
+      (task) => task.projectId !== projectId || (task.kind !== "assemble" && (!task.sceneId || !selectedIds.has(task.sceneId) || !replacedKinds.has(task.kind)))
     );
     const created: QueueTask[] = [];
-    if (project.settings.voice.enabled) {
-      created.push(makeTask(runId, projectId, sceneId, "speech", `Озвучка · сцена ${scene.order + 1}`, []));
-    }
-    const image = makeTask(runId, projectId, sceneId, "image", `Изображение · сцена ${scene.order + 1}`, []);
-    created.push(image);
-    if (project.settings.video.enabled) {
-      created.push(makeTask(runId, projectId, sceneId, "video", `AI-видео · сцена ${scene.order + 1}`, [image.id]));
+    for (const scene of selectedScenes) {
+      if ((target === "all" || target === "audio") && project.settings.voice.enabled) {
+        created.push(makeTask(runId, projectId, scene.id, "speech", `Озвучка · сцена ${scene.order + 1}`, []));
+      }
+      let imageTask = tasks.find((task) => task.projectId === projectId && task.sceneId === scene.id && task.kind === "image");
+      if (target === "image" || target === "all") {
+        imageTask = makeTask(runId, projectId, scene.id, "image", `Изображение · сцена ${scene.order + 1}`, []);
+        created.push(imageTask);
+      }
+      if ((target === "video" || target === "all") && project.settings.video.enabled) {
+        created.push(makeTask(runId, projectId, scene.id, "video", `AI-видео · сцена ${scene.order + 1}`, imageTask ? [imageTask.id] : []));
+      }
     }
     tasks.push(...created);
-    tasks.push(
-      makeTask(
-        runId,
-        projectId,
-        undefined,
-        "assemble",
-        "Сборка Final.mp4",
-        tasks.filter((task) => task.projectId === projectId && task.kind !== "assemble").map((task) => task.id)
-      )
-    );
+    if (target !== "audio") {
+      tasks.push(
+        makeTask(
+          runId,
+          projectId,
+          undefined,
+          "assemble",
+          `Пересборка Final.mp4 после ${selectedScenes.length === 1 ? "сцены" : `${selectedScenes.length} сцен`}`,
+          tasks.filter((task) => task.projectId === projectId && task.kind !== "assemble").map((task) => task.id)
+        )
+      );
+    }
     project.status = "generating";
     project.outputPath = undefined;
     project.scenes = project.scenes.map((candidate) =>
-      candidate.id === sceneId
-        ? { ...candidate, status: "queued", imagePath: undefined, videoPath: undefined, audioPath: undefined }
+      selectedIds.has(candidate.id)
+        ? {
+            ...candidate,
+            status: "queued",
+            imagePath: target === "all" || target === "image" ? undefined : candidate.imagePath,
+            videoPath: target === "all" || target === "video" ? undefined : candidate.videoPath,
+            audioPath: target === "all" || target === "audio" ? undefined : candidate.audioPath
+          }
         : candidate
     );
     return clone(tasks.filter((task) => task.projectId === projectId));
@@ -547,6 +575,8 @@ export const fallbackApi: DesktopApi = {
   async openProjectFolder() {},
   async openSceneFolder() {},
   async writeLog() {},
+  async readLogs() { return []; },
+  onLogEntry() { return () => undefined; },
   async openLogFile() {},
   async pickFiles() { return []; },
   async pickDirectory() { return undefined; },

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { createId, type ProjectService, type TaskRepository } from "@gold-work/core";
 import { ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type QueueTask, type Scene, type TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
@@ -7,6 +8,7 @@ import { AnyModelClient } from "./anymodel-client.js";
 import { normalizeImageAspect } from "./media-utils.js";
 import { VoicerClient } from "./voicer-client.js";
 import { VeoClient } from "./veo-client.js";
+import { cleanErrorMessage, isPermanentFailure } from "./google-errors.js";
 
 /**
  * Финальный промпт кадра = сюжет сцены + единый стиль + формат + технические запреты.
@@ -58,6 +60,7 @@ export class MockGenerationPipeline {
   private mutation: Promise<void> = Promise.resolve();
   /** Реально выполняющиеся задачи (API-вызовы, FFmpeg) — работают вне мьютекса состояния. */
   private readonly executing = new Map<string, Promise<void>>();
+  private readonly reportedTerminalRuns = new Set<string>();
 
   constructor(
     private readonly repository: TaskRepository,
@@ -95,7 +98,7 @@ export class MockGenerationPipeline {
       if (project.scenes.length === 0) throw new Error("Сначала добавьте хотя бы одну сцену");
 
       const active = this.tasks.filter((task) =>
-        task.projectId === projectId && !["done", "failed", "cancelled"].includes(task.status)
+        task.projectId === projectId && ["pending", "running", "retry_wait", "paused"].includes(task.status)
       );
       if (active.length > 0) return structuredClone(active);
 
@@ -151,7 +154,16 @@ export class MockGenerationPipeline {
         }))
       }));
       await this.persist();
-      this.emit("info", "queue.project.started", { projectId, runId, tasks: created.length });
+      this.emit("info", "queue.project.started", {
+        projectId,
+        runId,
+        title: project.title,
+        scenes: project.scenes.length,
+        tasks: created.length,
+        voiceProvider: project.settings.voice.enabled ? project.settings.voice.provider : "off",
+        imageProvider: project.settings.image.provider,
+        videoProvider: project.settings.video.enabled ? project.settings.video.provider : "off"
+      });
       return this.forProject(projectId);
     });
   }
@@ -178,56 +190,68 @@ export class MockGenerationPipeline {
     });
   }
 
-  async regenerateScene(projectId: string, sceneId: string): Promise<QueueTask[]> {
+  async regenerateScene(projectId: string, sceneId: string | string[], target: "image" | "video" | "audio" | "all" = "all"): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      if (!(["image", "video", "audio", "all"] as const).includes(target)) throw new Error("Неизвестный режим перегенерации");
       const project = await this.requireProject(projectId);
-      const scene = project.scenes.find((candidate) => candidate.id === sceneId);
-      if (!scene) throw new Error("Сцена не найдена");
+      const requestedIds = [...new Set(Array.isArray(sceneId) ? sceneId : [sceneId])];
+      const selectedIds = new Set(requestedIds);
+      const selectedScenes = project.scenes
+        .filter((candidate) => selectedIds.has(candidate.id))
+        .sort((left, right) => left.order - right.order);
+      if (selectedScenes.length === 0 || selectedScenes.length !== requestedIds.length) throw new Error("Одна или несколько сцен не найдены");
+      if (target === "video" && !project.settings.video.enabled) throw new Error("AI-видео отключено в настройках проекта");
+      if (target === "audio" && !project.settings.voice.enabled) throw new Error("Озвучка отключена в настройках проекта");
       const projectTasks = this.tasks.filter((task) => task.projectId === projectId);
       if (projectTasks.some((task) => ["pending", "running", "retry_wait", "paused"].includes(task.status))) {
         throw new Error("Сначала дождитесь завершения или остановите текущую очередь");
       }
 
-      const runId = projectTasks[0]?.runId ?? createId("run");
+      const runId = createId("run");
+      this.reportedTerminalRuns.delete(runId);
       const now = new Date().toISOString();
       // Запоминаем старые задачи сцены по типам: зависимости других сцен нужно перевязать на новые id.
-      const oldSceneTaskIds = new Map<TaskKind, string>();
+      const oldSceneTaskIds = new Map<string, string>();
       for (const task of this.tasks) {
-        if (task.projectId === projectId && task.sceneId === sceneId) oldSceneTaskIds.set(task.kind, task.id);
+        if (task.projectId === projectId && task.sceneId && selectedIds.has(task.sceneId)) {
+          oldSceneTaskIds.set(`${task.sceneId}:${task.kind}`, task.id);
+        }
       }
-      this.tasks = this.tasks.filter(
-        (task) => task.projectId !== projectId || (task.sceneId !== sceneId && task.kind !== "assemble")
+      const replacedKinds = new Set<TaskKind>(target === "all"
+        ? ["speech", "image", "video"]
+        : target === "image" ? ["image"] : target === "video" ? ["video"] : ["speech"]);
+      this.tasks = this.tasks.filter((task) =>
+        task.projectId !== projectId || (task.kind !== "assemble" && (!task.sceneId || !selectedIds.has(task.sceneId) || !replacedKinds.has(task.kind)))
       );
-      const runTasks = this.tasks.filter((task) => task.projectId === projectId && task.runId === runId);
+      const remainingProjectTasks = this.tasks.filter((task) => task.projectId === projectId);
       const created: QueueTask[] = [];
+      const findTask = (candidateId: string, kind: TaskKind) =>
+        created.find((task) => task.sceneId === candidateId && task.kind === kind)
+        ?? remainingProjectTasks.find((task) => task.sceneId === candidateId && task.kind === kind);
 
-      const imageDependencies: string[] = [];
-      if (project.settings.voice.enabled) {
-        const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now);
-        created.push(speech);
-        imageDependencies.push(speech.id); // сначала озвучка сцены, потом её картинка
+      // Сначала создаём озвучку и изображения всех выбранных сцен, чтобы последовательные зависимости были полными.
+      for (const scene of selectedScenes) {
+        const imageDependencies: string[] = [];
+        if ((target === "all" || target === "audio") && project.settings.voice.enabled) {
+          const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now);
+          created.push(speech);
+          imageDependencies.push(speech.id);
+        }
+        if (target === "all" || target === "image") {
+          const previousScene = project.scenes.find((candidate) => candidate.order === scene.order - 1);
+          const previousImage = project.settings.image.sequential && previousScene ? findTask(previousScene.id, "image") : undefined;
+          if (previousImage) imageDependencies.push(previousImage.id);
+          created.push(this.makeTask(runId, project, scene, "image", `Изображение · сцена ${scene.order + 1}`, imageDependencies, now));
+        }
       }
-      const previousScene = project.scenes.find((candidate) => candidate.order === scene.order - 1);
-      const previousImage = project.settings.image.sequential && previousScene
-        ? runTasks.find((task) => task.sceneId === previousScene.id && task.kind === "image")
-        : undefined;
-      if (previousImage) imageDependencies.push(previousImage.id);
-      const image = this.makeTask(
-        runId,
-        project,
-        scene,
-        "image",
-        `Изображение · сцена ${scene.order + 1}`,
-        imageDependencies,
-        now
-      );
-      created.push(image);
-      if (project.settings.video.enabled) {
+      for (const scene of selectedScenes) {
+        if (!((target === "all" || target === "video") && project.settings.video.enabled)) continue;
         const nextScene = project.scenes.find((candidate) => candidate.order === scene.order + 1);
         const nextImage = project.settings.video.pairedFrames && nextScene
-          ? runTasks.find((task) => task.sceneId === nextScene.id && task.kind === "image")
+          ? findTask(nextScene.id, "image")
           : undefined;
+        const currentImage = findTask(scene.id, "image");
         created.push(
           this.makeTask(
             runId,
@@ -235,7 +259,7 @@ export class MockGenerationPipeline {
             scene,
             "video",
             `AI-видео · сцена ${scene.order + 1}`,
-            [image.id, ...(nextImage ? [nextImage.id] : [])],
+            [...(currentImage ? [currentImage.id] : []), ...(nextImage ? [nextImage.id] : [])],
             now
           )
         );
@@ -245,42 +269,47 @@ export class MockGenerationPipeline {
       // и возвращаем «заблокированные» задачи в очередь — их блокировала удалённая упавшая задача.
       const replacedIds = new Map<string, string>();
       for (const task of created) {
-        const oldId = task.sceneId ? oldSceneTaskIds.get(task.kind) : undefined;
+        const oldId = task.sceneId ? oldSceneTaskIds.get(`${task.sceneId}:${task.kind}`) : undefined;
         if (oldId) replacedIds.set(oldId, task.id);
       }
       for (const task of this.tasks) {
         if (task.projectId !== projectId) continue;
+        const hadReplacedDependency = task.dependsOn.some((id) => replacedIds.has(id));
         task.dependsOn = task.dependsOn.map((id) => replacedIds.get(id) ?? id);
-        if (task.status === "blocked") {
+        if (hadReplacedDependency && task.status === "blocked") {
           task.status = "pending";
           task.error = undefined;
           task.updatedAt = now;
         }
       }
-      const assembleDependencies = this.tasks
-        .filter((task) => task.projectId === projectId && task.runId === runId && task.kind !== "assemble")
-        .map((task) => task.id);
-      this.tasks.push(
-        this.makeTask(runId, project, undefined, "assemble", "Сборка Final.mp4", assembleDependencies, now)
-      );
+      if (target !== "audio") {
+        const assembleDependencies = this.tasks
+          .filter((task) => task.projectId === projectId && task.runId === runId && task.kind !== "assemble")
+          .map((task) => task.id);
+        this.tasks.push(
+          this.makeTask(runId, project, undefined, "assemble", `Пересборка Final.mp4 после ${selectedScenes.length === 1 ? "сцены" : `${selectedScenes.length} сцен`}`, assembleDependencies, now)
+        );
+      }
       await this.projects.mutate(projectId, (current) => ({
         status: "generating",
+        // Любое изменение исходников делает прежний Final.mp4 устаревшим. Живой таймлайн
+        // показывает новый звук сразу, а экспорт появится только после явной пересборки.
         outputPath: undefined,
         scenes: current.scenes.map((candidate) =>
-          candidate.id === sceneId
+          selectedIds.has(candidate.id)
             ? {
                 ...candidate,
                 status: "queued",
-                imagePath: undefined,
-                videoPath: undefined,
-                audioPath: undefined
+                imagePath: target === "all" || target === "image" ? undefined : candidate.imagePath,
+                videoPath: target === "all" || target === "video" ? undefined : candidate.videoPath,
+                audioPath: target === "all" || target === "audio" ? undefined : candidate.audioPath
               }
             : candidate
         )
       }));
       await this.storage.ensureProject(await this.requireProject(projectId));
       await this.persist();
-      this.emit("info", "queue.scene.regeneration.started", { projectId, sceneId, runId });
+      this.emit("info", "queue.scene.regeneration.started", { projectId, sceneIds: requestedIds, scenes: requestedIds.length, runId, target });
       return this.forProject(projectId);
     });
   }
@@ -361,6 +390,7 @@ export class MockGenerationPipeline {
       }));
       await this.persist();
       this.emit("warn", "queue.project.stopped", { projectId });
+      await this.syncProjects();
       return this.forProject(projectId);
     });
   }
@@ -377,6 +407,7 @@ export class MockGenerationPipeline {
       if (runSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !runSceneIds.has(scene.id))) {
         throw new Error("Состав сцен изменился. Запустите генерацию проекта заново.");
       }
+      this.reportedTerminalRuns.delete(task.runId);
       task.status = "pending";
       task.progress = 0;
       task.attempts = 0;
@@ -384,16 +415,17 @@ export class MockGenerationPipeline {
       task.nextAttemptAt = undefined;
       task.pausedFrom = undefined;
       task.updatedAt = new Date().toISOString();
-      const unblockedIds = [task.id];
-      for (let index = 0; index < unblockedIds.length; index += 1) {
-        const parentId = unblockedIds[index];
+      let unblocked = true;
+      while (unblocked) {
+        unblocked = false;
         for (const dependent of this.tasks) {
-          if (parentId && dependent.projectId === task.projectId && dependent.status === "blocked" && dependent.dependsOn.includes(parentId)) {
-            dependent.status = "pending";
-            dependent.error = undefined;
-            dependent.updatedAt = task.updatedAt;
-            unblockedIds.push(dependent.id);
-          }
+          if (dependent.runId !== task.runId || dependent.status !== "blocked") continue;
+          const dependencies = dependent.dependsOn.map((id) => this.tasks.find((candidate) => candidate.id === id));
+          if (dependencies.some((dependency) => dependency && ["failed", "cancelled", "blocked"].includes(dependency.status))) continue;
+          dependent.status = "pending";
+          dependent.error = undefined;
+          dependent.updatedAt = task.updatedAt;
+          unblocked = true;
         }
       }
       await this.projects.update(task.projectId, { status: "generating" });
@@ -443,6 +475,7 @@ export class MockGenerationPipeline {
           task.nextAttemptAt = undefined;
           task.updatedAt = now;
           changed = true;
+          this.emit("info", "queue.task.retry_ready", this.taskDetails(task));
         }
       }
 
@@ -457,15 +490,23 @@ export class MockGenerationPipeline {
       }
 
       let running = this.tasks.filter((task) => task.status === "running").length;
+      // Видео — дорогой long-running запрос с низкой RPM-квотой. Пускаем по одной сцене,
+      // а картинки и озвучку по-прежнему обрабатываем параллельно.
+      let videoRunning = this.tasks.some((task) => task.status === "running" && task.kind === "video");
       for (const task of this.tasks) {
         if (running >= this.policy.concurrency) break;
         if (task.status !== "pending") continue;
+        if (task.kind === "video" && videoRunning) continue;
         const dependencies = task.dependsOn.map((id) => this.tasks.find((candidate) => candidate.id === id));
         if (dependencies.some((dependency) => dependency?.status === "failed" || dependency?.status === "cancelled" || dependency?.status === "blocked")) {
           task.status = "blocked";
           task.error = "Не выполнена предыдущая задача";
           task.updatedAt = now;
           changed = true;
+          this.emit("warn", "queue.task.blocked", {
+            ...this.taskDetails(task),
+            blockedByTaskIds: dependencies.filter((dependency) => dependency && ["failed", "cancelled", "blocked"].includes(dependency.status)).map((dependency) => dependency!.id)
+          });
           continue;
         }
         if (!dependencies.every((dependency) => dependency?.status === "done")) continue;
@@ -474,6 +515,7 @@ export class MockGenerationPipeline {
         task.pausedFrom = undefined;
         task.updatedAt = now;
         running += 1;
+        if (task.kind === "video") videoRunning = true;
         changed = true;
         this.emit("info", "queue.task.started", this.taskDetails(task));
         this.beginExecution(task);
@@ -572,8 +614,21 @@ export class MockGenerationPipeline {
       updatedAt: task.updatedAt ?? now,
       maxAttempts: task.maxAttempts || this.policy.maxAttempts
     }));
+    for (const runId of new Set(this.tasks.map((task) => task.runId))) {
+      const runTasks = this.tasks.filter((task) => task.runId === runId);
+      if (runTasks.length > 0 && runTasks.every((task) => ["done", "failed", "blocked", "cancelled"].includes(task.status))) {
+        this.reportedTerminalRuns.add(runId);
+      }
+    }
     await this.persist();
     await this.syncProjects();
+    const restoredPaused = this.tasks.filter((task) => task.status === "paused");
+    if (restoredPaused.length > 0) {
+      this.emit("warn", "queue.restored_paused", {
+        tasks: restoredPaused.length,
+        projects: new Set(restoredPaused.map((task) => task.projectId)).size
+      });
+    }
   }
 
   private makeTask(
@@ -612,12 +667,16 @@ export class MockGenerationPipeline {
   private async executeTask(task: QueueTask): Promise<string> {
     const project = await this.requireProject(task.projectId);
     await this.storage.ensureProject(project);
-    if (task.kind === "assemble") return this.renderer.render(project);
+    if (task.kind === "assemble") {
+      this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: "FFmpeg: собираю и кодирую Final.mp4" });
+      return this.renderer.render(project);
+    }
     if (task.kind === "director") return `local://${project.id}/scenario.json`;
     const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
     if (!scene) throw new Error("Сцена для задачи не найдена");
     if (task.kind === "image") {
       if (this.anyModel && (await this.anyModel.configured()) && scene.imagePrompt.trim().length > 0) {
+        this.emit("debug", "queue.task.stage", { ...this.taskDetails(task), stage: "Отправляю изображение провайдеру" });
         // Размеры, которые принимает шлюз AnyModel (Gemini сам приводит к родным 16:9/9:16/1:1).
         const size = project.aspectRatio === "9:16" ? "1080x1920" : project.aspectRatio === "1:1" ? "1024x1024" : "1920x1080";
         const prompt = buildImagePrompt(project, scene);
@@ -637,6 +696,7 @@ export class MockGenerationPipeline {
     if (task.kind === "speech") {
       // Провайдер "elevenlabs" = Voicer API: голос задаётся шаблоном (uuid в settings.voice.voice).
       if (project.settings.voice.provider === "elevenlabs" && scene.narration.trim().length > 0) {
+        this.emit("debug", "queue.task.stage", { ...this.taskDetails(task), stage: "Генерирую озвучку через Lumean" });
         if (!this.voicer || !(await this.voicer.configured())) {
           throw new Error("В проекте выбран движок Lumean, но он не настроен. Добавьте ключ в Настройки → AI и сценарии или переключите движок озвучки.");
         }
@@ -645,6 +705,7 @@ export class MockGenerationPipeline {
         return this.storage.saveGeneratedAudio(project, scene, audio);
       }
       if (this.anyModel && (await this.anyModel.configured()) && scene.narration.trim().length > 0) {
+        this.emit("debug", "queue.task.stage", { ...this.taskDetails(task), stage: "Генерирую озвучку через AnyModel" });
         // Голос из настроек проекта важнее глобального; "custom" и пустое значение = глобальная настройка.
         const projectVoice = project.settings.voice.voice?.trim();
         const voiceOverride = projectVoice && projectVoice !== "custom" ? projectVoice : undefined;
@@ -666,10 +727,24 @@ export class MockGenerationPipeline {
         ? await readFile(scene.imagePath).catch(() => undefined)
         : undefined;
       const prompt = scene.animationPrompt?.trim() || scene.imagePrompt;
-      return this.storage.saveGeneratedVideo(project, scene, await this.veo.generateVideo(prompt, project.aspectRatio, startFrame));
+      try {
+        this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: "Veo: запрос отправлен, ожидаю готовое видео" });
+        return this.storage.saveGeneratedVideo(project, scene, await this.veo.generateVideo(prompt, project.aspectRatio, startFrame));
+      } catch (error) {
+        // Модель видео недоступна (нет биллинга) — не роняем весь ролик: сцена собирается из кадра
+        // с движением камеры. Пользователь получает готовый Final.mp4 и предупреждение в журнале.
+        const message = error instanceof Error ? error.message : String(error);
+        if (!isPermanentFailure(message)) throw error;
+        this.emit("warn", "queue.task.video_fallback", {
+          ...this.taskDetails(task),
+          reason: cleanErrorMessage(message)
+        });
+        return this.renderer.renderScene(project, scene);
+      }
     }
     if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
       if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
+      this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: "AnyModel: генерирую AI-видео" });
       const startFrame = project.settings.video.startFrame && scene.imagePath
         ? await readFile(scene.imagePath).catch(() => undefined)
         : undefined;
@@ -680,12 +755,26 @@ export class MockGenerationPipeline {
   }
 
   private scheduleFailure(task: QueueTask, error: unknown, nowTime: number): void {
+    const raw = error instanceof Error ? error.message : String(error);
     task.progress = 0;
-    task.error = error instanceof Error ? error.message : String(error);
+    task.error = cleanErrorMessage(raw);
+    // Нет доступа к модели — повтор даст ту же ошибку. 12 сцен × 3 попытки = 36 бессмысленных запросов.
+    if (isPermanentFailure(raw)) {
+      task.attempts = task.maxAttempts;
+      task.status = "failed";
+      task.nextAttemptAt = undefined;
+      this.emit("error", "queue.task.failed_permanently", this.taskDetails(task));
+      return;
+    }
     if (task.attempts < task.maxAttempts) {
-      const delay = this.policy.retryDelaysMs[
+      const policyDelay = this.policy.retryDelaysMs[
         Math.min(task.attempts - 1, this.policy.retryDelaysMs.length - 1)
       ] ?? 1000;
+      // Google пишет точное время в 429: "Please retry in 38.7s". Ранний повтор только
+      // снова расходует попытку, поэтому ждём указанное время (+1 секунда запаса).
+      const retrySeconds = /retry in\s+([\d.]+)s/i.exec(raw)?.[1];
+      const providerDelay = retrySeconds ? (Math.ceil(Number(retrySeconds)) + 1) * 1000 : 0;
+      const delay = Math.max(policyDelay, Number.isFinite(providerDelay) ? providerDelay : 0);
       task.status = "retry_wait";
       task.nextAttemptAt = new Date(nowTime + delay).toISOString();
       this.emit("warn", "queue.task.retry_scheduled", this.taskDetails(task));
@@ -698,15 +787,18 @@ export class MockGenerationPipeline {
 
   private taskDetails(task: QueueTask): Record<string, unknown> {
     return {
+      runId: task.runId,
       projectId: task.projectId,
       sceneId: task.sceneId,
       taskId: task.id,
+      label: task.label,
       kind: task.kind,
       status: task.status,
       attempts: task.attempts,
       maxAttempts: task.maxAttempts,
-      error: task.error,
-      resultPath: task.resultPath
+      nextAttemptAt: task.nextAttemptAt,
+      error: task.error ? cleanErrorMessage(task.error).slice(0, 500) : undefined,
+      resultFile: task.resultPath ? basename(task.resultPath) : undefined
     };
   }
 
@@ -736,10 +828,13 @@ export class MockGenerationPipeline {
             };
           }
           const hasSceneGraphMismatch = trackedSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !trackedSceneIds.has(scene.id));
-          const projectStatus = hasSceneGraphMismatch
+          const audioOnly = tasks.every((task) => task.kind === "speech");
+          const isPartialRegeneration = tasks.some((task) => task.kind === "assemble" && task.label.startsWith("Пересборка Final.mp4 после"))
+            || audioOnly;
+          const projectStatus = hasSceneGraphMismatch && !isPartialRegeneration
             ? "failed"
             : tasks.every((task) => task.status === "done")
-              ? "complete"
+              ? audioOnly ? "ready" : "complete"
               : tasks.some((task) => task.status === "failed" || task.status === "blocked" || task.status === "cancelled")
                 ? "failed"
                 : tasks.every((task) => task.status === "paused" || task.status === "done")
@@ -747,7 +842,7 @@ export class MockGenerationPipeline {
                   : "generating";
           const scenes = project.scenes.map((scene) => {
             const sceneTasks = tasks.filter((task) => task.sceneId === scene.id);
-            if (sceneTasks.length === 0) return { ...scene, status: "failed" as const };
+            if (sceneTasks.length === 0) return isPartialRegeneration ? scene : { ...scene, status: "failed" as const };
             const imageTask = sceneTasks.find((task) => task.kind === "image" && task.status === "done");
             const videoTask = sceneTasks.find((task) => task.kind === "video" && task.status === "done");
             const speechTask = sceneTasks.find((task) => task.kind === "speech" && task.status === "done");
@@ -770,9 +865,26 @@ export class MockGenerationPipeline {
           return {
             status: projectStatus,
             scenes,
-            outputPath: projectStatus === "complete" ? finalTask?.resultPath : project.outputPath
+            outputPath: projectStatus === "complete" ? finalTask?.resultPath ?? project.outputPath : undefined
           };
         });
+        for (const runId of new Set(tasks.map((task) => task.runId))) {
+          const runTasks = tasks.filter((task) => task.runId === runId);
+          const terminal = runTasks.every((task) => ["done", "failed", "blocked", "cancelled"].includes(task.status));
+          if (!terminal || this.reportedTerminalRuns.has(runId)) continue;
+          this.reportedTerminalRuns.add(runId);
+          const failed = runTasks.filter((task) => ["failed", "blocked"].includes(task.status)).length;
+          const cancelled = runTasks.filter((task) => task.status === "cancelled").length;
+          const message = failed > 0 ? "queue.run.failed" : cancelled > 0 ? "queue.run.cancelled" : "queue.run.completed";
+          this.emit(failed > 0 ? "error" : cancelled > 0 ? "warn" : "info", message, {
+            projectId,
+            runId,
+            tasks: runTasks.length,
+            completed: runTasks.filter((task) => task.status === "done").length,
+            failed,
+            cancelled
+          });
+        }
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("не найден")) throw error;
       }

@@ -1,16 +1,15 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, type IpcMainInvokeEvent } from "electron";
-import { mkdir } from "node:fs/promises";
-import { join, normalize } from "node:path";
-import { pathToFileURL } from "node:url";
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell, type IpcMainInvokeEvent } from "electron";
+import { mkdir, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, normalize, relative } from "node:path";
 import { createServer, type Server as HttpServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { createId, MockDirectorProvider, ProjectService } from "@gold-work/core";
-import { parseYouTubeChannelRef } from "@gold-work/shared";
+import { allocateSceneDurations, parseYouTubeChannelRef } from "@gold-work/shared";
 import { VoicerStore } from "./voicer-store.js";
 import { VoicerClient } from "./voicer-client.js";
 import { GoogleStore } from "./google-store.js";
 import { VeoClient } from "./veo-client.js";
-import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveGoogleSettingsInput, SaveVoicerSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
+import type { AiChatMessage, AnalyzeReferenceInput, ChatTopic, ConsoleLogEntry, CreateProjectInput, CreateReferenceProjectInput, DesktopApi, LogLevel, Project, ReferenceAnalysis, SaveAnyModelSettingsInput, SaveGoogleSettingsInput, SaveVoicerSettingsInput, SaveYouTubeSettingsInput, Scene, UpdateProjectInput } from "@gold-work/shared";
 import { FileProjectRepository } from "./file-project-repository.js";
 import { FileTaskRepository } from "./file-task-repository.js";
 import { DEFAULT_QUEUE_POLICY, MockGenerationPipeline } from "./mock-generation-pipeline.js";
@@ -22,6 +21,7 @@ import { AnyModelClient } from "./anymodel-client.js";
 import { ChatTopicRepository } from "./chat-topic-repository.js";
 import { YouTubeClient } from "./youtube-client.js";
 import { YouTubeStore } from "./youtube-store.js";
+import { createMediaFileResponse } from "./media-range.js";
 
 // __dirname доступен, потому что main собирается в CommonJS (см. electron.vite.config.ts).
 const currentDirectory = __dirname;
@@ -44,9 +44,15 @@ let realtimeHttpServer: HttpServer;
 let realtimeServer: SocketServer;
 let realtimeUrl: string;
 
+function publishLogEntry(entry: ConsoleLogEntry): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send("app:log-entry", entry);
+  }
+}
+
 // gw-media:// — локальные медиа проекта (картинки/озвучка/видео) для <img>/<video> в изолированном renderer.
 protocol.registerSchemesAsPrivileged([
-  { scheme: "gw-media", privileges: { stream: true, supportFetchAPI: true } }
+  { scheme: "gw-media", privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }
 ]);
 
 function resolveDataPath(): string {
@@ -56,7 +62,8 @@ function resolveDataPath(): string {
 
 function summarizeArguments(args: unknown[]): unknown[] {
   return args.map((argument) => {
-    if (argument === null || ["string", "number", "boolean"].includes(typeof argument)) return argument;
+    if (typeof argument === "string") return { type: "string", length: argument.length };
+    if (argument === null || ["number", "boolean"].includes(typeof argument)) return argument;
     if (!argument || typeof argument !== "object") return typeof argument;
     const value = argument as Record<string, unknown>;
     return Object.fromEntries(
@@ -85,9 +92,25 @@ function handleIpc<TArgs extends unknown[], TResult>(
   });
 }
 
+function sendDirectorProgress(event: IpcMainInvokeEvent, stage: string, details?: Record<string, unknown>): void {
+  event.sender.send("director:progress", stage);
+  void logger.write("info", "director.progress", { stage, ...details });
+}
+
+async function withRecoveredFinal(project: Project | undefined): Promise<Project | undefined> {
+  if (!project || project.outputPath || project.status !== "complete") return project;
+  const finalPath = projectStorage.finalPath(project.id);
+  try {
+    if ((await stat(finalPath)).isFile()) return { ...project, outputPath: finalPath };
+  } catch {
+    // The project may simply not have been assembled yet.
+  }
+  return project;
+}
+
 function registerIpc(): void {
-  handleIpc("projects:list", () => projectService.list());
-  handleIpc("projects:get", (_event, id: string) => projectService.get(id));
+  handleIpc("projects:list", async () => Promise.all((await projectService.list()).map(withRecoveredFinal)) as Promise<Project[]>);
+  handleIpc("projects:get", async (_event, id: string) => withRecoveredFinal(await projectService.get(id)));
   handleIpc("projects:create", (_event, input: CreateProjectInput) => projectService.create(input));
   handleIpc("projects:create-demo", () =>
     projectService.create(
@@ -102,7 +125,7 @@ function registerIpc(): void {
     )
   );
   handleIpc("director:analyze-reference", async (event, input: AnalyzeReferenceInput) => {
-    const stage = (text: string) => event.sender.send("director:progress", text);
+    const stage = (text: string) => sendDirectorProgress(event, text);
     // «Память режиссёра»: прошлые проекты идут в контекст, чтобы новые темы не повторялись.
     const pastProjects = (await projectService.list()).slice(0, 30).map((project) => `${project.title} — ${project.topic}`);
     const channelRef = parseYouTubeChannelRef(input.url);
@@ -129,32 +152,34 @@ function registerIpc(): void {
     stage("Разбираю референс по ссылке…");
     return await anyModelClient.configured() ? anyModelClient.analyzeReference(input, pastProjects) : projectService.analyzeReference(input);
   });
-  handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string) =>
+  handleIpc("director:refine-reference", (_event, analysis: ReferenceAnalysis, instructions: string, modelId?: string) =>
     analysis.youtubeChannelContext
       ? anyModelClient.analyzeYouTubeChannel(analysis.youtubeChannelContext, {
           url: analysis.sourceUrl,
           language: analysis.language,
-          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim()
+          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim(),
+          modelId: modelId || analysis.modelId
         })
       : analysis.youtubeContext
       ? anyModelClient.analyzeYouTube(analysis.youtubeContext, {
           url: analysis.sourceUrl,
           language: analysis.language,
-          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim()
+          instructions: `${analysis.instructions || ""}\nУточнение: ${instructions}`.trim(),
+          modelId: modelId || analysis.modelId
         })
       : analysis.provider.startsWith("anymodel:")
-        ? anyModelClient.refine(analysis, instructions)
+        ? anyModelClient.refine(analysis, instructions, modelId || analysis.modelId)
         : projectService.refineReference(analysis, instructions)
   );
   handleIpc("projects:create-reference", (_event, input: CreateReferenceProjectInput) =>
     projectService.createFromReference(input)
   );
-  handleIpc("director:regenerate-scenes", async (event, analysis: ReferenceAnalysis, targetSeconds: number) => {
-    const totalScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
-    event.sender.send("director:progress", `Пишу сценарий: 0 из ${totalScenes} сцен`);
-    const onProgress = (done: number, total: number) => event.sender.send("director:progress", `Пишу сценарий: ${done} из ${total} сцен`);
+  handleIpc("director:regenerate-scenes", async (event, analysis: ReferenceAnalysis, targetSeconds: number, modelId?: string) => {
+    const totalScenes = allocateSceneDurations(targetSeconds).length;
+    sendDirectorProgress(event, `Пишу сценарий: 0 из ${totalScenes} сцен`);
+    const onProgress = (done: number, total: number, stage?: string) => sendDirectorProgress(event, stage ?? `Пишу сценарий: ${done} из ${total} сцен`, { done, total });
     return await anyModelClient.configured()
-      ? anyModelClient.regenerateScenes(analysis, targetSeconds, onProgress)
+      ? anyModelClient.regenerateScenes(analysis, targetSeconds, onProgress, modelId || analysis.modelId)
       : resizeScenesLocally(analysis, targetSeconds);
   });
   handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
@@ -188,8 +213,8 @@ function registerIpc(): void {
   handleIpc("queue:resume", (_event, projectId: string) => mutateQueue(() => pipeline.resume(projectId)));
   handleIpc("queue:stop", (_event, projectId: string) => mutateQueue(() => pipeline.stop(projectId)));
   handleIpc("queue:retry", (_event, taskId: string) => mutateQueue(() => pipeline.retry(taskId)));
-  handleIpc("queue:regenerate-scene", (_event, projectId: string, sceneId: string) =>
-    mutateQueue(() => pipeline.regenerateScene(projectId, sceneId))
+  handleIpc("queue:regenerate-scene", (_event, projectId: string, sceneId: string | string[], target?: "image" | "video" | "audio" | "all") =>
+    mutateQueue(() => pipeline.regenerateScene(projectId, sceneId, target))
   );
   handleIpc("queue:clear-finished", () => mutateQueue(() => pipeline.clearFinished()));
   handleIpc("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
@@ -264,15 +289,19 @@ function registerIpc(): void {
         : item))
     }));
   });
-  handleIpc("projects:character-reference", async (_event, projectId: string) => {
+  handleIpc("projects:character-reference", async (event, projectId: string) => {
     const project = await projectService.get(projectId);
     if (!project) throw new Error("Проект не найден");
     if (project.scenes.length === 0) throw new Error("Сначала соберите сценарий — герой описывается по сценам");
     if (!await anyModelClient.configured()) throw new Error("Подключите AnyModel API в настройках");
-    const hero = await anyModelClient.characterReference(project);
-    const path = await projectStorage.saveCharacterReference(project, hero.image);
+    sendDirectorProgress(event, "Референс героя: описываю внешность по сценарию…", { projectId });
+    const hero = await anyModelClient.characterReference(project, (stage) => sendDirectorProgress(event, stage, { projectId }));
+    const updatedAt = new Date().toISOString();
+    const path = await projectStorage.saveCharacterReference(project, hero.image, { name: hero.name, prompt: hero.prompt, updatedAt });
+    const character = { name: hero.name, prompt: hero.prompt, imagePath: path, updatedAt };
     void logger.write("info", "project.character_reference.created", { projectId, hero: hero.name });
-    return projectService.mutate(project.id, (current) => ({
+    const updated = await projectService.mutate(project.id, (current) => ({
+      characterReference: character,
       settings: {
         ...current.settings,
         image: {
@@ -281,21 +310,28 @@ function registerIpc(): void {
         }
       }
     }));
+    await projectStorage.ensureProject(updated);
+    return {
+      project: updated,
+      character
+    };
   });
+  ipcMain.handle("app:read-logs", (_event, limit?: number) => logger.readRecent(limit));
   handleIpc("youtube:get-settings", () => youtubeStore.publicSettings());
   handleIpc("youtube:save-settings", (_event, input: SaveYouTubeSettingsInput) => youtubeStore.save(input));
   handleIpc("youtube:clear-key", () => youtubeStore.clearKey());
   handleIpc("youtube:test", () => youtubeClient.test());
-  handleIpc("anymodel:chat", (_event, messages: Parameters<AnyModelClient["chatMessage"]>[0]) =>
-    anyModelClient.chatMessage(messages)
+  handleIpc("anymodel:chat", (_event, messages: Parameters<AnyModelClient["chatMessage"]>[0], modelId?: string) =>
+    anyModelClient.chatMessage(messages, modelId)
   );
-  handleIpc("anymodel:chat-stream", (event, requestId: string, messages: Parameters<AnyModelClient["streamChatMessage"]>[0]) =>
-    anyModelClient.streamChatMessage(messages, (chunk) => event.sender.send(`anymodel:chat-chunk:${requestId}`, chunk))
+  handleIpc("anymodel:chat-stream", (event, requestId: string, messages: Parameters<AnyModelClient["streamChatMessage"]>[0], modelId?: string) =>
+    anyModelClient.streamChatMessage(messages, (chunk) => event.sender.send(`anymodel:chat-chunk:${requestId}`, chunk), modelId)
   );
   handleIpc("chat-topics:list", () => chatTopics.list());
   handleIpc("chat-topics:get", (_event, id: string) => chatTopics.get(id));
-  handleIpc("chat-topics:create", (_event, title?: string) => chatTopics.create(title));
+  handleIpc("chat-topics:create", (_event, title?: string, modelId?: string) => chatTopics.create(title, modelId));
   handleIpc("chat-topics:append", (_event, topicId: string, message: AiChatMessage) => chatTopics.append(topicId, message));
+  handleIpc("chat-topics:set-model", (_event, topicId: string, modelId: string) => chatTopics.setModel(topicId, modelId));
   handleIpc("chat-topics:save-analysis", (_event, topicId: string, analysis: ReferenceAnalysis | null) => chatTopics.saveAnalysis(topicId, analysis));
   handleIpc("chat-topics:delete", (_event, id: string) => chatTopics.delete(id));
   handleIpc("projects:apply-chat-topic", async (event, projectId: string, topicId: string) => {
@@ -303,18 +339,19 @@ function registerIpc(): void {
     if (!project) throw new Error("Проект не найден");
     const topic = chatTopics.get(topicId);
     if (!topic) throw new Error("Тема чата не найдена");
-    const stage = (text: string) => event.sender.send("director:progress", text);
+    const stage = (text: string) => sendDirectorProgress(event, text, { projectId, topicId });
 
     // Главное: если в теме сохранён разбор — сценарий пишем ПО НЕМУ (тема ролика, ниша, аудитория,
     // комментарии зрителей). Пересказ переписки давал сценарий «о том, как делать ролики».
     if (topic.analysis && await anyModelClient.configured()) {
       const targetSeconds = Math.max(30, Math.round((project.settings.durationMinutes || 1) * 60));
-      const total = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+      const total = allocateSceneDurations(targetSeconds).length;
       stage(`Пишу сценарий по теме «${topic.analysis.suggestedTitle}»: 0 из ${total} сцен`);
       const full = await anyModelClient.regenerateScenes(
         { ...topic.analysis, language: project.language },
         targetSeconds,
-        (done, count) => stage(`Пишу сценарий: ${done} из ${count} сцен`)
+        (done, count, label) => stage(label ?? `Пишу сценарий: ${done} из ${count} сцен`),
+        topic.modelId
       );
       return projectService.mutate(projectId, (current) => ({
         title: topic.analysis!.suggestedTitle || current.title,
@@ -322,7 +359,50 @@ function registerIpc(): void {
         chatTopicId: topicId,
         scenes: full.scenes,
         status: full.scenes.length > 0 ? "ready" as const : current.status,
-        referenceAnalysis: topic.analysis!
+        referenceAnalysis: full
+      }));
+    }
+
+    if (await anyModelClient.configured()) {
+      const targetSeconds = Math.max(30, Math.round((project.settings.durationMinutes || 1) * 60));
+      const history = topic.messages
+        .filter((message) => !/^Ошибка AI-провайдера:/i.test(message.content))
+        .map((message) => `${message.role}: ${message.content}`)
+        .join("\n\n");
+      const firstUserMessage = topic.messages.find((message) => message.role === "user")?.content ?? topic.title;
+      const lastAssistantMessage = [...topic.messages].reverse().find((message) => message.role === "assistant")?.content;
+      const seed: ReferenceAnalysis = {
+        sourceUrl: `chat://${topic.id}`,
+        sourceTitle: topic.title,
+        niche: "Определи из диалога",
+        targetAudience: "Определи из диалога",
+        hook: lastAssistantMessage?.slice(0, 500) || firstUserMessage,
+        structure: [],
+        strengths: [],
+        improvements: [],
+        suggestedAngle: firstUserMessage,
+        suggestedTitle: topic.title,
+        recommendedDurationSeconds: targetSeconds,
+        language: project.language,
+        instructions: `Полный сохранённый диалог:\n${history}`,
+        scenes: [],
+        provider: `anymodel:${topic.modelId || "default"}+chat`,
+        modelId: topic.modelId
+      };
+      stage(`Строю цельный сценарий из диалога: 0 из ${allocateSceneDurations(targetSeconds).length} сцен`);
+      const full = await anyModelClient.regenerateScenes(
+        seed,
+        targetSeconds,
+        (done, count, label) => stage(label ?? `Пишу сценарий: ${done} из ${count} сцен`),
+        topic.modelId
+      );
+      return projectService.mutate(projectId, (current) => ({
+        title: full.suggestedTitle || current.title,
+        topic: full.suggestedAngle || current.topic,
+        chatTopicId: topicId,
+        scenes: full.scenes,
+        status: "ready" as const,
+        referenceAnalysis: full
       }));
     }
 
@@ -437,12 +517,11 @@ async function mutateQueue<TResult>(mutation: () => TResult | Promise<TResult>):
 }
 
 function resizeScenesLocally(analysis: ReferenceAnalysis, targetSeconds: number): ReferenceAnalysis {
-  const sceneDurationSeconds = 5;
-  const count = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
+  const durations = allocateSceneDurations(targetSeconds);
   const source = analysis.scenes.length > 0
     ? analysis.scenes
-    : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: sceneDurationSeconds, status: "draft" as const }];
-  const scenes: Scene[] = Array.from({ length: count }, (_unused, index) => {
+    : [{ id: "", order: 0, title: "Сцена", narration: analysis.hook || analysis.suggestedTitle || "Сцена", imagePrompt: "", animationPrompt: "", durationSeconds: durations[0]!, status: "draft" as const }];
+  const scenes: Scene[] = durations.map((duration, index) => {
     const base = source[index % source.length]!;
     return {
       id: createId("scene"),
@@ -451,16 +530,14 @@ function resizeScenesLocally(analysis: ReferenceAnalysis, targetSeconds: number)
       narration: base.narration,
       imagePrompt: base.imagePrompt,
       animationPrompt: base.animationPrompt || "Плавное движение камеры и естественное движение объектов",
-      durationSeconds: sceneDurationSeconds,
+      durationSeconds: duration,
       status: "draft"
     };
   });
-  return { ...analysis, scenes, recommendedDurationSeconds: count * sceneDurationSeconds };
+  return { ...analysis, scenes, recommendedDurationSeconds: durations.reduce((sum, duration) => sum + duration, 0) };
 }
 
 async function createPlanFromTopic(topic: ChatTopic, language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
-  const messages = topic.messages.map(({ role, content }) => ({ role, content }));
-  if (await anyModelClient.configured()) return anyModelClient.createProjectPlanFromChat(messages, language);
   const userText = topic.messages.filter((message) => message.role === "user").map((message) => message.content).join(" ");
   const sentences = userText.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
   const beats = [
@@ -496,7 +573,7 @@ app.whenReady().then(async () => {
   youtubeClient = new YouTubeClient(youtubeStore, (audio, format) => anyModelClient.transcribeAudio(audio, format));
   chatTopics = new ChatTopicRepository(join(dataPath, "database", "gold-work-studio.sqlite"));
   await chatTopics.initialize();
-  logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"));
+  logger = new TextFileLogger(join(dataPath, "logs", "gold-work-studio-log.txt"), publishLogEntry);
   await logger.initialize();
   process.on("uncaughtExceptionMonitor", (error) => void logger.write("error", "process.uncaught_exception", { error }));
   process.on("unhandledRejection", (reason) => void logger.write("error", "process.unhandled_rejection", { reason }));
@@ -526,14 +603,26 @@ app.whenReady().then(async () => {
       .catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
     500
   );
-  protocol.handle("gw-media", (request) => {
-    const encoded = request.url.replace(/^gw-media:\/\//, "");
+  protocol.handle("gw-media", async (request) => {
+    const mediaUrl = new URL(request.url);
+    if (mediaUrl.hostname !== "local") return new Response("forbidden", { status: 403 });
+    const encoded = mediaUrl.pathname.slice(1);
     const filePath = normalize(decodeURIComponent(encoded));
     // Отдаём только файлы из папки данных приложения (workspace, кэши) — не весь диск.
-    if (!filePath.toLowerCase().startsWith(normalize(dataPath).toLowerCase())) {
+    const localPath = relative(normalize(dataPath), filePath);
+    if (localPath.startsWith("..") || isAbsolute(localPath)) {
       return new Response("forbidden", { status: 403 });
     }
-    return net.fetch(pathToFileURL(filePath).toString());
+    try {
+      return await createMediaFileResponse(filePath, request.headers.get("range"));
+    } catch (error) {
+      void logger.write("warn", "media.request.failed", {
+        file: basename(filePath),
+        range: request.headers.get("range") ?? "full",
+        error
+      });
+      return new Response("not found", { status: 404 });
+    }
   });
   registerIpc();
   await createWindow();

@@ -1,0 +1,518 @@
+ТЕХНИЧЕСКОЕ ОПИСАНИЕ ИНТЕГРАЦИИ GOOGLE FLOW В GOLD WORK STUDIO
+
+Источник анализа
+================
+
+Описание составлено по исходникам из архива:
+C:\Users\rosup\Downloads\Telegram Desktop\Софт Gold Work Sudio (2).rar
+
+Важно: рядом нет файла "Софт Gold Work Sudio (2).zip". Реализация Google Flow находится именно в RAR-архиве.
+
+Основные файлы реализации:
+
+- apps/desktop/src/flow-account-store.ts
+- apps/desktop/src/flow-auth-service.ts
+- apps/desktop/src/flow-cookie-import.ts
+- apps/desktop/src/flow-protocol.ts
+- apps/desktop/src/flow-client.ts
+- apps/desktop/src/mock-generation-pipeline.ts
+- apps/desktop/src/main.ts
+- apps/desktop/src/preload.ts
+- packages/shared/src/index.ts
+- apps/renderer/src/App.tsx
+
+
+ЗАДАЧА ДЛЯ ДРУГОЙ НЕЙРОСЕТИ
+============================
+
+Нужно реализовать в Electron-приложении подключение пользовательских Google Flow-аккаунтов и генерацию изображений/видео через авторизованную сессию Flow. Архитектуру следует повторить по описанию ниже, сохранив разделение renderer/preload/main, локальное шифрование секретов, очередь задач и восстановление после перезапуска.
+
+Не использовать пароли Google. Пользователь самостоятельно входит в свой аккаунт в отдельном окне Chromium. Не обходить CAPTCHA, лимиты или ограничения провайдера. Использовать только аккаунты, которыми пользователь законно владеет, и учитывать условия Google. Внутренние endpoint'ы labs.google/aisandbox не являются стабильным публичным API и могут измениться.
+
+
+1. ОБЩАЯ АРХИТЕКТУРА
+====================
+
+Поток данных выглядит так:
+
+React renderer
+  -> DesktopApi в packages/shared
+  -> безопасный preload/contextBridge
+  -> IPC-обработчики Electron main
+  -> FlowAuthService / FlowAccountStore / FlowClient
+  -> авторизованная Electron Session
+  -> labs.google и aisandbox-pa.googleapis.com
+  -> локальная очередь генерации
+  -> image.png / scene.mp4 в папке сцены
+  -> FFmpeg собирает Final.mp4
+
+Renderer никогда не получает cookies, access token или пароль прокси. Он видит только публичное состояние аккаунта: email, подпись, тариф, кредиты, статус, срок сессии, cooldown и обезличенное имя прокси.
+
+
+2. МОДЕЛЬ FLOW-АККАУНТА
+=======================
+
+Публичная модель аккаунта:
+
+FlowAccountPublic {
+  id: string;
+  email?: string;
+  label?: string;
+  enabled: boolean;
+  videoEnabled: boolean;
+  status: "connecting" | "ready" | "expired" | "needs_login" |
+          "needs_user_action" | "cooldown" | "disabled" | "error";
+  tier?: string;
+  credits?: number;
+  proxyDisplayName?: string;
+  sessionExpiresAt?: string;
+  tokenExpiresAt?: string;
+  cooldownUntil?: string;
+  lastRefreshAt?: string;
+  lastError?: string;
+}
+
+Секретная часть хранится только в Electron main:
+
+FlowAccountSecret {
+  cookieHeader?: string;
+  accessToken?: string;
+  proxyUrl?: string;
+}
+
+Для каждого аккаунта создаётся отдельный persistent partition Electron:
+
+persist:flow-<accountId>
+
+Это изолирует cookies, кэш и Google-сессию одного аккаунта от остальных аккаунтов и от основного интерфейса приложения.
+
+Данные аккаунтов записываются в:
+
+<dataPath>/credentials/flow/accounts.json
+
+cookieHeader, accessToken и полный proxyUrl шифруются через Electron safeStorage. В JSON сохраняется только base64 зашифрованного блока. При переносе файла в другой профиль Windows расшифровка намеренно не должна работать.
+
+Любые публичные сообщения об ошибках очищаются от Bearer token, session cookie и логина/пароля прокси.
+
+
+3. ПОДКЛЮЧЕНИЕ АККАУНТА ЧЕРЕЗ БРАУЗЕР
+=====================================
+
+Пользователь нажимает "Добавить через браузер" в Настройки -> Видео -> Google Flow.
+
+Renderer вызывает:
+
+loginFlowAccount({ label?, proxyUrl? })
+
+Preload передаёт запрос по IPC "flow:accounts:login". В main запрос получает FlowAuthService.login().
+
+Алгоритм FlowAuthService.login():
+
+1. FlowAccountStore создаёт запись аккаунта и уникальный persistent partition.
+2. Для partition создаётся Electron session.fromPartition(partition, { cache: true }).
+3. К сессии применяется персональный HTTP/HTTPS/SOCKS5 proxy. Логин и пароль прокси обрабатываются событием webContents "login" и не отдаются renderer.
+4. Открывается отдельный BrowserWindow примерно 1180x820.
+5. Безопасные настройки окна:
+   - contextIsolation: true;
+   - nodeIntegration: false;
+   - sandbox: true;
+   - разрешена навигация только по HTTPS на google.com, поддомены google.com и labs.google.
+6. Окно открывает страницу https://labs.google/fx/tools/flow.
+7. Пользователь самостоятельно проходит обычный вход Google.
+8. Каждые 1,5 секунды сервис проверяет наличие session cookie Flow в Electron session.
+9. После появления session cookie вызывается обновление сессии.
+10. На вход даётся 10 минут. Если окно закрыто раньше, аккаунт получает needs_login, а незавершённая пустая запись позже удаляется.
+
+Popup авторизации Google не открывается в обычном внешнем окне: разрешённый URL перенаправляется в то же окно и тот же partition, чтобы cookies остались в нужной изолированной сессии.
+
+
+4. ПРОВЕРКА И ОБНОВЛЕНИЕ СЕССИИ
+===============================
+
+FlowAuthService.refresh(accountId):
+
+1. Загружает Electron session аккаунта и применяет его прокси.
+2. Если cookies отсутствуют в partition, пытается восстановить только сохранённые Flow session cookies из зашифрованного cookieHeader.
+3. Выполняет GET:
+
+   https://labs.google/fx/api/auth/session
+
+   Параметры: credentials: include, cache: no-store.
+
+4. Из ответа получает email и краткоживущий access token.
+5. Определяет expiration cookies и JWT exp access token.
+6. Отдельным авторизованным запросом получает тариф и доступное количество credits.
+7. Обновляет статус аккаунта на ready и сохраняет зашифрованные cookies/access token.
+
+Если session endpoint отвечает 401/403, аккаунт получает needs_login. Если email или access token отсутствует, сессия тоже считается неподтверждённой.
+
+Параллельные refresh одного аккаунта объединяются в один Promise, чтобы не создавать дублирующиеся запросы.
+
+
+5. ИМПОРТ COOKIES
+=================
+
+Помимо браузерного входа интерфейс поддерживает импорт cookies самого пользователя:
+
+- JSON-массив cookies;
+- Netscape cookies.txt;
+- строка Cookie header;
+- отдельное значение __Secure-next-auth.session-token.
+
+Парсер обязан принимать только cookies Google/Flow, нормализовать domain/path/secure/expirationDate и не логировать значения. После импорта cookies записываются в отдельный Electron partition, вызывается refresh(), а текстовое поле renderer сразу очищается.
+
+Основной и предпочтительный путь подключения — вход через BrowserWindow. Импорт cookies является запасным вариантом для собственной сессии пользователя.
+
+
+6. СКРЫТОЕ RUNTIME-ОКНО И RECAPTCHA
+===================================
+
+Для запросов генерации Flow требуется действительная браузерная сессия и reCAPTCHA Enterprise token. Поэтому для каждого активного аккаунта поддерживается скрытый BrowserWindow с тем же persistent partition.
+
+Окно загружает страницу Flow. Метод recaptchaToken(accountId, action) выполняет JavaScript внутри уже авторизованной страницы:
+
+- ждёт window.grecaptcha.enterprise;
+- получает site key из загруженного скрипта страницы;
+- вызывает штатный enterprise.execute(siteKey, { action });
+- для картинок используется action IMAGE_GENERATION;
+- для видео используется action VIDEO_GENERATION.
+
+Это не решатель CAPTCHA и не обход проверки. Токен выдаёт сама открытая авторизованная страница Flow. Если страница не загрузила grecaptcha или регион не поддерживается, генерация останавливается с понятной ошибкой.
+
+
+7. ПРОКСИ НА КАЖДЫЙ АККАУНТ
+===========================
+
+Каждый Flow-аккаунт может иметь собственный proxyUrl:
+
+- http://host:port
+- https://host:port
+- socks5://login:password@host:port
+
+Прокси применяется к Electron Session через session.setProxy(). Пароль хранится только в зашифрованном секрете. Renderer получает строку без credentials, например socks5://host:port.
+
+Если Flow перенаправляет на unsupported-country, пользователь получает ошибку о необходимости прокси поддерживаемой страны. Не следует автоматически менять регион или подставлять чужие прокси.
+
+
+8. ПУЛ АККАУНТОВ
+================
+
+FlowAccountPool выбирает аккаунты со следующими признаками:
+
+- enabled === true;
+- videoEnabled === true;
+- status === "ready";
+- cooldownUntil отсутствует или уже прошёл.
+
+Выбор идёт round-robin, чтобы один аккаунт не занимал все задания. Перед использованием проверяется срок access token; если он истекает меньше чем через минуту, выполняется refresh().
+
+При 401 сначала обновляется текущая сессия и запрос повторяется один раз. При 429 или quota/credit error аккаунт переводится в cooldown согласно Retry-After и можно перейти к следующему активному аккаунту. Это поведение предназначено для отказоустойчивости собственных разрешённых аккаунтов, а не для обхода лимитов Google.
+
+Если пользователь явно выбрал accountId, автоматическое переключение на другой аккаунт не выполняется.
+
+
+9. СОЗДАНИЕ ВНУТРЕННЕГО ПРОЕКТА FLOW
+====================================
+
+Перед первой генерацией FlowClient создаёт проект Flow через авторизованную browserSession. Используется tRPC endpoint создания проекта на labs.google и toolName "PINHOLE".
+
+На один аккаунт проект кэшируется в памяти и используется примерно до 50 операций, после чего создаётся новый. Одновременные попытки создания проекта объединяются одним Promise.
+
+Ответ обязательно должен содержать projectId. Этот projectId далее передаётся во все запросы upload/generation/status.
+
+
+10. ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ ЧЕРЕЗ FLOW
+====================================
+
+Входные данные:
+
+FlowGenerateImageInput {
+  prompt: string;
+  aspectRatio: "16:9" | "9:16" | "1:1";
+  references?: Buffer[];   // максимум 3
+  model?: string;
+  accountId?: string;
+  signal?: AbortSignal;
+}
+
+Алгоритм:
+
+1. Выбрать ready-аккаунт через FlowAccountPool.
+2. Проверить/обновить access token.
+3. Подготовить скрытое runtime-окно и browserSession.
+4. Создать или переиспользовать Flow projectId.
+5. До трёх референсов загрузить через Flow uploadImage.
+6. Формат изображения определить по magic bytes; допускаются PNG, JPEG и WebP.
+7. Загруженное изображение кодируется base64. Возвращённый mediaId кэшируется по SHA-256 содержимого, чтобы одинаковый референс не загружался повторно.
+8. Получить reCAPTCHA token с action IMAGE_GENERATION.
+9. Сформировать payload:
+   - clientContext с projectId, tool PINHOLE, sessionId и recaptchaContext;
+   - mediaGenerationContext.batchId;
+   - image model key;
+   - aspect ratio Flow;
+   - structuredPrompt с текстом и reference media;
+   - случайный seed;
+   - useNewMedia: true.
+10. Выполнить авторизованный POST к image generation endpoint Flow.
+11. Из JSON рекурсивно найти media object и его name.
+12. Скачать готовое изображение через media redirect.
+13. Проверить content-type и magic bytes, чтобы HTML-ошибка не сохранилась как картинка.
+14. Привести изображение к формату проекта и сохранить как image.png в папку сцены.
+
+В архивной реализации используются Flow image model keys семейства GEM_PIX/Imagen. Список является запасной цепочкой: следующая модель пробуется только при ошибке несовместимости/недоступности модели. Нельзя бесконечно повторять 400/403/404.
+
+
+11. РАСПРЕДЕЛЕНИЕ ГЕНЕРАЦИИ КАРТИНОК
+====================================
+
+В pipeline одновременно могут быть доступны AnyModel и Flow. Чтобы использовать оба источника параллельно и не оплачивать один кадр два раза:
+
+- чётные сцены сначала идут AnyModel, затем Flow как fallback;
+- нечётные сцены сначала идут Flow, затем AnyModel как fallback.
+
+Второй источник запускается только после ошибки первого. Если в настройках выбран mock-image, внешние API не вызываются.
+
+При включённой последовательной генерации сцена дополнительно зависит от предыдущей картинки, поэтому максимальная параллельность ограничивается намеренно.
+
+
+12. ГЕНЕРАЦИЯ ВИДЕО ЧЕРЕЗ FLOW
+================================
+
+Входные данные:
+
+FlowGenerateInput {
+  prompt: string;
+  aspectRatio: string;
+  durationSeconds: number;
+  startFrame?: Buffer;
+  endFrame?: Buffer;
+  model?: string;
+  accountId?: string;
+  signal?: AbortSignal;
+  resumeJob?: FlowRemoteVideoJob;
+  onRemoteJob?: callback;
+  onProgress?: callback;
+}
+
+Поддерживаются три режима:
+
+- text-to-video;
+- start image -> video;
+- start image + end image -> video.
+
+Алгоритм:
+
+1. Выбрать аккаунт и обновить токен при необходимости.
+2. Подготовить browserSession и Flow projectId.
+3. Проверить формат стартового/конечного кадра. При необходимости конвертировать в настоящий PNG/JPEG/WebP.
+4. Загрузить кадры и получить mediaId.
+5. Выбрать video api path по наличию кадров:
+   - batchAsyncGenerateVideoText;
+   - batchAsyncGenerateVideoStartImage;
+   - batchAsyncGenerateVideoStartAndEndImage.
+6. Подобрать совместимый model key Veo для text-to-video или image-to-video.
+7. Получить reCAPTCHA token с action VIDEO_GENERATION.
+8. Сформировать payload:
+   - mediaGenerationContext.batchId;
+   - audioFailurePreference;
+   - clientContext: projectId, tool PINHOLE, tier, sessionId, recaptchaContext;
+   - prompt;
+   - landscape/portrait aspect ratio;
+   - videoModelKey;
+   - seed;
+   - startImage/endImage при наличии;
+   - useV2ModelConfig: true.
+9. Отправить POST на соответствующий video endpoint.
+10. Из ответа получить media.name и optional workflowId.
+11. Сразу сохранить FlowRemoteVideoJob в локальную QueueTask.
+12. Каждые 5 секунд проверять статус через batchCheckAsyncVideoGenerationStatus.
+13. Показывать реальный progress, если его вернул API; иначе вычислять осторожную оценку по времени.
+14. На 401 обновить access token и продолжить polling.
+15. На 429 учитывать Retry-After; на 5xx временно подождать и продолжить.
+16. Максимальное ожидание одного видео — 20 минут.
+17. При успешном статусе скачать media через redirect и временную подписанную ссылку.
+18. Проверить MP4/WebM по content-type и сигнатуре файла.
+19. Сохранить Buffer как scene.mp4 в папку сцены.
+
+
+13. ВОССТАНОВЛЕНИЕ ПОСЛЕ ПЕРЕЗАПУСКА
+====================================
+
+После отправки видео FlowRemoteVideoJob сохраняется внутри QueueTask:
+
+FlowRemoteVideoJob {
+  provider: "flow";
+  accountId: string;
+  projectId: string;
+  mediaName: string;
+  workflowId?: string;
+  modelKey: string;
+  submittedAt: string;
+}
+
+Если программа закрылась после запуска удалённой генерации, повтор задачи не должен создавать второе платное видео. FlowClient получает resumeJob, продолжает polling существующего mediaName и скачивает уже созданный результат.
+
+При ошибке локальной загрузки remoteJob не удаляется. Он очищается только после успешного сохранения scene.mp4 или осознанной отмены/удаления задачи.
+
+
+14. СКАЧИВАНИЕ MEDIA
+=====================
+
+Flow сначала возвращает redirect на временную подписанную ссылку Google Storage.
+
+Правильная последовательность:
+
+1. Запросить media redirect с Bearer token и cookies Flow, redirect: manual.
+2. Получить Location.
+3. Скачать подписанный URL отдельным запросом без Bearer/cookies.
+4. Сначала использовать browserSession.fetch, а при сетевой ошибке Electron попробовать обычный global fetch.
+5. Проверить размер, content-type и magic bytes.
+
+Нельзя слепо сохранять тело ответа: вместо файла может прийти HTML login/error page.
+
+
+15. ИНТЕГРАЦИЯ С ЛОКАЛЬНОЙ ОЧЕРЕДЬЮ
+====================================
+
+Очередь строит задачи по сценам:
+
+speech -> image -> optional video -> assemble
+
+FlowClient передаётся в MockGenerationPipeline как отдельный провайдер. Для video provider === "flow" pipeline:
+
+- запрещает start-frame Flow-видео из BMP-заглушки mock-image;
+- читает scene.imagePath;
+- использует animationPrompt, а при его отсутствии imagePrompt;
+- передаёт прогресс и remoteJob в QueueTask;
+- сохраняет результат через LocalProjectStorage.saveGeneratedVideo();
+- не подменяет ошибку Flow локальным Ken Burns, потому что пользователь явно выбрал настоящую AI-генерацию.
+
+Очередь и проекты сохраняются на диск, поэтому готовые сцены не теряются. После завершения FFmpeg собирает Final.mp4 из image/video/audio файлов.
+
+
+16. IPC И ПУБЛИЧНЫЙ API
+=======================
+
+В DesktopApi нужны методы:
+
+- listFlowAccounts()
+- loginFlowAccount(input)
+- importFlowCookies(input)
+- refreshFlowAccount(accountId)
+- refreshAllFlowAccounts()
+- updateFlowAccount(accountId, input)
+- removeFlowAccount(accountId)
+- openFlowAccount(accountId)
+- testFlowAccount(accountId?)
+- onFlowAccountsChanged(listener)
+- onFlowLoginProgress(listener)
+
+Preload только проксирует эти методы через ipcRenderer.invoke/on. Прямого доступа renderer к Electron session, cookies, filesystem или access token быть не должно.
+
+Main регистрирует IPC handlers и при запуске создаёт:
+
+FlowAccountStore -> FlowAuthService -> FlowClient -> MockGenerationPipeline
+
+При закрытии приложения FlowAuthService.closeAll() уничтожает login/runtime окна, но persistent partitions и зашифрованные данные аккаунтов сохраняются.
+
+
+17. ИНТЕРФЕЙС НАСТРОЕК
+======================
+
+Во вкладке Настройки -> Видео должны быть:
+
+- кнопка "Добавить через браузер";
+- необязательное название аккаунта;
+- персональный proxy;
+- запасной импорт cookies;
+- список подключённых аккаунтов;
+- email, label, status, tier, credits, proxyDisplayName, expiration;
+- действия "Продолжить вход", "Открыть Flow", "Обновить", "Проверить";
+- применить/убрать proxy;
+- включить/исключить аккаунт из генерации видео;
+- удалить аккаунт вместе с его локальной browser session;
+- живые события login progress и accounts changed.
+
+В настройках проекта для видео нужен provider "flow" и выбор модели Veo. При выборе Flow + startFrame приложение должно автоматически не допускать mock-image.
+
+
+18. ОБРАБОТКА ОШИБОК
+=====================
+
+Нужны отдельные понятные состояния:
+
+- needs_login: cookies/token отсутствуют или 401/403;
+- cooldown: временный 429/quota с временем следующей попытки;
+- disabled: аккаунт исключён пользователем;
+- error: повреждённая сессия, неподдерживаемый регион, неверный proxy и т.п.
+
+Правила:
+
+- 401 -> один refresh и повтор;
+- 429 -> Retry-After/cooldown, без частых повторов;
+- 400 с неверным payload -> permanent/no retry;
+- 5xx/network -> ограниченный backoff;
+- model unavailable -> следующая совместимая модель только там, где это не меняет пользовательский выбор неожиданно;
+- все сообщения очищать от секретов;
+- логировать accountId, stage, status и modelKey, но никогда access token/cookies/proxy password.
+
+
+19. БЕЗОПАСНОСТЬ И ОГРАНИЧЕНИЯ
+==============================
+
+Обязательные требования:
+
+- не хранить и не запрашивать пароль Google;
+- не передавать cookies/access token в renderer;
+- шифровать secrets через Windows safeStorage;
+- отдельный persistent partition на аккаунт;
+- ограничить навигацию BrowserWindow доменами Google;
+- sandbox + contextIsolation + nodeIntegration false;
+- очищать storage/cache/auth при удалении аккаунта;
+- не выводить secrets в логах, ошибках, UI, проектах или Git;
+- разрешать только собственные аккаунты пользователя;
+- не обходить CAPTCHA, региональные правила, credits или rate limits;
+- внутренние endpoint'ы Flow считать нестабильными и изолировать в flow-protocol.ts;
+- публичные browser identifiers и model keys получать/проверять по актуальному клиенту Flow, а не считать вечными константами;
+- предусмотреть понятное отключение Flow без поломки AnyModel/Veo/Standard.
+
+
+20. ПОРЯДОК РЕАЛИЗАЦИИ
+======================
+
+1. Добавить shared types и DesktopApi.
+2. Реализовать FlowAccountStore и шифрование.
+3. Реализовать parser/import собственных cookies.
+4. Реализовать FlowAuthService с isolated partitions и BrowserWindow.
+5. Добавить IPC/preload и UI списка аккаунтов.
+6. Реализовать flow-protocol: payload, parsing, status, model mapping.
+7. Реализовать FlowClient project/upload/image/video/poll/download.
+8. Встроить FlowClient в persistent queue.
+9. Сохранять remoteJob до успешной загрузки.
+10. Добавить логи без секретов.
+11. Протестировать перезапуск, 401, 429, proxy и удаление аккаунта.
+
+
+21. КРИТЕРИИ ГОТОВНОСТИ
+=======================
+
+- Вход открывается в отдельном окне и не просит пароль внутри приложения.
+- После входа UI показывает email, tier, credits и ready.
+- Несколько аккаунтов имеют независимые cookies и proxy.
+- Секреты отсутствуют в renderer, логах и открытом JSON.
+- Тест аккаунта создаёт/проверяет Flow projectId.
+- Из prompt получается настоящее изображение и сохраняется image.png.
+- Из prompt + start image получается настоящее видео и сохраняется scene.mp4.
+- Референс не загружается повторно без необходимости.
+- При 401 сессия обновляется один раз.
+- При 429 задача не спамит API.
+- После перезапуска существующее удалённое видео продолжается, а не генерируется заново.
+- HTML/error body никогда не сохраняется под видом изображения или MP4.
+- Удаление аккаунта очищает его Electron storage и зашифрованную запись.
+- При отключённом Flow продолжают работать остальные провайдеры.
+
+
+ИТОГ
+====
+
+В этой версии Gold Work Studio Google Flow подключён не API-ключом, а через реальную пользовательскую браузерную сессию в отдельном Electron partition. После входа main-процесс получает краткоживущий access token из Flow session endpoint, хранит token/cookies/proxy зашифрованно и использует их вместе со штатным reCAPTCHA token авторизованной страницы. FlowClient создаёт внутренний проект, загружает кадры, запускает image/video generation, опрашивает статус, скачивает результат по подписанной ссылке и сохраняет его в локальную очередь проекта. Renderer управляет только публичным состоянием аккаунтов и никогда не видит секреты.

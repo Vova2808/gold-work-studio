@@ -3,8 +3,10 @@ import { readFile } from "node:fs/promises";
 import { atomicWrite } from "./fs-utils.js";
 import type { GoogleSettings, SaveGoogleSettingsInput } from "@gold-work/shared";
 
+// Veo Lite — единственная из доступных линеек, что реально делает видео (у gemini-omni-flash
+// в API только generateContent) и самая дешёвая на большом объёме генераций.
 const defaults: Omit<GoogleSettings, "configured"> = {
-  veoModel: "gemini-omni-flash-preview",
+  veoModel: "veo-3.1-lite-generate-preview",
   proxyUrl: ""
 };
 
@@ -55,7 +57,11 @@ export class GoogleStore {
     try {
       // BOM срезаем: файл могли создать/править внешние инструменты.
       const raw = (await readFile(this.path, "utf8")).replace(/^﻿/, "");
-      return { ...defaults, ...JSON.parse(raw) as StoredSettings };
+      const stored = { ...defaults, ...JSON.parse(raw) as StoredSettings };
+      // Раньше по умолчанию стоял gemini-omni-*, но эти модели не генерируют видео
+      // (в API только generateContent) — молча переводим на рабочую Veo.
+      if (/^gemini-omni/.test(stored.veoModel)) stored.veoModel = defaults.veoModel;
+      return stored;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...defaults };
       throw error;

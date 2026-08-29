@@ -1,9 +1,39 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AiChatMessage, AnalyzeReferenceInput, Project, ReferenceAnalysis, Scene, SuggestedTopic, TranscriptSegment, YouTubeAnalysisContext, YouTubeChannelContext } from "@gold-work/shared";
+import { allocateSceneDurations, type AiChatMessage, type AnalyzeReferenceInput, type Project, type ReferenceAnalysis, type Scene, type SuggestedTopic, type TranscriptSegment, type YouTubeAnalysisContext, type YouTubeChannelContext } from "@gold-work/shared";
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
+
+interface GeneratedScene {
+  title?: string;
+  narration?: string;
+  imagePrompt?: string;
+  animationPrompt?: string;
+  durationSeconds?: number;
+}
+
+interface ScenarioPlanSection {
+  title: string;
+  goal: string;
+  keyPoints: string[];
+  transition: string;
+}
+
+interface ScenarioPlan {
+  title: string;
+  promise: string;
+  tone: string;
+  visualBible: string;
+  continuityRules: string[];
+  sections: ScenarioPlanSection[];
+}
+
+export interface SceneIssue {
+  sceneNumber: number;
+  kind: "empty" | "duplicate" | "length" | "greeting" | "critic";
+  reason: string;
+}
 
 export class AnyModelClient {
   constructor(private readonly store: AnyModelStore) {}
@@ -22,17 +52,17 @@ export class AnyModelClient {
     }
   }
 
-  async chatMessage(messages: AiChatMessage[]): Promise<string> {
+  async chatMessage(messages: AiChatMessage[], modelId?: string): Promise<string> {
     const settings = await this.store.publicSettings();
-    return this.chat(settings.textModel, [
+    return this.chat(modelId?.trim() || settings.textModel, [
       { role: "system", content: "Ты AI-режиссёр Gold Work Studio. Помогай создавать оригинальные ролики: анализируй нишу, улучшай хук, сценарий, структуру и удержание. Отвечай на языке пользователя." },
       ...messages
     ]);
   }
 
-  async streamChatMessage(messages: AiChatMessage[], onChunk: (chunk: string) => void): Promise<string> {
+  async streamChatMessage(messages: AiChatMessage[], onChunk: (chunk: string) => void, modelId?: string): Promise<string> {
     const settings = await this.store.publicSettings();
-    return this.streamChat(settings.textModel, [
+    return this.streamChat(modelId?.trim() || settings.textModel, [
       { role: "system", content: "Ты AI-режиссёр Gold Work Studio. Помогай создавать оригинальные ролики: анализируй нишу, улучшай хук, сценарий, структуру и удержание. Отвечай на языке пользователя." },
       ...messages
     ], onChunk);
@@ -40,8 +70,9 @@ export class AnyModelClient {
 
   async analyzeReference(input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
+    const model = input.modelId?.trim() || settings.textModel;
     const metadata = await this.referenceMetadata(input.url);
-    const content = await this.chat(settings.textModel, [
+    const content = await this.chat(model, [
       { role: "system", content: "Ты сценарный аналитик. Верни только JSON без markdown. Не утверждай, что видел ролик, если дан только заголовок и описание. Создай самостоятельный сценарий, не копируй чужой текст или брендинг." },
       { role: "user", content: `Ссылка: ${input.url}\nМетаданные: ${JSON.stringify(metadata)}\nПожелания: ${input.instructions || "нет"}\nЯзык: ${input.language || "Русский"}${memoryNote(pastProjects)}\nВерни JSON: sourceTitle,niche,targetAudience,hook,structure[],strengths[],improvements[],suggestedAngle,suggestedTitle,recommendedDurationSeconds,scenes[{title,narration,imagePrompt,animationPrompt,durationSeconds}]` }
     ], undefined, "medium");
@@ -57,12 +88,13 @@ export class AnyModelClient {
       hook: parsed.hook || scenes[0]!.narration, structure: toStringList(parsed.structure), strengths: toStringList(parsed.strengths),
       improvements: toStringList(parsed.improvements), suggestedAngle: parsed.suggestedAngle || input.instructions || "Самостоятельный ролик",
       suggestedTitle: parsed.suggestedTitle || "Новый ролик", recommendedDurationSeconds: parsed.recommendedDurationSeconds || scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0),
-      language: input.language || "Русский", instructions: input.instructions, scenes, provider: `anymodel:${settings.textModel}`
+      language: input.language || "Русский", instructions: input.instructions, scenes, provider: `anymodel:${model}`, modelId: model
     };
   }
 
   async analyzeYouTube(context: YouTubeAnalysisContext, input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
+    const model = input.modelId?.trim() || settings.textModel;
     const transcript = context.transcript
       .map((segment) => `[${clock(segment.startSeconds)}] ${segment.text}`)
       .join("\n")
@@ -96,7 +128,7 @@ export class AnyModelClient {
       : 0;
 
     // Шаг 1: лёгкий запрос — только анализ и план (без сцен), чтобы не перегружать провайдера тяжёлым ответом.
-    const planContent = await this.chat(settings.textModel, [
+    const planContent = await this.chat(model, [
       {
         role: "system",
         content: "Ты YouTube-аналитик и сценарный режиссёр. Верни только JSON без markdown. На основе статистики, комментариев и (если есть) транскрипта объясни, почему ролик работает и что улучшить, и предложи самостоятельный улучшенный замысел. Не копируй чужой текст, персонажей или брендинг. Визуальные кадры не анализировались, не утверждай обратное."
@@ -133,7 +165,8 @@ export class AnyModelClient {
       language: input.language || "Русский",
       instructions: input.instructions,
       scenes: [],
-      provider: `anymodel:${settings.textModel}+youtube-data-v3`,
+      provider: `anymodel:${model}+youtube-data-v3`,
+      modelId: model,
       youtubeContext: context,
       suggestedTopics
     };
@@ -142,6 +175,7 @@ export class AnyModelClient {
   /** Анализ КАНАЛА: ниша, аудитория, что заходит по таймлайну и комментариям — и ровно 3 темы для новых роликов. */
   async analyzeYouTubeChannel(context: YouTubeChannelContext, input: AnalyzeReferenceInput, pastProjects: string[] = []): Promise<ReferenceAnalysis> {
     const settings = await this.store.publicSettings();
+    const model = input.modelId?.trim() || settings.textModel;
     const compact = {
       channel: {
         title: context.title,
@@ -153,7 +187,7 @@ export class AnyModelClient {
       videosTimeline: context.videos.slice(0, 100),
       topComments: context.topComments.slice(0, 60)
     };
-    const content = await this.chat(settings.textModel, [
+    const content = await this.chat(model, [
       {
         role: "system",
         content: "Ты YouTube-аналитик ниш и каналов. Верни только JSON без markdown. По статистике канала, таймлайну роликов (просмотры, даты, длительности) и комментариям объясни, что работает в нише и чего хотят зрители. Видеокадры не анализировались — не утверждай обратное."
@@ -187,100 +221,220 @@ export class AnyModelClient {
       language: input.language || "Русский",
       instructions: input.instructions,
       scenes: [],
-      provider: `anymodel:${settings.textModel}+youtube-channel`,
+      provider: `anymodel:${model}+youtube-channel`,
+      modelId: model,
       youtubeChannelContext: context,
       suggestedTopics
     };
   }
 
-  /** Пересобирает сцены существующего разбора под заданную пользователем длину (сцены по 5 секунд). */
-  async regenerateScenes(analysis: ReferenceAnalysis, targetSeconds: number, onProgress?: (done: number, total: number) => void): Promise<ReferenceAnalysis> {
-    const sceneDurationSeconds = 5;
-    const targetScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / sceneDurationSeconds)));
-    const planBrief = {
-      suggestedTitle: analysis.suggestedTitle,
-      suggestedAngle: analysis.suggestedAngle || analysis.instructions,
+  /** Строит цельный сценарий: компактный план, батчи сцен, критик и точечная правка. */
+  async regenerateScenes(
+    analysis: ReferenceAnalysis,
+    targetSeconds: number,
+    onProgress?: (done: number, total: number, stage?: string) => void,
+    modelId?: string
+  ): Promise<ReferenceAnalysis> {
+    const settings = await this.store.publicSettings();
+    const model = modelId?.trim() || analysis.modelId?.trim() || settings.textModel;
+    const durations = allocateSceneDurations(targetSeconds);
+    onProgress?.(0, durations.length, "Строю цельный план сценария…");
+
+    // Исходный транскрипт нужен только режиссёру. В каждый батч сцен отправляется уже короткий план.
+    const source = {
+      title: analysis.suggestedTitle,
+      angle: [analysis.suggestedAngle, analysis.instructions].filter(Boolean).join("\n"),
       hook: analysis.hook,
       niche: analysis.niche,
-      targetAudience: analysis.targetAudience,
+      audience: analysis.targetAudience,
       structure: analysis.structure,
       improvements: analysis.improvements,
-      // Образцы для качества сценария: транскрипт референса и живые комментарии зрителей.
-      transcriptSample: analysis.youtubeContext?.transcript?.map((segment) => segment.text).join(" ").slice(0, 6_000) || undefined,
+      transcriptSample: analysis.youtubeContext?.transcript?.map((segment) => segment.text).join(" ").slice(0, 12_000) || undefined,
       audienceComments: (analysis.youtubeContext?.topComments ?? analysis.youtubeChannelContext?.topComments ?? [])
-        .slice(0, 8)
+        .slice(0, 10)
         .map((comment) => comment.text)
     };
-    const scenes = await this.buildScenes(planBrief, targetScenes, analysis.language || "Русский", onProgress);
-    if (scenes.length === 0) throw new Error("Не удалось собрать сцены сценария");
-    return { ...analysis, scenes, recommendedDurationSeconds: scenes.length * sceneDurationSeconds };
+    const plan = await this.createScenarioPlan(source, durations, analysis.language || "Русский", model);
+    onProgress?.(0, durations.length);
+    const draft = await this.buildScenes(plan, durations, analysis.language || "Русский", model, onProgress);
+    if (draft.length !== durations.length) throw new Error(`Сценарий собран не полностью: ${draft.length} из ${durations.length} сцен`);
+
+    onProgress?.(durations.length, durations.length, "Проверяю связность, повторы и хук…");
+    const scenes = await this.reviewScenes(plan, draft, model, (stage) => onProgress?.(durations.length, durations.length, stage)).catch(() => draft);
+    const critical = findSceneIssues(scenes, durations.length).filter((issue) => issue.kind === "empty");
+    if (critical.length > 0) throw new Error(`В сценарии остались пустые сцены: ${critical.map((issue) => issue.sceneNumber).join(", ")}`);
+    onProgress?.(durations.length, durations.length, `Сценарий готов: ${durations.length} сцен`);
+    return { ...analysis, scenes, modelId: model, recommendedDurationSeconds: durations.reduce((sum, duration) => sum + duration, 0) };
   }
 
-  /** Генерация сцен батчами (targetScenes>0) или одним лёгким запросом (иначе). Каждая сцена ~5 секунд при батчах. */
-  private async buildScenes(planBrief: Record<string, unknown>, targetScenes: number, language: string, onProgress?: (done: number, total: number) => void): Promise<Scene[]> {
-    const settings = await this.store.publicSettings();
-    const sceneDurationSeconds = 5;
-    const scenes: Scene[] = [];
-    const push = (scene: { narration?: string; imagePrompt?: string; durationSeconds?: number }, duration: number): void => {
-      scenes.push({
-        id: createId("scene"),
-        order: scenes.length,
-        title: `Сцена ${scenes.length + 1}`,
-        narration: scene.narration || "",
-        imagePrompt: scene.imagePrompt || "",
-        animationPrompt: "Плавное движение камеры и естественное движение объектов",
-        durationSeconds: duration,
-        status: "draft"
-      });
+  private async createScenarioPlan(
+    source: Record<string, unknown>,
+    durations: number[],
+    language: string,
+    model: string
+  ): Promise<ScenarioPlan> {
+    const content = await this.chat(model, [
+      {
+        role: "system",
+        content: "Ты главный редактор YouTube-сценария. Создай компактный цельный план без написания самих сцен. Верни только JSON без markdown."
+      },
+      {
+        role: "user",
+        content: [
+          `Исходные данные: ${JSON.stringify(source)}`,
+          `Язык: ${language}. Длина: ${durations.reduce((sum, value) => sum + value, 0)} секунд. Сцен: ${durations.length}.`,
+          "Продумай хук, обещание зрителю, развитие без повторов, кульминацию и короткий финал.",
+          durations.reduce((sum, value) => sum + value, 0) <= 60
+            ? "Это короткий ролик: выбери ОДИН конфликт и одну ясную сюжетную линию. Не пытайся сжать всю биографию или весь исходный ролик; максимум 3 ключевых факта."
+            : "Для длинного ролика распределяй факты постепенно и завершай смысловые блоки микро-клиффхэнгерами.",
+          "Для фактов не выдумывай точные цифры и источники, которых нет во входных данных.",
+          "Верни JSON: {title,promise,tone,visualBible,continuityRules[],sections:[{title,goal,keyPoints[],transition}]}.",
+          "Секций должно быть 5–12; вместе они должны покрывать весь ролик."
+        ].join("\n")
+      }
+    ], 3_500, "high");
+    const parsed = extractJson<Partial<ScenarioPlan>>(content, "создании плана сценария");
+    const sections = (Array.isArray(parsed.sections) ? parsed.sections : [])
+      .map((section) => ({
+        title: String(section?.title ?? "Раздел").trim(),
+        goal: String(section?.goal ?? "Раскрыть тему").trim(),
+        keyPoints: toStringList(section?.keyPoints),
+        transition: String(section?.transition ?? "Плавно перейти к следующей мысли").trim()
+      }))
+      .filter((section) => section.title && section.goal);
+    if (sections.length === 0) throw new Error("Модель не вернула структуру сценария");
+    return {
+      title: String(parsed.title ?? source.title ?? "Новый ролик").trim(),
+      promise: String(parsed.promise ?? source.hook ?? "Дать зрителю ясный ответ").trim(),
+      tone: String(parsed.tone ?? "Живой, уверенный, без канцелярита").trim(),
+      visualBible: String(parsed.visualBible ?? "Единый мир, свет и внешний вид повторяющихся персонажей").trim(),
+      continuityRules: toStringList(parsed.continuityRules),
+      sections
     };
-    if (targetScenes > 0) {
-      const batchSize = 30;
-      const maxBatches = Math.ceil(targetScenes / batchSize) + 2;
-      for (let batch = 0; batch < maxBatches && scenes.length < targetScenes; batch += 1) {
-        const from = scenes.length + 1;
-        const count = Math.min(batchSize, targetScenes - scenes.length);
-        const last = scenes.at(-1)?.narration ?? "";
-        let batchContent: string;
+  }
+
+  private async buildScenes(
+    plan: ScenarioPlan,
+    durations: number[],
+    language: string,
+    model: string,
+    onProgress?: (done: number, total: number, stage?: string) => void
+  ): Promise<Scene[]> {
+    const scenes: Scene[] = [];
+    let batchSize = 15;
+    while (scenes.length < durations.length) {
+      const from = scenes.length;
+      const batchDurations = durations.slice(from, from + batchSize);
+      const context = scenes.slice(-2).map((scene) => scene.narration);
+      let parsed: GeneratedScene[] = [];
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          batchContent = await this.chat(settings.textModel, [
+          const content = await this.chat(model, [
             { role: "system", content: SCENE_WRITER_SYSTEM },
             {
               role: "user",
               content: [
-                `# План ролика`,
-                JSON.stringify(planBrief),
-                ``,
+                `# План ролика\n${JSON.stringify(plan)}`,
                 `# Задание`,
-                `Язык озвучки: ${language}. Всего сцен в ролике: ${targetScenes}, каждая ≈${sceneDurationSeconds} секунд.`,
-                `Сейчас нужны сцены с ${from} по ${from + count - 1} — ровно ${count} штук.`,
-                `Позиция в ролике: ${describePosition(from, targetScenes)}.`,
-                last ? `Последняя написанная фраза: «${last}». Продолжай мысль дальше, без повторов и без пересказа сказанного.` : `Это начало ролика — первая фраза обязана цеплять с первой секунды.`,
-                ``,
-                `# Формат ответа`,
-                `Только JSON-массив из ${count} объектов: [{"narration":"...","imagePrompt":"..."}]`
-              ].join("\n")
+                `Язык озвучки: ${language}. Всего сцен: ${durations.length}.`,
+                `Напиши сцены ${from + 1}–${from + batchDurations.length}. Позиция: ${describePosition(from + 1, durations.length)}.`,
+                `Длительности этих сцен: ${JSON.stringify(batchDurations)} секунд. На каждую секунду нужно примерно 1.7–2 слова озвучки, чтобы диктор не тараторил.`,
+                durations.reduce((sum, value) => sum + value, 0) <= 60
+                  ? "Это Shorts: веди одну понятную линию от хука к развязке. Не перечисляй всю жизнь героя, много дат, имён и стран подряд."
+                  : "Это длинный ролик: раскрывай события последовательно и не забегай в финал раньше времени.",
+                context.length > 0 ? `Две предыдущие реплики для связности: ${JSON.stringify(context)}` : "Это начало: первая фраза должна сразу цеплять, без приветствия.",
+                `Верни ровно ${batchDurations.length} объектов: [{"title":"...","narration":"...","imagePrompt":"...","animationPrompt":"..."}]`
+              ].join("\n\n")
             }
-          ], 6_000, "low");
+          ], Math.min(6_000, 900 + batchDurations.length * 280), "low");
+          parsed = parseSceneArray(content);
+          if (parsed.length === batchDurations.length) break;
+          lastError = new Error(`Модель вернула ${parsed.length} сцен вместо ${batchDurations.length}`);
         } catch (error) {
-          if (scenes.length > 0) break; // частичный сценарий лучше полного отказа
-          throw error;
+          lastError = error;
         }
-        const batchScenes = parseSceneArray(batchContent);
-        if (batchScenes.length === 0) break;
-        for (const scene of batchScenes) {
-          if (scenes.length >= targetScenes) break;
-          push(scene, sceneDurationSeconds);
-        }
-        onProgress?.(scenes.length, targetScenes);
       }
-    } else {
-      const fallbackContent = await this.chat(settings.textModel, [
-        { role: "system", content: "Ты сценарист коротких видео. Верни только JSON-массив без markdown." },
-        { role: "user", content: `План: ${JSON.stringify(planBrief)}\nЯзык: ${language}\nРазбей на 8–12 сцен. Верни JSON-массив [{"narration":"...","imagePrompt":"...","durationSeconds":8}]` }
-      ], 6_000, "low");
-      for (const scene of parseSceneArray(fallbackContent)) push(scene, Math.max(3, Number(scene.durationSeconds) || 8));
+      if (parsed.length !== batchDurations.length) {
+        if (batchSize > 1) {
+          batchSize = Math.max(1, Math.floor(batchDurations.length / 2));
+          continue;
+        }
+        const reason = lastError instanceof Error ? lastError.message : String(lastError ?? "неизвестная ошибка");
+        throw new Error(`Не удалось написать сцены ${from + 1}–${from + batchDurations.length}: ${reason}`);
+      }
+      for (const [index, generated] of parsed.entries()) {
+        const order = scenes.length;
+        scenes.push({
+          id: createId("scene"),
+          order,
+          title: generated.title?.trim() || `Сцена ${order + 1}`,
+          narration: generated.narration?.trim() || "",
+          imagePrompt: generated.imagePrompt?.trim() || "",
+          animationPrompt: generated.animationPrompt?.trim() || "Плавное естественное движение камеры и объектов",
+          durationSeconds: batchDurations[index]!,
+          status: "draft"
+        });
+      }
+      onProgress?.(scenes.length, durations.length);
+      batchSize = 15;
     }
     return scenes;
+  }
+
+  private async reviewScenes(plan: ScenarioPlan, scenes: Scene[], model: string, onStage?: (stage: string) => void): Promise<Scene[]> {
+    const localIssues = findSceneIssues(scenes, scenes.length);
+    const critiqueContent = await this.chat(model, [
+      {
+        role: "system",
+        content: "Ты строгий редактор сценария. Найди только реальные проблемы связности, повторов, слабого хука и провисаний. Верни JSON без markdown, максимум 12 замечаний."
+      },
+      {
+        role: "user",
+        content: `План: ${JSON.stringify(plan)}\nСцены: ${JSON.stringify(scenes.map((scene) => ({ sceneNumber: scene.order + 1, narration: scene.narration })))}\nЛокальные проверки: ${JSON.stringify(localIssues)}\nВерни {"issues":[{"sceneNumber":1,"reason":"..."}]}. Не требуй переписывать хорошие сцены.`
+      }
+    ], 1_800, "medium");
+    const critique = extractJson<{ issues?: Array<{ sceneNumber?: number; reason?: string }> }>(critiqueContent, "критике сценария");
+    const aiIssues: SceneIssue[] = (critique.issues ?? []).slice(0, 12).flatMap((issue) => {
+      const sceneNumber = Math.round(Number(issue.sceneNumber));
+      if (sceneNumber < 1 || sceneNumber > scenes.length) return [];
+      return [{ sceneNumber, kind: "critic" as const, reason: String(issue.reason ?? "Улучшить сцену").trim() }];
+    });
+    const byScene = new Map<number, SceneIssue>();
+    for (const issue of [...localIssues, ...aiIssues]) {
+      const existing = byScene.get(issue.sceneNumber);
+      byScene.set(issue.sceneNumber, existing ? { ...existing, reason: `${existing.reason}; ${issue.reason}` } : issue);
+      if (byScene.size >= 16) break;
+    }
+    const issues = [...byScene.values()];
+    if (issues.length === 0) return scenes;
+
+    onStage?.(`Исправляю найденные места: ${issues.length} сцен…`);
+    const rewriteContent = await this.chat(model, [
+      { role: "system", content: `${SCENE_WRITER_SYSTEM}\nИсправляй только перечисленные сцены. Сохрани смысл, место в истории и длительность.` },
+      {
+        role: "user",
+        content: `План: ${JSON.stringify(plan)}\nПроблемы и соседний контекст: ${JSON.stringify(issues.map((issue) => {
+          const index = issue.sceneNumber - 1;
+          return { issue, before: scenes[index - 1]?.narration, scene: scenes[index], after: scenes[index + 1]?.narration };
+        }))}\nВерни JSON {"scenes":[{"sceneNumber":1,"title":"...","narration":"...","imagePrompt":"...","animationPrompt":"..."}]}. Ровно по одному объекту на каждую указанную сцену.`
+      }
+    ], Math.min(5_000, 800 + issues.length * 260), "low");
+    const rewrites = extractJson<{ scenes?: Array<GeneratedScene & { sceneNumber?: number }> }>(rewriteContent, "исправлении сценария").scenes ?? [];
+    const next = scenes.map((scene) => ({ ...scene }));
+    for (const rewrite of rewrites) {
+      const index = Math.round(Number(rewrite.sceneNumber)) - 1;
+      const current = next[index];
+      if (!current) continue;
+      next[index] = {
+        ...current,
+        title: rewrite.title?.trim() || current.title,
+        narration: rewrite.narration?.trim() || current.narration,
+        imagePrompt: rewrite.imagePrompt?.trim() || current.imagePrompt,
+        animationPrompt: rewrite.animationPrompt?.trim() || current.animationPrompt
+      };
+    }
+    return next;
   }
 
   async transcribeAudio(audio: Buffer, format: string): Promise<TranscriptSegment[]> {
@@ -321,55 +475,8 @@ export class AnyModelClient {
     })).filter((segment) => segment.text);
   }
 
-  async refine(analysis: ReferenceAnalysis, instructions: string): Promise<ReferenceAnalysis> {
-    return this.analyzeReference({ url: analysis.sourceUrl, language: analysis.language, instructions: `${analysis.instructions || ""}\nТекущий разбор: ${JSON.stringify(analysis)}\nИзмени по просьбе: ${instructions}` });
-  }
-
-  async createProjectPlanFromChat(messages: AiChatMessage[], language: string): Promise<{ title: string; topic: string; scenes: Scene[] }> {
-    const settings = await this.store.publicSettings();
-    const content = await this.chat(settings.textModel, [
-      { role: "system", content: SCENE_WRITER_SYSTEM },
-      {
-        role: "user",
-        content: [
-          "# Задача",
-          "Ниже — переписка пользователя с AI-режиссёром. Определи, ПРО ЧТО должен быть ролик, и напиши сценарий именно на эту тему.",
-          "",
-          "# Критично",
-          "Переписка — это служебное обсуждение процесса. НЕ пиши сценарий о том, как делать ролики, как удерживать зрителя, про хуки и монтаж, если сам ролик не об этом.",
-          "Тема ролика — это то, что пользователь просил снять (например разбор ниши, история, обзор). Служебные фразы ассистента вроде «разбор готов», «выбери тему» игнорируй.",
-          "",
-          `# Язык озвучки: ${language}`,
-          "",
-          "# Переписка",
-          messages.map((message) => `${message.role}: ${message.content}`).join("\n\n"),
-          "",
-          "# Формат ответа",
-          'Только JSON: {"title":"заголовок ролика","topic":"о чём ролик одним предложением","scenes":[{"title":"...","narration":"...","imagePrompt":"...","animationPrompt":"...","durationSeconds":5}]}'
-        ].join("\n")
-      }
-    ]);
-    const parsed = extractJson<{
-      title?: string;
-      topic?: string;
-      scenes?: Array<Partial<Scene>>;
-    }>(content, "создании проекта из темы чата");
-    const scenes = (parsed.scenes ?? []).map((scene, order) => ({
-      id: createId("scene"),
-      order,
-      title: scene.title || `Сцена ${order + 1}`,
-      narration: scene.narration || "",
-      imagePrompt: scene.imagePrompt || "",
-      animationPrompt: scene.animationPrompt || "",
-      durationSeconds: Math.max(3, Number(scene.durationSeconds) || 8),
-      status: "draft" as const
-    }));
-    if (scenes.length === 0) throw new Error("Модель не вернула сцены для темы чата");
-    return {
-      title: parsed.title?.trim() || "Проект из темы чата",
-      topic: parsed.topic?.trim() || [...messages].reverse().find((message) => message.role === "user")?.content || "Сценарий из сохранённого диалога",
-      scenes
-    };
+  async refine(analysis: ReferenceAnalysis, instructions: string, modelId?: string): Promise<ReferenceAnalysis> {
+    return this.analyzeReference({ url: analysis.sourceUrl, language: analysis.language, instructions: `${analysis.instructions || ""}\nТекущий разбор: ${JSON.stringify(analysis)}\nИзмени по просьбе: ${instructions}`, modelId });
   }
 
   async generateImage(prompt: string, size: string, references: string[] = []): Promise<Buffer> {
@@ -455,12 +562,13 @@ export class AnyModelClient {
   }
 
   /** Портрет главного героя по сценарию: текстовая модель описывает персонажа, дешёвая модель рисует. */
-  async characterReference(project: Project): Promise<{ name: string; prompt: string; image: Buffer }> {
+  async characterReference(project: Project, onStage?: (stage: string) => void): Promise<{ name: string; prompt: string; image: Buffer }> {
     const settings = await this.store.publicSettings();
     const scenario = project.scenes
       .map((scene) => `${scene.narration} | ${scene.imagePrompt}`)
       .join("\n")
       .slice(0, 12_000);
+    onStage?.("Референс героя: анализирую повторяющегося персонажа…");
     const content = await this.chat(settings.textModel, [
       {
         role: "system",
@@ -472,7 +580,9 @@ export class AnyModelClient {
     if (!parsed.prompt?.trim()) throw new Error("Модель не вернула описание героя");
     const style = project.settings.image.style.trim();
     const fullPrompt = `Character reference sheet, full body portrait, neutral plain background. ${parsed.prompt}${style ? `\nStyle: ${style}` : ""}`;
+    onStage?.("Референс героя: генерирую портрет…");
     const image = await this.generateImage(fullPrompt, "1024x1024");
+    onStage?.("Референс героя готов");
     return { name: parsed.name?.trim() || "Главный герой", prompt: parsed.prompt, image };
   }
 
@@ -653,7 +763,7 @@ const SCENE_WRITER_SYSTEM = [
   "Ты — сценарист вирусных YouTube-роликов и художник-постановщик в одном лице.",
   "",
   "ОЗВУЧКА (narration):",
-  "1. Одна сцена = одна законченная мысль, 12–16 слов, разговорный живой язык, короткие предложения.",
+  "1. Одна сцена = одна законченная мысль. Соблюдай указанную длительность и целевое число слов, пиши разговорно и короткими предложениями.",
   "2. Пиши ГОТОВЫЙ текст для диктора: без ремарок, пометок, номеров сцен и слов «сцена», «кадр», «голос за кадром».",
   "3. Держи удержание: конкретика вместо общих слов, факты, цифры, детали, приёмы «а вот что было дальше», микро-интрига в конце каждой 3–4 сцены.",
   "4. Нельзя повторять одну мысль дважды и нельзя пересказывать уже сказанное другими словами.",
@@ -666,6 +776,10 @@ const SCENE_WRITER_SYSTEM = [
   "9. Запрещено: текст, надписи, субтитры, логотипы, интерфейсы, коллажи, рамки, водяные знаки в кадре.",
   "10. Не указывай в промпте стиль и соотношение сторон — приложение добавит их само.",
   "",
+  "АНИМАЦИЯ (animationPrompt):",
+  "11. Пиши на английском конкретное движение камеры, персонажа и объектов именно для этой сцены.",
+  "12. Не повторяй один и тот же animationPrompt во всех сценах и не добавляй монтажные склейки.",
+  "",
   "Верни только JSON-массив без markdown и без пояснений."
 ].join("\n");
 
@@ -676,6 +790,55 @@ function describePosition(from: number, total: number): string {
   if (share < 0.75) return "основная часть — раскрытие по шагам, факты и примеры, микро-интриги для удержания";
   if (share < 0.92) return "кульминация — самый сильный вывод или поворот";
   return "финал — короткий вывод и призыв к действию (подписка/комментарий), без затянутого прощания";
+}
+
+/** Быстрая проверка без расхода токенов; AI затем правит только найденные места. */
+export function findSceneIssues(scenes: Scene[], expectedCount = scenes.length): SceneIssue[] {
+  const issues: SceneIssue[] = [];
+  const seen = new Map<string, number>();
+  let previousWords = new Set<string>();
+  if (scenes.length !== expectedCount && scenes.length > 0) {
+    issues.push({ sceneNumber: scenes.length, kind: "empty", reason: `Получено ${scenes.length} сцен вместо ${expectedCount}` });
+  }
+  for (const scene of scenes) {
+    const sceneNumber = scene.order + 1;
+    const normalized = normalizeNarration(scene.narration);
+    if (!normalized || !scene.imagePrompt.trim() || !scene.animationPrompt.trim()) {
+      issues.push({ sceneNumber, kind: "empty", reason: "Пустой текст озвучки или промпт сцены" });
+    }
+    const firstSeen = normalized ? seen.get(normalized) : undefined;
+    if (firstSeen !== undefined) {
+      issues.push({ sceneNumber, kind: "duplicate", reason: `Повторяет сцену ${firstSeen}` });
+    } else if (normalized) {
+      seen.set(normalized, sceneNumber);
+    }
+    const words = new Set(normalized.split(" ").filter((word) => word.length > 2));
+    if (sceneNumber > 1 && words.size >= 5 && similarity(words, previousWords) >= 0.82) {
+      issues.push({ sceneNumber, kind: "duplicate", reason: "Почти повторяет предыдущую сцену" });
+    }
+    previousWords = words;
+    if (sceneNumber > 1 && /^(привет|здравствуй|добрый\s+(?:день|вечер|утро)|дамы\s+и\s+господа)(?:\s|$)/i.test(normalized)) {
+      issues.push({ sceneNumber, kind: "greeting", reason: "Повторное приветствие внутри ролика" });
+    }
+    const wordCount = scene.narration.trim().split(/\s+/).filter(Boolean).length;
+    const minWords = Math.max(3, Math.floor(scene.durationSeconds * 1.1));
+    const maxWords = Math.max(minWords + 2, Math.ceil(scene.durationSeconds * 3.2));
+    if (wordCount < minWords || wordCount > maxWords) {
+      issues.push({ sceneNumber, kind: "length", reason: `${wordCount} слов для ${scene.durationSeconds} секунд; ожидается ${minWords}–${maxWords}` });
+    }
+  }
+  return issues;
+}
+
+function normalizeNarration(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+function similarity(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+  let common = 0;
+  for (const word of left) if (right.has(word)) common += 1;
+  return common / new Set([...left, ...right]).size;
 }
 
 /** «Память режиссёра»: список уже сделанных роликов, чтобы новые темы не повторялись. */
@@ -787,16 +950,16 @@ export function toStringList(value: unknown): string[] {
 }
 
 /** Разбирает ответ модели в массив сцен: принимает и голый JSON-массив, и объект { scenes: [...] }, и массив внутри текста. */
-export function parseSceneArray(content: string): Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> {
+export function parseSceneArray(content: string): GeneratedScene[] {
   const cleaned = content.replace(/^```json\s*|```$/g, "").trim();
   const attempts = [cleaned, cleaned.match(/\[[\s\S]*\]/)?.[0] ?? ""];
   for (const candidate of attempts) {
     if (!candidate) continue;
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      if (Array.isArray(parsed)) return parsed as Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }>;
+      if (Array.isArray(parsed)) return parsed as GeneratedScene[];
       if (parsed && typeof parsed === "object" && Array.isArray((parsed as { scenes?: unknown[] }).scenes)) {
-        return (parsed as { scenes: Array<{ narration?: string; imagePrompt?: string; durationSeconds?: number }> }).scenes;
+        return (parsed as { scenes: GeneratedScene[] }).scenes;
       }
     } catch {
       // пробуем следующий вариант

@@ -1,5 +1,6 @@
 import { connect as netConnect, type Socket } from "node:net";
 import { request as httpsRequest } from "node:https";
+import { connect as tlsConnect } from "node:tls";
 
 export interface ProxyResponse {
   ok: boolean;
@@ -133,7 +134,9 @@ export function proxyRequest(
         path: `${target.pathname}${target.search}`,
         headers: init.headers,
         timeout: timeoutMs,
-        ...(socket ? { createConnection: () => socket } : {})
+        // Через прокси идёт сырой TCP-туннель — TLS поднимаем сами, иначе в 443 уходит открытый HTTP
+        // и Google просто закрывает соединение («socket hang up»).
+        ...(socket ? { createConnection: () => tlsConnect({ socket, servername: target.hostname }) } : {})
       }, (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));

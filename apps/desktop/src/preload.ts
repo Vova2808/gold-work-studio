@@ -7,9 +7,9 @@ const api: DesktopApi = {
   createProject: (input: CreateProjectInput) => ipcRenderer.invoke("projects:create", input),
   createDemoProject: () => ipcRenderer.invoke("projects:create-demo"),
   analyzeReference: (input) => ipcRenderer.invoke("director:analyze-reference", input),
-  refineReferenceAnalysis: (analysis, instructions) => ipcRenderer.invoke("director:refine-reference", analysis, instructions),
+  refineReferenceAnalysis: (analysis, instructions, modelId) => ipcRenderer.invoke("director:refine-reference", analysis, instructions, modelId),
   createReferenceProject: (input) => ipcRenderer.invoke("projects:create-reference", input),
-  regenerateReferenceScenes: (analysis, targetSeconds) => ipcRenderer.invoke("director:regenerate-scenes", analysis, targetSeconds),
+  regenerateReferenceScenes: (analysis, targetSeconds, modelId) => ipcRenderer.invoke("director:regenerate-scenes", analysis, targetSeconds, modelId),
   onDirectorProgress: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, stage: string) => listener(stage);
     ipcRenderer.on("director:progress", handler);
@@ -33,27 +33,28 @@ const api: DesktopApi = {
   createCharacterReference: (projectId) => ipcRenderer.invoke("projects:character-reference", projectId),
   assembleProject: (projectId) => ipcRenderer.invoke("projects:assemble", projectId),
   improveScene: (projectId, sceneId, instructions) => ipcRenderer.invoke("projects:improve-scene", projectId, sceneId, instructions),
-  mediaUrl: (path) => `gw-media://${encodeURIComponent(path)}`,
+  mediaUrl: (path) => `gw-media://local/${encodeURIComponent(path)}`,
   getYouTubeSettings: () => ipcRenderer.invoke("youtube:get-settings"),
   saveYouTubeSettings: (input) => ipcRenderer.invoke("youtube:save-settings", input),
   clearYouTubeKey: () => ipcRenderer.invoke("youtube:clear-key"),
   testYouTubeConnection: () => ipcRenderer.invoke("youtube:test"),
-  chatWithAnyModel: (messages) => ipcRenderer.invoke("anymodel:chat", messages),
-  streamChatWithAnyModel: async (messages, onChunk) => {
+  chatWithAnyModel: (messages, modelId) => ipcRenderer.invoke("anymodel:chat", messages, modelId),
+  streamChatWithAnyModel: async (messages, onChunk, modelId) => {
     const requestId = crypto.randomUUID();
     const channel = `anymodel:chat-chunk:${requestId}`;
     const listener = (_event: Electron.IpcRendererEvent, chunk: string) => onChunk(chunk);
     ipcRenderer.on(channel, listener);
     try {
-      return await ipcRenderer.invoke("anymodel:chat-stream", requestId, messages);
+      return await ipcRenderer.invoke("anymodel:chat-stream", requestId, messages, modelId);
     } finally {
       ipcRenderer.removeListener(channel, listener);
     }
   },
   listChatTopics: () => ipcRenderer.invoke("chat-topics:list"),
   getChatTopic: (id) => ipcRenderer.invoke("chat-topics:get", id),
-  createChatTopic: (title) => ipcRenderer.invoke("chat-topics:create", title),
+  createChatTopic: (title, modelId) => ipcRenderer.invoke("chat-topics:create", title, modelId),
   appendChatMessage: (topicId, message) => ipcRenderer.invoke("chat-topics:append", topicId, message),
+  setChatTopicModel: (topicId, modelId) => ipcRenderer.invoke("chat-topics:set-model", topicId, modelId),
   saveChatTopicAnalysis: (topicId, analysis) => ipcRenderer.invoke("chat-topics:save-analysis", topicId, analysis),
   deleteChatTopic: (id) => ipcRenderer.invoke("chat-topics:delete", id),
   applyChatTopicToProject: (projectId, topicId) => ipcRenderer.invoke("projects:apply-chat-topic", projectId, topicId),
@@ -67,12 +68,18 @@ const api: DesktopApi = {
   stopGeneration: (projectId: string) => ipcRenderer.invoke("queue:stop", projectId),
   retryTask: (taskId: string) => ipcRenderer.invoke("queue:retry", taskId),
   clearFinishedTasks: () => ipcRenderer.invoke("queue:clear-finished"),
-  regenerateScene: (projectId: string, sceneId: string) =>
-    ipcRenderer.invoke("queue:regenerate-scene", projectId, sceneId),
+  regenerateScene: (projectId: string, sceneId: string | string[], target: "image" | "video" | "audio" | "all" = "all") =>
+    ipcRenderer.invoke("queue:regenerate-scene", projectId, sceneId, target),
   openProjectFolder: (projectId: string) => ipcRenderer.invoke("projects:open-folder", projectId),
   openSceneFolder: (projectId: string, sceneId: string) => ipcRenderer.invoke("projects:open-scene-folder", projectId, sceneId),
   writeLog: (level: LogLevel, message: string, details?: Record<string, unknown>) =>
     ipcRenderer.invoke("app:write-log", level, message, details),
+  readLogs: (limit) => ipcRenderer.invoke("app:read-logs", limit),
+  onLogEntry: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, entry: Parameters<typeof listener>[0]) => listener(entry);
+    ipcRenderer.on("app:log-entry", handler);
+    return () => ipcRenderer.removeListener("app:log-entry", handler);
+  },
   openLogFile: () => ipcRenderer.invoke("app:open-log"),
   pickFiles: (kind: "image" | "audio" | "video" | "json" | "cookies", multiple = false) =>
     ipcRenderer.invoke("app:pick-files", kind, multiple),

@@ -129,6 +129,23 @@ test("concurrent patches are merged and active generation locks scene structure"
   );
 });
 
+test("timeline can keep the existing Final.mp4 while saving montage settings", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const project = await service.create(
+    { title: "Монтаж", topic: "Тема", aspectRatio: "16:9", language: "Русский", mode: "standard" },
+    true
+  );
+  await service.update(project.id, { outputPath: "C:/project/Final.mp4", status: "complete" });
+  const preserved = await service.update(project.id, {
+    scenes: project.scenes.map((scene) => ({ ...scene, transition: "fade" as const })),
+    outputPath: "C:/project/Final.mp4"
+  });
+  assert.equal(preserved.outputPath, "C:/project/Final.mp4");
+
+  const invalidated = await service.update(project.id, { topic: "Полностью новая тема" });
+  assert.equal(invalidated.outputPath, undefined);
+});
+
 test("project keeps the saved director chat topic link", async () => {
   const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
   const project = await service.create(

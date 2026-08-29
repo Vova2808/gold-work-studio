@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
-import { ArrowDown, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, FileText, Folder, FolderOpen, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { createDefaultProjectSettings, IMAGE_STYLES, parseDurationSeconds, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type DesktopApi, type GoogleSettings, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bot, Bookmark, Captions, Check, ChevronLeft, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, EyeOff, FileText, Folder, FolderOpen, GripVertical, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, LogOut, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
+import { allocateSceneDurations, createDefaultProjectSettings, IMAGE_STYLES, parseExplicitDurationSeconds, parsePastedTranscript, ttsLanguageCode, TTS_VOICES, type AnyModelSettings, type ChatTopicSummary, type ConsoleLogEntry, type DesktopApi, type GoogleSettings, type LogLevel, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type SubtitleSettings, type UpdateProjectInput, type VoicerSettings, type VoicerTemplate, type YouTubeSettings } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { io } from "socket.io-client";
 
@@ -69,6 +69,8 @@ const statusLabels: Record<Project["status"], string> = {
   failed: "Остановлен",
 };
 
+type ConsoleViewState = { query: string; level: "all" | LogLevel; autoScroll: boolean };
+
 export function App() {
   const api = window.goldWork ?? fallbackApi;
   const [activeSection, setActiveSection] = useState<SectionKey>("dashboard");
@@ -82,7 +84,9 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
-  const [uiLog, setUiLog] = useState<Array<{ time: string; level: string; text: string }>>([]);
+  const [consoleEntries, setConsoleEntries] = useState<ConsoleLogEntry[]>([]);
+  const [consoleView, setConsoleView] = useState<ConsoleViewState>({ query: "", level: "all", autoScroll: true });
+  const consoleHistoryGeneration = useRef(0);
   const pageScrollRef = useRef<HTMLDivElement>(null);
   const socketConnectedRef = useRef(false);
   const [directorProgress, setDirectorProgress] = useState<string | null>(null);
@@ -90,11 +94,35 @@ export function App() {
 
   /** Пишет действие в Console Output и в лог-файл приложения. */
   function logAction(text: string, level: "UI" | "INFO" | "ERROR" = "UI") {
-    setUiLog((current) => [...current.slice(-199), { time: new Date().toLocaleTimeString("ru-RU"), level, text }]);
     void api.writeLog(level === "ERROR" ? "error" : "info", "ui.action", { text }).catch(() => undefined);
   }
   useEffect(() => { if (notice) logAction(notice, "INFO"); }, [notice]);
   useEffect(() => { if (error) logAction(error, "ERROR"); }, [error]);
+  useEffect(() => {
+    let active = true;
+    const append = (entry: ConsoleLogEntry) => {
+      if (!active) return;
+      setConsoleEntries((current) => current.some((item) => item.id === entry.id) ? current : [...current, entry].slice(-1000));
+    };
+    const unsubscribe = api.onLogEntry(append);
+    const historyGeneration = consoleHistoryGeneration.current;
+    void api.readLogs(800).then((history) => {
+      if (!active || consoleHistoryGeneration.current !== historyGeneration) return;
+      setConsoleEntries((current) => {
+        const byId = new Map([...history, ...current].map((entry) => [entry.id, entry]));
+        return [...byId.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-1000);
+      });
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  function clearConsole() {
+    consoleHistoryGeneration.current += 1;
+    setConsoleEntries([]);
+  }
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const overlayProject = overlay ? projects.find((project) => project.id === overlay.projectId) : undefined;
@@ -177,12 +205,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (error) void api.writeLog("error", "ui.operation_failed", { message: error });
-  }, [error]);
-
-  useEffect(() => {
     if (!notice) return;
-    void api.writeLog("info", "ui.notice", { message: notice });
     const timeout = window.setTimeout(() => setNotice(null), 4500);
     return () => window.clearTimeout(timeout);
   }, [notice]);
@@ -221,6 +244,32 @@ export function App() {
     }
   }
 
+  async function createProjectFromChat(topicId?: string) {
+    if (!topicId) {
+      await createProject(true);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await api.createProject({
+        title: "Новый сценарий из AI-чата",
+        topic: "Тема будет определена по сохранённому диалогу",
+        aspectRatio: "16:9",
+        language: "Русский",
+        mode: "standard"
+      });
+      const updated = await api.applyChatTopicToProject(project.id, topicId);
+      upsertProject(updated);
+      setActiveSection("project");
+      setNotice(`Проект создан из диалога: ${updated.scenes.length} сцен. При необходимости выберите другую длину и пересоберите сценарий.`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createReferenceProject(analysis: ReferenceAnalysis) {
     setBusy(true);
     setError(null);
@@ -245,7 +294,7 @@ export function App() {
       // собираем полный сценарий под длину оригинала (+ ~1.5 мин) перед созданием проекта.
       let finalAnalysis = analysis;
       const targetSeconds = (analysis.youtubeContext?.durationSeconds ?? 0) + 90;
-      const expectedScenes = Math.min(200, Math.max(6, Math.round(targetSeconds / 5)));
+      const expectedScenes = allocateSceneDurations(targetSeconds).length;
       if (targetSeconds > 90 && analysis.scenes.length < Math.min(expectedScenes, 9)) {
         setNotice(`Собираю полный сценарий под длину оригинала (~${Math.round(targetSeconds / 60)} мин, ${expectedScenes} сцен)…`);
         finalAnalysis = await api.regenerateReferenceScenes(analysis, targetSeconds);
@@ -381,13 +430,11 @@ export function App() {
     }
   }
 
-  async function regenerateScene(projectId: string, sceneId: string) {
+  async function regenerateScene(projectId: string, sceneId: string | string[], target: "image" | "video" | "audio" | "all" = "all") {
     setBusy(true);
     try {
-      await api.regenerateScene(projectId, sceneId);
-      setOverlay(null);
-      setSelectedProjectId(projectId);
-      setActiveSection("queue");
+      await api.regenerateScene(projectId, sceneId, target);
+      setNotice(target === "image" ? "Перегенерация изображения запущена." : target === "video" ? "Перегенерация AI-видео запущена." : "Перегенерация сцены запущена.");
       await refresh();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -406,6 +453,7 @@ export function App() {
 
   function navigate(section: SectionKey) {
     logAction(`Переход: ${section}`);
+    setOverlay(null);
     setActiveSection(section);
     if (section === "settings") void api.getAppInfo().then(setAppInfo);
   }
@@ -425,20 +473,23 @@ export function App() {
             )}
             <StepHintBar hint={computeStepHint(appInfo, selectedProject, queue, activeSection, directorProgress)} onNavigate={navigate} />
           </div>
-          <div className="page-scroll" ref={pageScrollRef}>
+          <div className={`page-scroll${activeSection === "director" ? " director-scroll" : ""}`} ref={pageScrollRef}>
             {activeSection === "dashboard" && <Dashboard projects={projects} selectedId={selectedProject?.id} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onOpenFolder={(id) => void openProjectFolder(id)} />}
-            {activeSection === "project" && <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />}
-            {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onBack={() => navigate("project")} />}
+            <div className={activeSection === "project" ? "section-host" : "hidden-section"}>
+              <ProjectEditor project={selectedProject} busy={busy} onBack={() => navigate("dashboard")} onSave={saveProject} onApplyChatTopic={applyChatTopic} onGenerate={(id) => void startGeneration(id)} onNavigate={navigate} onInfo={setNotice} />
+            </div>
+            {activeSection === "scenario" && <ScenarioEditor project={selectedProject} onSave={saveProject} onRegenerateImage={(sceneId) => regenerateScene(selectedProject?.id ?? "", sceneId, "image")} onBack={() => navigate("project")} />}
             {activeSection === "subtitles" && <SubtitleStudio project={selectedProject} onSave={saveProject} />}
             {/* Director всегда смонтирован (скрывается CSS): чат и разбор не пропадают при переключении вкладок.
                 display:contents — обёртка не создаёт свой блок и не ломает растяжение чата по высоте. */}
             <div className={activeSection === "director" ? "section-host" : "hidden-section"}>
-              <Director busy={busy} onCreate={() => void createProject(true)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
+              <Director busy={busy} onCreate={(topicId) => void createProjectFromChat(topicId)} onPickTopic={(analysis) => void createProjectFromTopic(analysis)} onInfo={setNotice} onLog={logAction} />
             </div>
             {activeSection === "projects" && <ProjectsPage projects={projects} busy={busy} onCreate={() => void createProject()} onOpen={openProject} onDuplicate={(id) => void duplicateProject(id)} onDelete={(id) => void deleteProject(id)} onPreview={(id) => setOverlay({ type: "preview", projectId: id })} onTimeline={(id) => setOverlay({ type: "timeline", projectId: id })} onGenerate={(id) => void startGeneration(id)} onAssemble={(id) => void reassembleProject(id)} onOpenFolder={(id) => void openProjectFolder(id)} onSave={saveProject} />}
             {activeSection === "queue" && <QueuePage tasks={queue} projects={projects} onPause={(id) => void queueAction(() => api.pauseGeneration(id))} onResume={(id) => void queueAction(() => api.resumeGeneration(id))} onStop={(id) => void queueAction(() => api.stopGeneration(id))} onRetry={(id) => void queueAction(() => api.retryTask(id))} onClear={() => void queueAction(() => api.clearFinishedTasks())} />}
+            {activeSection === "console" && <ConsolePage entries={consoleEntries} viewState={consoleView} onViewStateChange={setConsoleView} onClear={clearConsole} onOpenFile={() => void api.openLogFile()} />}
             {activeSection === "settings" && <SettingsPage appInfo={appInfo} />}
-            {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} onAction={() => setNotice("Этот инструмент подключим после добавления соответствующего API. Экран уже готов к интеграции.")} />}
+            {!(["dashboard", "project", "scenario", "subtitles", "director", "projects", "queue", "console", "settings"] as SectionKey[]).includes(activeSection) && <ToolPage section={activeSection} onAction={() => setNotice("Этот инструмент подключим после добавления соответствующего API. Экран уже готов к интеграции.")} />}
           </div>
           <GlobalProgressBar
             tasks={queue}
@@ -450,7 +501,7 @@ export function App() {
               setActiveSection("queue");
             }}
           />
-          <ConsoleDock open={consoleOpen} queue={queue} log={uiLog} onToggle={() => setConsoleOpen((value) => !value)} />
+          <ConsoleDock open={consoleOpen} queue={queue} entries={consoleEntries} viewState={consoleView} onViewStateChange={setConsoleView} onToggle={() => setConsoleOpen((value) => !value)} onClear={clearConsole} onOpenFile={() => void api.openLogFile()} />
         </section>
       </div>
       {overlay && overlayProject && (
@@ -458,9 +509,10 @@ export function App() {
           project={overlayProject}
           initialMode={overlay.type}
           onClose={() => setOverlay(null)}
-          onRegenerate={(sceneId) => void regenerateScene(overlayProject.id, sceneId)}
+          onRegenerate={(sceneId, target) => regenerateScene(overlayProject.id, sceneId, target)}
           onOpenFolder={() => void openProjectFolder(overlayProject.id)}
-          onAssemble={() => void reassembleProject(overlayProject.id)}
+          onAssemble={() => reassembleProject(overlayProject.id)}
+          onSave={saveProject}
           onEditScenario={() => {
             setOverlay(null);
             setSelectedProjectId(overlayProject.id);
@@ -499,6 +551,12 @@ const PROJECT_LANGUAGES: Array<{ label: string; flag: string }> = [
   { label: "Українська", flag: "🇺🇦" },
 ];
 
+const CLAUDE_CHAT_MODELS = [
+  { id: "cc/claude-opus-5", label: "Claude Opus 5" },
+  { id: "ag/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { id: "cc/claude-opus-4-8", label: "Claude Opus 4.8" },
+] as const;
+
 /** Приводит голос проекта к id каталога: старые голые имена → edge-tts/, "custom" и пустое → глобальная настройка. */
 function normalizeVoiceId(voice: string): string {
   const value = (voice ?? "").trim();
@@ -518,6 +576,8 @@ function youtubeChatContext(analysis: ReferenceAnalysis): string | null {
         channel: { title: video.channelTitle, subscribers: video.channelSubscribers, totalViews: video.channelViews, videoCount: video.channelVideoCount },
         topVideos: video.topVideos.slice(0, 10),
         topComments: video.topComments.slice(0, 10),
+        transcriptSource: video.transcriptSource,
+        transcript: video.transcript.map((segment) => `[${formatTimestamp(segment.startSeconds)}] ${segment.text}`).join(" ").slice(0, 12_000),
       }
     : {
         channel: { title: channel!.title, subscribers: channel!.subscribers, totalViews: channel!.totalViews, videoCount: channel!.videoCount },
@@ -525,6 +585,39 @@ function youtubeChatContext(analysis: ReferenceAnalysis): string | null {
         topComments: channel!.topComments.slice(0, 15),
       };
   return `Реальные данные YouTube по текущему разбору — отвечай по ним точными цифрами, ничего не выдумывай:\n${JSON.stringify(payload)}`;
+}
+
+function directorChatContext(analysis: ReferenceAnalysis): string {
+  const summary = {
+    title: analysis.suggestedTitle,
+    niche: analysis.niche,
+    audience: analysis.targetAudience,
+    hook: analysis.hook,
+    structure: analysis.structure,
+    strengths: analysis.strengths,
+    improvements: analysis.improvements,
+    angle: analysis.suggestedAngle,
+    instructions: analysis.instructions,
+    sceneCount: analysis.scenes.length,
+  };
+  return [
+    "Это продолжение текущей темы Gold Work Studio. Учитывай весь диалог и сохранённый разбор. Отвечай прямо на последнюю реплику пользователя; не сбрасывай тему и не выдумывай отсутствующие данные.",
+    `Текущий разбор: ${JSON.stringify(summary)}`,
+    youtubeChatContext(analysis),
+  ].filter(Boolean).join("\n\n");
+}
+
+function wantsScenarioGeneration(text: string): boolean {
+  return /(напиш|созда|собер|сдела)\w*/i.test(text) && /(сценар|ролик|short)/i.test(text);
+}
+
+function compactDirectorHistory(messages: Array<{ role: "user" | "assistant" | "system"; content: string }>) {
+  return messages.slice(-20).map((message) => {
+    if (message.role === "user" && parsePastedTranscript(message.content).length > 0) {
+      return { ...message, content: "[Пользователь вставил полную транскрипцию; её текст сохранён в текущем разборе.]" };
+    }
+    return { ...message, content: message.content.slice(0, 8_000) };
+  });
 }
 
 type StepHint = { now: string; next?: string; action?: { label: string; section: SectionKey } };
@@ -895,8 +988,19 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   const [samplePlaying, setSamplePlaying] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [heroBuilding, setHeroBuilding] = useState(false);
+  const [heroPreview, setHeroPreview] = useState<{ name: string; prompt: string; imagePath: string } | null>(null);
+  const [heroElapsedSeconds, setHeroElapsedSeconds] = useState(0);
   const [scenarioProgress, setScenarioProgress] = useState<string | null>(null);
   useEffect(() => api.onDirectorProgress((text) => setScenarioProgress(text)), []);
+  useEffect(() => {
+    if (!heroBuilding) {
+      setHeroElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => setHeroElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => clearInterval(timer);
+  }, [heroBuilding]);
   const [voicerTemplates, setVoicerTemplates] = useState<VoicerTemplate[] | null>(null);
   useEffect(() => {
     if (draft?.settings.voice.provider !== "elevenlabs" || voicerTemplates !== null) return;
@@ -904,6 +1008,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   }, [draft?.settings.voice.provider, voicerTemplates]);
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
+    setHeroPreview(null);
   }, [project?.id]);
   useEffect(() => {
     setSelectedTopicId(project?.chatTopicId ?? "");
@@ -983,6 +1088,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   /** Пересобирает сцены под текущую длину и язык проекта (нужен сохранённый разбор — referenceAnalysis). */
   const rebuildScenario = async () => {
     if (!draft.referenceAnalysis) return;
+    setScenarioProgress(null);
     setRebuilding(true);
     try {
       const saved = await save();
@@ -1000,12 +1106,14 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   };
   /** Портрет главного героя по сценарию → в референсы: все сцены рисуются с одинаковым персонажем. */
   const createHero = async () => {
+    setScenarioProgress(null);
     setHeroBuilding(true);
     try {
       const saved = await save();
       if (!saved) return;
-      const updated = await api.createCharacterReference(saved.id);
-      setDraft(structuredClone(updated));
+      const result = await api.createCharacterReference(saved.id);
+      setDraft(structuredClone(result.project));
+      setHeroPreview(result.character);
       onInfo("Референс героя создан и добавлен — сцены будут генерироваться с одинаковым персонажем.");
     } catch (reason) {
       onInfo(`Не удалось создать референс героя: ${errorMessage(reason)}`);
@@ -1044,6 +1152,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   };
   return (
     <div className="project-page page-with-actionbar">
+      {heroPreview && <CharacterReferenceModal character={heroPreview} imageUrl={api.mediaUrl(heroPreview.imagePath)} onClose={() => setHeroPreview(null)} />}
       <PageHeading
         icon={
           <button className="back-icon" onClick={onBack}>
@@ -1107,7 +1216,7 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
               ))}
             </div>
           </Field>
-          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО" hint="Целевая длина ролика (сцены по 5 секунд). После смены нажмите «Пересобрать сценарий» ниже.">
+          <Field label="ДЛИТЕЛЬНОСТЬ ВИДЕО" hint="Целевая длина ролика. До 200 сцен; в длинных роликах сцены автоматически становятся длиннее. После смены пересоберите сценарий.">
             <div className="choice-row">
               {[0.5, 1, 5, 10, 15, 30, 60].map((value) => (
                 <button className={settings.durationMinutes === value ? "selected" : ""} onClick={() => setSettings({ durationMinutes: value })} key={value}>
@@ -1303,7 +1412,9 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           </Field>
           <button className="outline-button small" disabled={busy || saving || heroBuilding || draft.scenes.length === 0} onClick={() => void createHero()}>
             <CircleUserRound size={15} />
-            {heroBuilding ? "Создаю референс героя…" : "Создать референс героя по сценарию"}
+            {heroBuilding
+              ? `${scenarioProgress?.startsWith("Референс героя") ? scenarioProgress : "Запускаю создание референса героя…"} · ${heroElapsedSeconds} с`
+              : "Создать референс героя по сценарию"}
           </button>
         </SettingsPanel>
         <SettingsPanel icon={<Video size={16} />} title="AI ВИДЕО & ЭФФЕКТЫ">
@@ -1468,11 +1579,11 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
           {rebuilding
             ? (() => {
                 const match = scenarioProgress ? /(\d+)\s+из\s+(\d+)/.exec(scenarioProgress) : null;
-                const percent = match ? Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100) : 0;
+                const percent = match ? Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100) : null;
                 return (
                   <>
-                    {scenarioProgress ?? "Пишу сценарий…"} · {percent}%
-                    <i className="scenario-progress-bar"><em style={{ width: `${percent}%` }} /></i>
+                    {scenarioProgress ?? "Пишу сценарий…"}{percent === null ? "" : ` · ${percent}%`}
+                    <i className="scenario-progress-bar"><em className={percent === null ? "indeterminate" : ""} style={percent === null ? undefined : { width: `${percent}%` }} /></i>
                   </>
                 );
               })()
@@ -1495,17 +1606,159 @@ function ProjectEditor({ project, busy, onBack, onSave, onApplyChatTopic, onGene
   );
 }
 
-function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onBack: () => void }) {
+function CharacterReferenceModal({ character, imageUrl, onClose }: { character: { name: string; prompt: string }; imageUrl: string; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="character-reference-modal">
+        <header>
+          <div>
+            <CircleUserRound size={21} />
+            <div><strong>{character.name}</strong><small>Главный герой ролика</small></div>
+          </div>
+          <button className="modal-close" onClick={onClose} title="Закрыть"><X size={18} /></button>
+        </header>
+        <div className="character-reference-body">
+          <img src={imageUrl} alt={`Референс героя ${character.name}`} />
+          <div>
+            <small>КАКИМ БУДЕТ ПЕРСОНАЖ</small>
+            <p>{character.prompt}</p>
+            <span>Этот портрет уже добавлен в референсы. Генератор будет использовать его, чтобы внешность героя оставалась одинаковой между сценами.</span>
+          </div>
+        </div>
+        <footer>
+          <button className="generate-button" onClick={onClose}>Использовать этого героя</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ScenarioMaterials({ project, onBack, onSave, onRegenerateImage }: {
+  project: Project;
+  onBack: () => void;
+  onSave: (id: string, input: UpdateProjectInput) => Promise<Project>;
+  onRegenerateImage: (sceneId: string) => Promise<void>;
+}) {
+  const api = window.goldWork ?? fallbackApi;
+  const [heroBuilding, setHeroBuilding] = useState(false);
+  const [heroProgress, setHeroProgress] = useState<string | null>(null);
+  const [regeneratingSceneId, setRegeneratingSceneId] = useState<string | null>(null);
+  useEffect(() => api.onDirectorProgress((stage) => {
+    if (stage.startsWith("Референс героя")) setHeroProgress(stage);
+  }), []);
+
+  const regenerateHero = async () => {
+    setHeroBuilding(true);
+    setHeroProgress("Референс героя: запускаю генерацию…");
+    try {
+      const result = await api.createCharacterReference(project.id);
+      await onSave(project.id, {
+        characterReference: result.character,
+        settings: result.project.settings,
+        outputPath: result.project.outputPath,
+      });
+    } finally {
+      setHeroBuilding(false);
+      setHeroProgress(null);
+    }
+  };
+
+  const regenerateImage = async (sceneId: string) => {
+    setRegeneratingSceneId(sceneId);
+    try {
+      await onRegenerateImage(sceneId);
+    } finally {
+      setRegeneratingSceneId(null);
+    }
+  };
+
+  const hero = project.characterReference;
+  const generationBusy = project.status === "generating" || project.status === "paused";
+  return (
+    <div className="scenario-materials-page">
+      <PageHeading
+        icon={<button className="back-icon" onClick={onBack}><ChevronLeft size={22} /></button>}
+        title="Материалы сценария"
+        subtitle={`${project.title} · ${project.scenes.length} сцен`}
+        actions={
+          <button className="ghost-button" onClick={() => void api.openProjectFolder(project.id)}>
+            <FolderOpen size={15} />
+            Папка проекта
+          </button>
+        }
+      />
+
+      <section className="scenario-materials-hero">
+        <div className="scenario-materials-title">
+          <div><CircleUserRound size={18} /><strong>Главный герой</strong></div>
+          <button className="outline-button small" disabled={heroBuilding || generationBusy || project.scenes.length === 0} onClick={() => void regenerateHero()}>
+            <RotateCcw size={14} />
+            {heroBuilding ? heroProgress ?? "Создаю образ…" : hero ? "Перегенерировать героя" : "Создать тестовый образ"}
+          </button>
+        </div>
+        {hero ? (
+          <div className="scenario-character-card">
+            <img key={hero.updatedAt} src={api.mediaUrl(hero.imagePath)} alt={hero.name} />
+            <div>
+              <small>ИМЯ</small>
+              <h3>{hero.name}</h3>
+              <small>ПРОМПТ ПЕРСОНАЖА</small>
+              <p>{hero.prompt}</p>
+              <span>Изображение сохранено в проекте и используется как референс внешности.</span>
+            </div>
+          </div>
+        ) : (
+          <div className="scenario-materials-empty">
+            <CircleUserRound size={32} />
+            <div><strong>Образ героя ещё не создан</strong><span>Нажмите «Создать тестовый образ», чтобы увидеть персонажа до генерации всех сцен.</span></div>
+          </div>
+        )}
+      </section>
+
+      <section className="scenario-materials-scenes">
+        <div className="scenario-materials-title">
+          <div><FileText size={18} /><strong>Сцены по порядку</strong></div>
+          <span>{project.scenes.length} сцен</span>
+        </div>
+        {project.scenes.map((scene) => (
+          <article className="scenario-material-card" key={scene.id}>
+            <div className="scenario-material-image">
+              {scene.imagePath ? (
+                <img src={api.mediaUrl(scene.imagePath)} alt={scene.title} />
+              ) : (
+                <div className="scene-placeholder"><Image size={28} /><span>Кадр ещё не создан</span></div>
+              )}
+              <button className="outline-button small" disabled={generationBusy || regeneratingSceneId !== null} onClick={() => void regenerateImage(scene.id)}>
+                <RotateCcw size={13} />
+                {regeneratingSceneId === scene.id ? "Добавляю в очередь…" : scene.imagePath ? "Перегенерировать кадр" : "Сгенерировать кадр"}
+              </button>
+            </div>
+            <div className="scenario-material-copy">
+              <header><span>{scene.order + 1}</span><div><strong>{scene.title}</strong><small>{scene.durationSeconds} сек · {scene.status}</small></div></header>
+              <div><small>ОЗВУЧКА</small><p>{scene.narration || "Текст не задан"}</p></div>
+              <div><small>ПРОМПТ ИЗОБРАЖЕНИЯ</small><p>{scene.imagePrompt || "Промпт не задан"}</p></div>
+              <div><small>ПРОМПТ ВИДЕО / АНИМАЦИИ</small><p>{scene.animationPrompt || "Промпт не задан"}</p></div>
+            </div>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function ScenarioEditor({ project, onSave, onRegenerateImage, onBack }: { project?: Project; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onRegenerateImage: (sceneId: string) => Promise<void>; onBack: () => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [scenes, setScenes] = useState<Scene[]>(project?.scenes ? structuredClone(project.scenes) : []);
   const [selectedId, setSelectedId] = useState<string | null>(project?.scenes[0]?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [improving, setImproving] = useState(false);
   const [improveHint, setImproveHint] = useState("");
+  const [view, setView] = useState<"editor" | "materials">("editor");
   useEffect(() => {
     const next = project?.scenes ? structuredClone(project.scenes) : [];
     setScenes(next);
     setSelectedId(next[0]?.id ?? null);
+    setView("editor");
   }, [project?.id]);
   // Сценарий, дописанный в фоне, вливается в открытый пустой редактор — иначе сохранение затёрло бы его пустотой.
   useEffect(() => {
@@ -1514,6 +1767,7 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
     setSelectedId((current) => current ?? project.scenes[0]?.id ?? null);
   }, [project?.id, project?.updatedAt]);
   if (!project) return <EmptyState icon={<FileText size={34} />} title="Проект не выбран" text="Выберите проект перед редактированием сценария." action="Назад" onAction={onBack} />;
+  if (view === "materials") return <ScenarioMaterials project={{ ...project, scenes }} onBack={() => setView("editor")} onSave={onSave} onRegenerateImage={onRegenerateImage} />;
   if (project.status === "generating" || project.status === "paused") return <EmptyState icon={<Pause size={34} />} title="Сценарий временно заблокирован" text="Во время активной генерации нельзя менять состав сцен. Остановите очередь или дождитесь завершения." action="Назад к проекту" onAction={onBack} />;
   const selected = scenes.find((scene) => scene.id === selectedId);
   const reindex = (items: Scene[]) => items.map((scene, order) => ({ ...scene, order }));
@@ -1715,6 +1969,7 @@ function ScenarioEditor({ project, onSave, onBack }: { project?: Project; onSave
                     onChange={(event) =>
                       updateScene({
                         durationSeconds: Math.max(1, Number(event.target.value)),
+                        durationOverrideSeconds: undefined,
                       })
                     }
                   />
@@ -1913,15 +2168,19 @@ function SubtitleStudio({ project, onSave }: { project?: Project; onSave: (id: s
   );
 }
 
-function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: () => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
+function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolean; onCreate: (topicId?: string) => void; onPickTopic: (analysis: ReferenceAnalysis) => void; onInfo: (message: string) => void; onLog: (text: string) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const analyzingRef = useRef(false);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [defaultChatModel, setDefaultChatModel] = useState("cc/claude-opus-5");
+  const [chatModel, setChatModel] = useState("cc/claude-opus-5");
   useEffect(() => {
+    analyzingRef.current = analyzing;
     if (!analyzing) {
       setElapsedSeconds(0);
       return;
@@ -1930,7 +2189,9 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
     return () => clearInterval(timer);
   }, [analyzing]);
-  useEffect(() => api.onDirectorProgress((stage) => setStreamingText(stage)), []);
+  useEffect(() => api.onDirectorProgress((stage) => {
+    if (analyzingRef.current) setStreamingText(stage);
+  }), []);
   const [chatTopics, setChatTopics] = useState<ChatTopicSummary[]>([]);
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1941,7 +2202,17 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
   }
 
   useEffect(() => {
-    void refreshChatTopics().catch(() => setChatTopics([]));
+    let active = true;
+    void Promise.all([api.getAnyModelSettings(), api.listChatTopics()])
+      .then(async ([settings, topics]) => {
+        if (!active) return;
+        setDefaultChatModel(settings.textModel);
+        setChatModel(settings.textModel);
+        setChatTopics(topics);
+        if (topics[0]) await openTopic(topics[0].id, false, settings.textModel);
+      })
+      .catch(() => active && setChatTopics([]));
+    return () => { active = false; };
   }, []);
 
   async function sendPrompt() {
@@ -1952,86 +2223,102 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     setAnalyzing(true);
     let topicId = currentTopicId;
     try {
+      let storedTopic: Awaited<ReturnType<DesktopApi["appendChatMessage"]>>;
       if (!topicId) {
-        const created = await api.createChatTopic(text);
+        const created = await api.createChatTopic(text, chatModel);
         topicId = created.id;
         setCurrentTopicId(created.id);
       }
       try {
-        await api.appendChatMessage(topicId, { role: "user", content: text });
+        storedTopic = await api.appendChatMessage(topicId, { role: "user", content: text });
       } catch {
         // Тема могла быть удалена — создаём новую и продолжаем, не роняя запрос.
-        const created = await api.createChatTopic(text);
+        const created = await api.createChatTopic(text, chatModel);
         topicId = created.id;
         setCurrentTopicId(created.id);
-        await api.appendChatMessage(topicId, { role: "user", content: text });
+        storedTopic = await api.appendChatMessage(topicId, { role: "user", content: text });
       }
+      const history = storedTopic.messages.map(({ role, content }) => ({ role, content }));
       await refreshChatTopics();
       const appendAssistant = async (answer: string) => {
-        // Плавное появление ответа (эффект печати), затем фиксация сообщения.
-        const step = Math.max(6, Math.ceil(answer.length / 70));
-        for (let index = step; index < answer.length; index += step) {
-          setStreamingText(answer.slice(0, index));
-          await new Promise((resolve) => setTimeout(resolve, 16));
-        }
         setStreamingText(null);
         setMessages((current) => [...current, { role: "assistant", text: answer }]);
         await api.appendChatMessage(topicId!, { role: "assistant", content: answer });
         await refreshChatTopics();
       };
-      const url = text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "");
-      if (url) {
+      const pastedTranscript = analysis?.youtubeContext ? parsePastedTranscript(text) : [];
+      const url = pastedTranscript.length === 0 ? text.match(/https?:\/\/[^\s]+/i)?.[0]?.replace(/[),.;]+$/, "") : undefined;
+      if (pastedTranscript.length > 0 && analysis?.youtubeContext) {
+        const sourceDuration = pastedTranscript.at(-1)!.startSeconds + pastedTranscript.at(-1)!.durationSeconds;
+        const updated: ReferenceAnalysis = {
+          ...analysis,
+          youtubeContext: {
+            ...analysis.youtubeContext,
+            transcript: pastedTranscript,
+            transcriptSource: "pasted",
+            durationSeconds: Math.max(analysis.youtubeContext.durationSeconds, sourceDuration)
+          }
+        };
+        setAnalysis(updated);
+        await api.saveChatTopicAnalysis(topicId!, updated);
+        await appendAssistant(`Транскрипция сохранена: ${pastedTranscript.length} фрагментов, ${text.length.toLocaleString("ru-RU")} символов. Я ничего не запускаю автоматически. Теперь можешь попросить разбор текста или прямо написать: «создай сценарий на 5 минут».`);
+      } else if (url) {
         setStreamingText("Собираю данные ролика и канала, пишу разбор и превью сцен…");
-        const result = await api.analyzeReference({ url, instructions: text.replace(url, "").trim(), language: "Русский" });
+        const priorContext = history.slice(0, -1).filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n");
+        const result = await api.analyzeReference({
+          url,
+          instructions: [priorContext, text.replace(url, "").trim()].filter(Boolean).join("\n"),
+          language: "Русский",
+          modelId: chatModel
+        });
         setStreamingText(null);
         setAnalysis(result);
         await api.saveChatTopicAnalysis(topicId!, result).catch(() => undefined);
         await appendAssistant(`Разбор готов: ниша, аудитория, сильные стороны, что улучшить — всё в карточке ниже.\n\nНа основе данных канала я предложил ${result.suggestedTopics?.length ?? 0} темы для нового ролика — выбери одну кнопкой в карточке, и я соберу полный сценарий и открою проект. Либо напиши свою длину («5 минут») или пожелание («сделай хук жёстче»).`);
         onInfo("Референс разобран. Укажи длину ролика или сразу создай проект.");
       } else if (analysis) {
-        const requestedSeconds = parseDurationSeconds(text);
-        const looksLikeQuestion = /\?\s*$/.test(text.trim()) || /^(сколько|что|какой|какая|какие|каков|почему|когда|кто|где|как)\b/i.test(text.trim());
-        const chatContext = !requestedSeconds && looksLikeQuestion ? youtubeChatContext(analysis) : null;
-        if (chatContext && (await api.getAnyModelSettings()).configured) {
-          // Вопрос по данным — отвечаем напрямую с реальной статистикой YouTube, не пересобирая разбор.
-          let streamed = "";
-          const answer = await api.streamChatWithAnyModel([
-            { role: "system", content: chatContext },
-            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
-            { role: "user", content: text },
-          ], (chunk) => {
-            streamed += chunk;
-            setStreamingText(streamed);
-          });
-          await appendAssistant(answer);
-          setStreamingText(null);
-        } else if (requestedSeconds) {
-          setStreamingText(`Собираю сцены под ~${Math.round((requestedSeconds / 60) * 10) / 10} мин…`);
-          const resized = await api.regenerateReferenceScenes(analysis, requestedSeconds);
+        const requestedSeconds = parseExplicitDurationSeconds(text);
+        const wantsScenario = wantsScenarioGeneration(text);
+        const wantsRefine = /(измени|переделай|перепиши|усиль|улучши|сделай|добавь|убери|сократи)/i.test(text)
+          && /(разбор|хук|структур|сценар|угол|интриг|подач|тем|short|длин|текст)/i.test(text);
+        if (requestedSeconds || wantsScenario) {
+          const targetSeconds = requestedSeconds ?? Math.max(30, analysis.recommendedDurationSeconds || analysis.youtubeContext?.durationSeconds || 60);
+          setStreamingText(`Собираю настоящий сценарий под ~${Math.round((targetSeconds / 60) * 10) / 10} мин…`);
+          const resized = await api.regenerateReferenceScenes(analysis, targetSeconds, chatModel);
           setStreamingText(null);
           setAnalysis(resized);
           await api.saveChatTopicAnalysis(topicId!, resized).catch(() => undefined);
-          const minutes = Math.round((requestedSeconds / 60) * 10) / 10;
-          await appendAssistant(`Пересобрал сценарий под ~${minutes} мин: ${resized.scenes.length} сцен по 5 секунд. Можешь уточнить длину ещё раз, поправить хук или нажать «Согласен — запустить генерацию».`);
-        } else {
+          const minutes = Math.round((targetSeconds / 60) * 10) / 10;
+          await appendAssistant(`Сценарий действительно написан: ${resized.scenes.length} сцен на ~${minutes} мин. Он сохранён в этой теме; кнопка ниже создаст проект уже с готовыми сценами.`);
+        } else if (wantsRefine) {
           setStreamingText("Обновляю разбор с учётом пожелания…");
-          const refined = await api.refineReferenceAnalysis(analysis, text);
+          const context = history.slice(-10).map((message) => `${message.role}: ${message.content}`).join("\n");
+          const refined = await api.refineReferenceAnalysis(analysis, `${text}\n\nКонтекст диалога:\n${context}`, chatModel);
           setStreamingText(null);
           setAnalysis(refined);
           await api.saveChatTopicAnalysis(topicId!, refined).catch(() => undefined);
-          await appendAssistant(`Разбор обновлён с учётом пожелания: «${text}». Хук и сценарные сцены подготовлены для создания проекта.`);
+          await appendAssistant(`Готово. Я обновил разбор и будущий сценарий с учётом просьбы: «${text}».`);
+        } else if ((await api.getAnyModelSettings()).configured) {
+          let streamed = "";
+          const answer = await api.streamChatWithAnyModel([
+            { role: "system", content: directorChatContext(analysis) },
+            ...compactDirectorHistory(history),
+          ], (chunk) => {
+            streamed += chunk;
+            setStreamingText(streamed);
+          }, chatModel);
+          await appendAssistant(answer);
+        } else {
+          await appendAssistant("Для полноценного продолжения диалога добавьте ключ AnyModel в настройках.");
         }
       } else {
         const provider = await api.getAnyModelSettings();
         if (provider.configured) {
           let streamed = "";
-          const answer = await api.streamChatWithAnyModel([
-            ...messages.map((message) => ({ role: message.role, content: message.text }) as const),
-            { role: "user", content: text },
-          ], (chunk) => {
+          const answer = await api.streamChatWithAnyModel(history, (chunk) => {
             streamed += chunk;
             setStreamingText(streamed);
-          });
+          }, chatModel);
           await appendAssistant(answer);
           setStreamingText(null);
         } else {
@@ -2050,29 +2337,56 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     }
   }
 
-  function buildAndOpen(base: ReferenceAnalysis, label: string) {
+  async function buildAndOpen(base: ReferenceAnalysis, label: string) {
     if (analyzing) return;
-    onLog(`Открываю проект: ${label}`);
-    setMessages((current) => [...current, {
-      role: "assistant",
-      text: `Открываю проект по теме «${label}». Выбери в проекте длину ролика и язык (кнопки с флагами) и нажми «Собрать сценарий» — прогресс будет виден внизу проекта в процентах.`
-    }]);
-    onPickTopic(base);
+    let ready = base;
+    if (ready.scenes.length === 0) {
+      setAnalyzing(true);
+      try {
+        const targetSeconds = Math.max(30, ready.recommendedDurationSeconds || ready.youtubeContext?.durationSeconds || 60);
+        setStreamingText("Строю план сценария…");
+        ready = await api.regenerateReferenceScenes(ready, targetSeconds, chatModel);
+        setAnalysis(ready);
+        if (currentTopicId) await api.saveChatTopicAnalysis(currentTopicId, ready);
+      } catch (reason) {
+        const text = `Не удалось написать сценарий: ${errorMessage(reason)}. Проект без сценария не создан — можно повторить запрос.`;
+        setMessages((current) => [...current, { role: "assistant", text }]);
+        if (currentTopicId) await api.appendChatMessage(currentTopicId, { role: "assistant", content: text }).catch(() => undefined);
+        onInfo(text);
+        return;
+      } finally {
+        setAnalyzing(false);
+        setStreamingText(null);
+      }
+    }
+    onLog(`Открываю проект с готовым сценарием: ${label}`);
+    const text = `Готово: открываю проект по теме «${label}» с готовым сценарием из ${ready.scenes.length} сцен. Настройки можно изменить и при необходимости пересобрать сценарий.`;
+    setMessages((current) => [...current, { role: "assistant", text }]);
+    if (currentTopicId) await api.appendChatMessage(currentTopicId, { role: "assistant", content: text }).catch(() => undefined);
+    onPickTopic({ ...ready, modelId: chatModel });
   }
 
   /** Подтверждение темы: показываем, что именно уйдёт в сценарий, и даём поправить одной строкой. */
-  function confirmPending(extraInstructions: string) {
+  async function confirmPending(extraInstructions: string) {
     if (!pending || !analysis) return;
     const base: ReferenceAnalysis = {
       ...analysis,
       suggestedTitle: pending.title,
       hook: pending.hook || analysis.hook,
       suggestedAngle: pending.angle || analysis.suggestedAngle,
-      instructions: [analysis.instructions, extraInstructions.trim()].filter(Boolean).join("\n") || undefined
+      scenes: pending.title === analysis.suggestedTitle ? analysis.scenes : [],
+      instructions: [analysis.instructions, extraInstructions.trim()].filter(Boolean).join("\n") || undefined,
+      modelId: chatModel
     };
     setPending(null);
-    setMessages((current) => [...current, { role: "user", text: `Выбрана тема: «${pending.title}»${extraInstructions.trim() ? ` (правка: ${extraInstructions.trim()})` : ""}` }]);
-    buildAndOpen(base, pending.title);
+    setAnalysis(base);
+    const choice = `Выбрана тема: «${pending.title}»${extraInstructions.trim() ? ` (правка: ${extraInstructions.trim()})` : ""}`;
+    setMessages((current) => [...current, { role: "user", text: choice }]);
+    if (currentTopicId) {
+      await api.appendChatMessage(currentTopicId, { role: "user", content: choice }).catch(() => undefined);
+      await api.saveChatTopicAnalysis(currentTopicId, base).catch(() => undefined);
+    }
+    await buildAndOpen(base, pending.title);
   }
 
   function pickTopic(topic: { title: string; hook: string; angle: string }) {
@@ -2080,7 +2394,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     setPending({ title: topic.title, hook: topic.hook, angle: topic.angle });
   }
 
-  async function openTopic(id: string) {
+  async function openTopic(id: string, announce = true, fallbackModel = defaultChatModel) {
     const topic = await api.getChatTopic(id);
     if (!topic) return;
     setCurrentTopicId(topic.id);
@@ -2089,8 +2403,17 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
       text: message.content
     })));
     setAnalysis(topic.analysis ?? null);
+    setChatModel(topic.modelId || topic.analysis?.modelId || fallbackModel);
     setHistoryOpen(false);
-    onInfo(`Открыта тема «${topic.title}»`);
+    if (announce) onInfo(`Открыта тема «${topic.title}»`);
+  }
+
+  async function changeChatModel(modelId: string) {
+    setChatModel(modelId);
+    if (currentTopicId) {
+      await api.setChatTopicModel(currentTopicId, modelId);
+      await refreshChatTopics();
+    }
   }
 
   async function attachFile(kind: "image" | "video") {
@@ -2104,6 +2427,11 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
     onInfo(`Добавлено файлов: ${paths.length}`);
   }
 
+  const analysisAnchorIndex = analysis
+    ? messages.findIndex((message) => message.role === "assistant" && message.text.startsWith("Разбор готов:"))
+    : -1;
+  const analysisOrder = analysisAnchorIndex >= 0 ? analysisAnchorIndex * 2 + 1 : messages.length * 2 + 1;
+
   return (
     <div className="director-page">
       <PageHeading
@@ -2112,7 +2440,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
         subtitle="Создавай сценарии через чат с AI"
         actions={
           <>
-            <button className="icon-button" title="Статус AI-провайдера" onClick={() => onInfo("Сейчас активен локальный mock-режим. Gemini или Claude подключатся через адаптер провайдера.")}>
+            <button className="icon-button" title="Текущая модель чата" onClick={() => onInfo(`Текущая модель: ${chatModel}`)}>
               <Bot size={16} />
             </button>
             <button className={`ghost-button${historyOpen ? " active" : ""}`} onClick={() => setHistoryOpen((value) => !value)}>
@@ -2126,6 +2454,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                 setPrompt("");
                 setAnalysis(null);
                 setCurrentTopicId(null);
+                setChatModel(defaultChatModel);
                 setHistoryOpen(false);
                 onInfo("Создана новая тема чата");
               }}
@@ -2158,6 +2487,8 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                     if (currentTopicId === topic.id) {
                       setCurrentTopicId(null);
                       setMessages([]);
+                      setAnalysis(null);
+                      setChatModel(defaultChatModel);
                     }
                     await refreshChatTopics();
                   })}
@@ -2174,7 +2505,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
             <h2>Создай сценарий</h2>
             <p>Опиши нишу или пришли ссылку на ролик. Чат разберёт хук, аудиторию, структуру и подготовит улучшенный самостоятельный сценарий.</p>
             <div>
-              <button className="ghost-button" disabled={busy} onClick={onCreate}>
+              <button className="ghost-button" disabled={busy} onClick={() => onCreate()}>
                 Сделай сценарий
               </button>
               <button
@@ -2200,19 +2531,12 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
         ) : (
           <div className="messages">
             {messages.map((message, index) => (
-              <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
-                {message.text}
-                {message.role === "assistant" && (
-                  <div className="message-files">
-                    <span>characters.json</span>
-                    <span>locations.json</span>
-                    <span>scenario.json</span>
-                  </div>
-                )}
+              <article className={`message ${message.role}`} key={`${message.role}-${index}`} style={{ order: index * 2 }}>
+                <CollapsibleChatText text={message.text} />
               </article>
             ))}
             {analyzing && streamingText === null && (
-              <article className="message assistant thinking-message">
+              <article className="message assistant thinking-message" style={{ order: messages.length * 2 + 2 }}>
                 <span>Думаю над запросом · {elapsedSeconds} с</span>
                 <i /><i /><i />
               </article>
@@ -2221,7 +2545,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
               const match = /(\d+)\s*из\s*(\d+)/.exec(streamingText);
               const percent = match ? Math.min(100, Math.round((Number(match[1]) / Math.max(1, Number(match[2]))) * 100)) : null;
               return (
-                <article className="message assistant streaming-message">
+                <article className="message assistant streaming-message" style={{ order: messages.length * 2 + 2 }}>
                   {streamingText || <span className="stream-caret">▋</span>}
                   <div className="script-progress">
                     <div className="script-progress-bar">
@@ -2233,7 +2557,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
               );
             })()}
             {analysis && (
-              <article className="reference-analysis">
+              <article className="reference-analysis" style={{ order: analysisOrder }}>
                 <header>
                   <div>
                     <strong>{analysis.sourceTitle}</strong>
@@ -2286,7 +2610,7 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                       </section>
                     </div>
                     <p className="analysis-disclaimer">
-                      Кадры ролика не анализировались. Источник текста: {({ captions: "субтитры", "yt-dlp-captions": "субтитры (yt-dlp)", "gemini-audio": "аудио → Gemini", none: "недоступен (нужен вход/cookies)" } as const)[analysis.youtubeContext.transcriptSource]}.
+                      Кадры ролика не анализировались. Источник текста: {({ captions: "субтитры", "yt-dlp-captions": "субтитры (yt-dlp)", "gemini-audio": "аудио → Gemini", pasted: "вставлен пользователем", none: "недоступен (нужен вход/cookies)" } as const)[analysis.youtubeContext.transcriptSource]}.
                       {analysis.youtubeContext.transcriptionAudioMegabytes ? ` Аудио для Gemini: ${analysis.youtubeContext.transcriptionAudioMegabytes} МБ — расход токенов учитывается провайдером.` : " Транскрибация аудио не потребовалась, дополнительных токенов на неё нет."}
                     </p>
                   </div>
@@ -2310,10 +2634,41 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
                     onClick={() => setPending({ title: analysis.suggestedTitle || "Улучшенный ролик", hook: analysis.hook, angle: analysis.suggestedAngle })}
                   >
                     <WandSparkles size={15} />
-                    Написать сценарий и создать проект
+                    {analysis.scenes.length > 0 ? "Создать проект с готовым сценарием" : "Написать сценарий и создать проект"}
                   </button>
                 </footer>
               </article>
+            )}
+            {analysis && analysis.scenes.length > 0 && (
+              <section className="chat-ready-scenario" style={{ order: messages.length * 2 + 3 }}>
+                <div>
+                  <strong>Сценарий готов · {analysis.scenes.length} сцен · ~{Math.round(analysis.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0))} сек</strong>
+                  <span>Он сохранён в этой теме чата. Можно посмотреть текст или сразу создать проект.</span>
+                </div>
+                <details>
+                  <summary>Посмотреть текст сценария</summary>
+                  <ol>
+                    {analysis.scenes.map((scene) => <li key={scene.id}>{scene.narration}</li>)}
+                  </ol>
+                </details>
+                <button
+                  className="generate-button"
+                  disabled={busy || analyzing}
+                  onClick={() => setPending({ title: analysis.suggestedTitle || "Новый ролик", hook: analysis.hook, angle: analysis.suggestedAngle })}
+                >
+                  <WandSparkles size={15} />
+                  Создать проект с готовым сценарием
+                </button>
+              </section>
+            )}
+            {!analysis && currentTopicId && messages.length > 0 && !analyzing && (
+              <div className="chat-create-from-topic" style={{ order: messages.length * 2 + 4 }}>
+                <button className="generate-button" disabled={busy} onClick={() => onCreate(currentTopicId)}>
+                  <WandSparkles size={15} />
+                  Создать проект из этого диалога
+                </button>
+                <small>Сохранённая переписка станет контекстом для цельного сценария.</small>
+              </div>
             )}
           </div>
         )}
@@ -2325,12 +2680,47 @@ function Director({ busy, onCreate, onPickTopic, onInfo, onLog }: { busy: boolea
         <button title="Добавить видео-референс" onClick={() => void attachFile("video")}>
           <Video size={19} />
         </button>
-        <input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void sendPrompt()} placeholder="Опиши идею или вставь ссылку на ролик..." />
+        <select
+          className="chat-model-select"
+          title="Claude-модель для этого диалога и сценария"
+          value={chatModel}
+          onChange={(event) => void changeChatModel(event.target.value)}
+          disabled={analyzing}
+        >
+          {!CLAUDE_CHAT_MODELS.some((model) => model.id === chatModel) && <option value={chatModel}>{chatModel}</option>}
+          {CLAUDE_CHAT_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+        </select>
+        <textarea
+          rows={1}
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            void sendPrompt();
+          }}
+          placeholder="Напиши сообщение или вставь транскрипцию… (Shift+Enter — новая строка)"
+        />
         <button className="send" onClick={() => void sendPrompt()} disabled={!prompt.trim() || analyzing}>
           <Send size={19} />
         </button>
       </div>
     </div>
+  );
+}
+
+function CollapsibleChatText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = text.length > 1_600 || text.split("\n").length > 18;
+  return (
+    <>
+      <div className={long && !expanded ? "chat-text collapsed" : "chat-text"}>{text}</div>
+      {long && (
+        <button className="expand-message" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "Свернуть" : `Показать полностью · ${text.length.toLocaleString("ru-RU")} символов`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -2576,7 +2966,847 @@ function QueuePage({ tasks, projects, onPause, onResume, onStop, onRetry, onClea
   );
 }
 
-function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder, onAssemble, onEditScenario, onToggleScene }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string) => void; onOpenFolder: () => void; onAssemble: () => void; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void }) {
+type TimelineScene = Scene & {
+  durationOverrideSeconds?: number;
+  playbackRate?: number;
+  trimStartSeconds?: number;
+  trimEndSeconds?: number;
+  narrationVolume?: number;
+  sourceVolume?: number;
+  transitionDurationSeconds?: number;
+  fadeEdges?: boolean;
+  kenBurnsZoom?: number;
+};
+
+type TimelineRegenerateTarget = "image" | "video" | "audio" | "all";
+
+type TimelineClipLayout = {
+  scene: TimelineScene;
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  overlapToNext: number;
+  transition: "none" | "fade" | "mix";
+};
+
+const clampTimelineNumber = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
+
+function timelineTransition(project: Project, scene: TimelineScene): "none" | "fade" | "mix" {
+  if (scene.transitionDurationSeconds === 0) return "none";
+  return scene.transition ?? (project.settings.assembly.fadeTransitions ? "mix" : "none");
+}
+
+function buildTimelineLayout(project: Project, scenes: TimelineScene[], durationOf: (scene: TimelineScene) => number): TimelineClipLayout[] {
+  const durations = scenes.map(durationOf);
+  const transitions = scenes.map((scene) => timelineTransition(project, scene));
+  const usesCrossfadeGraph = transitions.slice(0, -1).some((transition) => transition === "mix");
+  let cursor = 0;
+  return scenes.map((scene, index) => {
+    const duration = durations[index] ?? 0.1;
+    const nextDuration = durations[index + 1];
+    const transition = transitions[index] ?? "none";
+    const requested = clampTimelineNumber(scene.transitionDurationSeconds ?? 0.5, 0, 5);
+    const overlapToNext = nextDuration === undefined || !usesCrossfadeGraph
+      ? 0
+      : transition === "mix"
+        ? clampTimelineNumber(requested, 0.02, Math.max(0.02, Math.min(duration - 0.1, nextDuration - 0.1)))
+        : 0.05;
+    const entry = { scene, index, start: cursor, end: cursor + duration, duration, overlapToNext, transition };
+    cursor += duration - overlapToNext;
+    return entry;
+  });
+}
+
+function TimelineEditor({ project, onClose, onShowScenes, onOpenFolder, onAssemble, onSave, onRegenerate }: { project: Project; onClose: () => void; onShowScenes: () => void; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onRegenerate: (sceneId: string | string[], target?: TimelineRegenerateTarget) => Promise<void> }) {
+  const api = window.goldWork ?? fallbackApi;
+  const initialScenes = () => [...project.scenes].sort((a, b) => a.order - b.order) as TimelineScene[];
+  const [scenes, setScenes] = useState<TimelineScene[]>(initialScenes);
+  const [selectedIds, setSelectedIds] = useState<string[]>(project.scenes[0] ? [project.scenes[0].id] : []);
+  const [propertiesOpen, setPropertiesOpen] = useState(Boolean(project.scenes[0]));
+  const [menu, setMenu] = useState<{ x: number; y: number; sceneId: string } | null>(null);
+  const [zoom, setZoom] = useState(26);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [mediaMode, setMediaMode] = useState<"live" | "final">("live");
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [finalMediaDuration, setFinalMediaDuration] = useState(0);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [scrubCanvasSeconds, setScrubCanvasSeconds] = useState<number | null>(null);
+  const [activeTransitionId, setActiveTransitionId] = useState<string | null>(null);
+  const [assetDurations, setAssetDurations] = useState<Record<string, number>>({});
+  const [copiedSettings, setCopiedSettings] = useState<Partial<TimelineScene> | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const livePreviewRef = useRef<HTMLDivElement>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const playbackFrameRef = useRef<number | null>(null);
+  const livePlaybackRef = useRef<{ startedAt: number; timelineTime: number } | null>(null);
+  const scrubFrameRef = useRef<number | null>(null);
+  const pendingScrubRef = useRef<number | null>(null);
+  const scrubPointerRef = useRef<number | null>(null);
+  const transitionResizeRef = useRef<{ pointerId: number; sceneId: string; startX: number; startDuration: number; side: -1 | 1 } | null>(null);
+  const anchorIdRef = useRef<string | null>(project.scenes[0]?.id ?? null);
+  const dragIdRef = useRef<string | null>(null);
+  const busy = saving || project.status === "generating" || project.status === "paused";
+  const selected = scenes.filter((scene) => selectedIds.includes(scene.id));
+  const primary = selected[0];
+  const durationOf = (scene: TimelineScene) => {
+    if (scene.durationOverrideSeconds) return Math.max(0.1, scene.durationOverrideSeconds);
+    const sourcePath = scene.videoPath ?? scene.audioPath;
+    const sourceDuration = sourcePath ? assetDurations[sourcePath] ?? 0 : 0;
+    const playbackRate = clampTimelineNumber(scene.playbackRate ?? 1, 0.25, 4);
+    const trimStart = Math.max(0, scene.trimStartSeconds ?? 0);
+    const trimEnd = scene.trimEndSeconds && scene.trimEndSeconds > trimStart
+      ? sourceDuration > 0 ? Math.min(sourceDuration, scene.trimEndSeconds) : scene.trimEndSeconds
+      : sourceDuration > 0 ? sourceDuration : undefined;
+    const timingChanged = trimStart > 0 || playbackRate !== 1 || scene.trimEndSeconds !== undefined;
+    if (timingChanged) return Math.max(0.1, ((trimEnd ?? scene.durationSeconds) - trimStart) / playbackRate);
+    if (!scene.videoPath && sourceDuration > 0.2) return sourceDuration + 0.5;
+    return Math.max(0.1, scene.durationSeconds);
+  };
+  const layout = buildTimelineLayout(project, scenes, durationOf);
+  const timelineDuration = layout.at(-1)?.end ?? 0;
+  const totalDuration = timelineDuration;
+  const timelineWidth = Math.max(900, timelineDuration * zoom);
+  const selectedStart = primary ? layout.find((entry) => entry.scene.id === primary.id)?.start ?? 0 : 0;
+  const finalVideoSource = mediaMode === "final" ? project.outputPath : undefined;
+  const playheadLeft = (scrubCanvasSeconds ?? currentTime) * zoom;
+  const activeLayouts = layout.filter((entry) => currentTime >= entry.start && (currentTime < entry.end || (entry.index === layout.length - 1 && currentTime <= entry.end)));
+  const fallbackLayout = layout.find((entry) => currentTime < entry.start) ?? layout.at(-1);
+  const visibleLayouts = activeLayouts.length > 0 ? activeLayouts.slice(-2) : fallbackLayout ? [fallbackLayout] : [];
+  const assetDurationKey = scenes.map((scene) => `${scene.audioPath ?? ""}|${scene.videoPath ?? ""}`).join(";");
+
+  useEffect(() => {
+    const incoming = initialScenes();
+    setScenes(incoming);
+    setSelectedIds((current) => {
+      const valid = current.filter((id) => incoming.some((scene) => scene.id === id));
+      return valid.length > 0 ? valid : incoming[0] ? [incoming[0].id] : [];
+    });
+  }, [project.id, project.updatedAt]);
+
+  useEffect(() => {
+    const pending: HTMLMediaElement[] = [];
+    const paths = new Map<string, "audio" | "video">();
+    scenes.forEach((scene) => {
+      if (scene.audioPath) paths.set(scene.audioPath, "audio");
+      if (scene.videoPath) paths.set(scene.videoPath, "video");
+    });
+    paths.forEach((kind, path) => {
+      if (assetDurations[path]) return;
+      const media = document.createElement(kind);
+      media.preload = "metadata";
+      media.src = api.mediaUrl(path);
+      media.onloadedmetadata = () => {
+        if (Number.isFinite(media.duration) && media.duration > 0) {
+          setAssetDurations((current) => current[path] ? current : { ...current, [path]: media.duration });
+        }
+      };
+      media.load();
+      pending.push(media);
+    });
+    return () => pending.forEach((media) => { media.removeAttribute("src"); media.load(); });
+  }, [assetDurationKey]);
+
+  useEffect(() => {
+    setMediaError(null);
+    setPlaying(false);
+    if (mediaMode === "final") setFinalMediaDuration(0);
+    const video = videoRef.current;
+    if (video) video.load();
+  }, [finalVideoSource, project.updatedAt]);
+
+  useEffect(() => {
+    if (!playing) return;
+    let lastStateUpdate = 0;
+    const updatePlayhead = () => {
+      let logicalTime = currentTime;
+      if (mediaMode === "final") {
+        const video = videoRef.current;
+        if (video) logicalTime = Math.min(totalDuration, video.currentTime);
+      } else {
+        const clock = livePlaybackRef.current ?? { startedAt: performance.now(), timelineTime: currentTime };
+        livePlaybackRef.current = clock;
+        logicalTime = Math.min(totalDuration, clock.timelineTime + (performance.now() - clock.startedAt) / 1000);
+        if (logicalTime >= totalDuration) {
+          setPlaying(false);
+          livePlaybackRef.current = null;
+        }
+      }
+      if (scrubPointerRef.current === null && playheadRef.current) {
+        playheadRef.current.style.transform = `translateX(${logicalTime * zoom}px)`;
+      }
+      const now = performance.now();
+      if (now - lastStateUpdate > 32 || logicalTime >= totalDuration) {
+        lastStateUpdate = now;
+        setCurrentTime(logicalTime);
+      }
+      playbackFrameRef.current = requestAnimationFrame(updatePlayhead);
+    };
+    playbackFrameRef.current = requestAnimationFrame(updatePlayhead);
+    return () => {
+      if (playbackFrameRef.current !== null) cancelAnimationFrame(playbackFrameRef.current);
+      playbackFrameRef.current = null;
+    };
+  }, [playing, mediaMode, totalDuration, zoom]);
+
+  useEffect(() => {
+    const container = livePreviewRef.current;
+    if (!container) return;
+    const media = container.querySelectorAll<HTMLMediaElement>("[data-timeline-media]");
+    media.forEach((element) => {
+      const requestedTime = Number(element.dataset.timelineTime ?? 0);
+      const playbackRate = clampTimelineNumber(Number(element.dataset.timelineRate ?? 1), 0.25, 4);
+      const volume = clampTimelineNumber(Number(element.dataset.timelineVolume ?? 1), 0, 1);
+      element.playbackRate = playbackRate;
+      element.volume = volume;
+      const desiredTime = element.dataset.timelineLoop === "true" && Number.isFinite(element.duration) && element.duration > 0
+        ? requestedTime % element.duration
+        : requestedTime;
+      if (Number.isFinite(desiredTime) && Math.abs(element.currentTime - desiredTime) > (playing ? 0.22 : 0.03)) {
+        try { element.currentTime = Math.max(0, desiredTime); } catch { /* Метаданные ещё загружаются. */ }
+      }
+      if (playing && mediaMode === "live") void element.play().catch(() => undefined);
+      else element.pause();
+    });
+  }, [currentTime, playing, mediaMode, visibleLayouts, scenes, project.settings.music]);
+
+  useEffect(() => {
+    const scroll = timelineScrollRef.current;
+    if (!scroll) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.altKey) {
+        event.preventDefault();
+        scroll.scrollLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        return;
+      }
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const rect = scroll.getBoundingClientRect();
+      const cursorX = event.clientX - rect.left;
+      const timeAtCursor = (scroll.scrollLeft + cursorX) / zoom;
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const nextZoom = clampTimelineNumber(zoom * factor, 8, 160);
+      setZoom(nextZoom);
+      requestAnimationFrame(() => {
+        scroll.scrollLeft = Math.max(0, timeAtCursor * nextZoom - cursorX);
+      });
+    };
+    scroll.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroll.removeEventListener("wheel", onWheel);
+  }, [zoom]);
+
+  useEffect(() => () => {
+    if (scrubFrameRef.current !== null) cancelAnimationFrame(scrubFrameRef.current);
+    if (playbackFrameRef.current !== null) cancelAnimationFrame(playbackFrameRef.current);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select")) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setSelectedIds(scenes.map((scene) => scene.id));
+        setPropertiesOpen(true);
+      }
+      if (event.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [scenes]);
+
+  const reindex = (items: TimelineScene[]) => items.map((scene, order) => ({ ...scene, order }));
+  const chooseScene = (sceneId: string, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+    const index = scenes.findIndex((scene) => scene.id === sceneId);
+    if (event?.shiftKey && anchorIdRef.current) {
+      const anchor = scenes.findIndex((scene) => scene.id === anchorIdRef.current);
+      if (anchor >= 0 && index >= 0) {
+        const [start, end] = anchor < index ? [anchor, index] : [index, anchor];
+        setSelectedIds(scenes.slice(start, end + 1).map((scene) => scene.id));
+      }
+    } else if (event?.ctrlKey || event?.metaKey) {
+      setSelectedIds((current) => current.includes(sceneId) ? current.filter((id) => id !== sceneId) : [...current, sceneId]);
+      anchorIdRef.current = sceneId;
+    } else {
+      setSelectedIds([sceneId]);
+      anchorIdRef.current = sceneId;
+    }
+    setPropertiesOpen(true);
+    setActiveTransitionId(null);
+    videoRef.current?.pause();
+    pendingSeekRef.current = null;
+    livePlaybackRef.current = null;
+    setMediaMode("live");
+    setPlaying(false);
+    setCurrentTime(layout.find((entry) => entry.scene.id === sceneId)?.start ?? 0);
+  };
+  const patchSelected = (patch: Partial<TimelineScene>) => {
+    if (busy) return;
+    setScenes((current) => current.map((scene) => selectedIds.includes(scene.id) ? { ...scene, ...patch } : scene));
+    setDirty(true);
+  };
+  const persist = async (next = scenes) => {
+    const normalized = reindex(next);
+    setScenes(normalized);
+    setSaving(true);
+    try {
+      await onSave(project.id, { scenes: normalized });
+      setDirty(false);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const mutateAndPersist = async (updater: (current: TimelineScene[]) => TimelineScene[]) => {
+    if (busy) return false;
+    const previous = scenes;
+    const next = reindex(updater(scenes));
+    setScenes(next);
+    const saved = await persist(next);
+    if (!saved) setScenes(previous);
+    return saved;
+  };
+  const toggleSelected = () => {
+    if (busy || selectedIds.length === 0) return;
+    const include = selected.some((scene) => scene.includeInAssembly === false);
+    void mutateAndPersist((current) => current.map((scene) => selectedIds.includes(scene.id) ? { ...scene, includeInAssembly: include } : scene));
+  };
+  const deleteSelected = () => {
+    if (selectedIds.length === 0 || busy) return;
+    const next = reindex(scenes.filter((scene) => !selectedIds.includes(scene.id)));
+    setSelectedIds(next[0] ? [next[0].id] : []);
+    void mutateAndPersist(() => next).then((saved) => { if (!saved) setSelectedIds(selectedIds); });
+  };
+  const duplicatePrimary = (source = primary) => {
+    if (!source || busy) return;
+    const copy: TimelineScene = {
+      ...structuredClone(source),
+      id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      title: `${source.title} — копия`
+    };
+    const index = scenes.findIndex((scene) => scene.id === source.id);
+    const next = [...scenes];
+    next.splice(index + 1, 0, copy);
+    setSelectedIds([copy.id]);
+    void mutateAndPersist(() => next).then((saved) => { if (!saved) setSelectedIds([source.id]); });
+  };
+  const copySceneSettings = (source = primary) => {
+    if (!source) return;
+    setCopiedSettings({
+      includeInAssembly: source.includeInAssembly,
+      transition: source.transition,
+      kenBurnsDirection: source.kenBurnsDirection,
+      durationOverrideSeconds: source.durationOverrideSeconds,
+      playbackRate: source.playbackRate,
+      trimStartSeconds: source.trimStartSeconds,
+      trimEndSeconds: source.trimEndSeconds,
+      narrationVolume: source.narrationVolume,
+      sourceVolume: source.sourceVolume,
+      transitionDurationSeconds: source.transitionDurationSeconds,
+      fadeEdges: source.fadeEdges,
+      kenBurnsZoom: source.kenBurnsZoom
+    });
+  };
+  const dropAt = (targetId: string, after: boolean) => {
+    const draggedId = dragIdRef.current;
+    dragIdRef.current = null;
+    if (!draggedId || draggedId === targetId || busy) return;
+    const moving = scenes.find((scene) => scene.id === draggedId);
+    if (!moving) return;
+    const rest = scenes.filter((scene) => scene.id !== draggedId);
+    const target = rest.findIndex((scene) => scene.id === targetId);
+    rest.splice(Math.max(0, target + (after ? 1 : 0)), 0, moving);
+    void mutateAndPersist(() => rest);
+  };
+  const regenerateSelected = async (target: TimelineRegenerateTarget, ids = selected.map((scene) => scene.id)) => {
+    if (busy || ids.length === 0) return;
+    if (dirty && !await persist()) return;
+    await onRegenerate(ids, target);
+  };
+  const applyVideoSeek = (logicalSeconds: number) => {
+    const video = videoRef.current;
+    if (!video || video.dataset.mode !== "final" || video.readyState < 1) return;
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : finalMediaDuration;
+    video.currentTime = Math.max(0, Math.min(duration || logicalSeconds, logicalSeconds));
+    pendingSeekRef.current = null;
+  };
+  const seekTimeline = (seconds: number) => {
+    const logicalTime = Math.max(0, Math.min(totalDuration, seconds));
+    videoRef.current?.pause();
+    livePlaybackRef.current = null;
+    setPlaying(false);
+    setCurrentTime(logicalTime);
+    if (mediaMode === "final") {
+      pendingSeekRef.current = logicalTime;
+      requestAnimationFrame(() => applyVideoSeek(logicalTime));
+    }
+  };
+  const applyScrub = (canvasSeconds: number) => {
+    const logicalTime = Math.max(0, Math.min(timelineDuration, canvasSeconds));
+    setMediaMode("live");
+    setCurrentTime(logicalTime);
+    pendingSeekRef.current = null;
+  };
+  const queueScrub = (canvasSeconds: number) => {
+    const bounded = Math.max(0, Math.min(timelineDuration, canvasSeconds));
+    pendingScrubRef.current = bounded;
+    if (playheadRef.current) playheadRef.current.style.transform = `translateX(${bounded * zoom}px)`;
+    if (scrubFrameRef.current !== null) return;
+    scrubFrameRef.current = requestAnimationFrame(() => {
+      scrubFrameRef.current = null;
+      if (pendingScrubRef.current !== null) {
+        setScrubCanvasSeconds(pendingScrubRef.current);
+        applyScrub(pendingScrubRef.current);
+      }
+    });
+  };
+  const scrubTimeFromPointer = (event: ReactPointerEvent<HTMLDivElement>) =>
+    (event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom;
+  const beginScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    scrubPointerRef.current = event.pointerId;
+    videoRef.current?.pause();
+    setPlaying(false);
+    queueScrub(scrubTimeFromPointer(event));
+  };
+  const moveScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (scrubPointerRef.current !== event.pointerId) return;
+    queueScrub(scrubTimeFromPointer(event));
+  };
+  const endScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (scrubPointerRef.current !== event.pointerId) return;
+    queueScrub(scrubTimeFromPointer(event));
+    scrubPointerRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    requestAnimationFrame(() => setScrubCanvasSeconds(null));
+  };
+  const patchScene = (sceneId: string, patch: Partial<TimelineScene>) => {
+    if (busy) return;
+    setScenes((current) => current.map((scene) => scene.id === sceneId ? { ...scene, ...patch } : scene));
+    setDirty(true);
+  };
+  const selectTransition = (sceneId: string) => {
+    const entry = layout.find((candidate) => candidate.scene.id === sceneId);
+    if (!entry || entry.index >= layout.length - 1) return;
+    setSelectedIds([sceneId]);
+    anchorIdRef.current = sceneId;
+    setActiveTransitionId(sceneId);
+    setPropertiesOpen(true);
+    setMediaMode("live");
+    setPlaying(false);
+    livePlaybackRef.current = null;
+    setCurrentTime(Math.max(entry.start, entry.end - Math.max(0.01, entry.scene.transitionDurationSeconds ?? 0.5) / 2));
+  };
+  const transitionLimit = (entry: TimelineClipLayout) => {
+    const next = layout[entry.index + 1];
+    return next ? Math.max(0, Math.min(5, entry.duration - 0.1, next.duration - 0.1)) : 0;
+  };
+  const setTransitionDuration = (sceneId: string, value: number) => {
+    const entry = layout.find((candidate) => candidate.scene.id === sceneId);
+    if (!entry) return;
+    const duration = clampTimelineNumber(value, 0, transitionLimit(entry));
+    patchScene(sceneId, duration <= 0.01
+      ? { transition: "none", transitionDurationSeconds: 0 }
+      : { transition: entry.scene.transition === "none" ? "mix" : entry.scene.transition ?? "mix", transitionDurationSeconds: Math.round(duration * 100) / 100 });
+  };
+  const beginTransitionResize = (event: ReactPointerEvent<HTMLSpanElement>, entry: TimelineClipLayout, side: -1 | 1) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    transitionResizeRef.current = {
+      pointerId: event.pointerId,
+      sceneId: entry.scene.id,
+      startX: event.clientX,
+      startDuration: entry.scene.transition === "none" ? 0 : entry.scene.transitionDurationSeconds ?? 0.5,
+      side
+    };
+    selectTransition(entry.scene.id);
+  };
+  const moveTransitionResize = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const resize = transitionResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setTransitionDuration(resize.sceneId, resize.startDuration + ((event.clientX - resize.startX) * resize.side * 2) / zoom);
+  };
+  const endTransitionResize = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    if (transitionResizeRef.current?.pointerId !== event.pointerId) return;
+    transitionResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const reportMediaError = (message: string, code?: number) => {
+    setMediaError(message);
+    setPlaying(false);
+    void api.writeLog("error", "timeline.player.error", {
+      projectId: project.id,
+      mode: mediaMode,
+      code,
+      file: finalVideoSource?.split(/[\\/]/).at(-1)
+    });
+  };
+  const togglePlayback = async () => {
+    if (playing) {
+      videoRef.current?.pause();
+      livePlaybackRef.current = null;
+      setPlaying(false);
+      return;
+    }
+    if (mediaMode === "live") {
+      const timelineTime = currentTime >= totalDuration ? 0 : currentTime;
+      if (timelineTime !== currentTime) setCurrentTime(timelineTime);
+      livePlaybackRef.current = { startedAt: performance.now(), timelineTime };
+      setMediaError(null);
+      setPlaying(true);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      await video.play();
+      setMediaError(null);
+    } catch (reason) {
+      reportMediaError(reason instanceof Error ? reason.message : "Не удалось запустить видео");
+    }
+  };
+  const handleLoadedMetadata = (video: HTMLVideoElement) => {
+    setMediaError(null);
+    if (mediaMode === "final") setFinalMediaDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    if (pendingSeekRef.current !== null) applyVideoSeek(pendingSeekRef.current);
+  };
+  const handleVideoTime = (video: HTMLVideoElement) => {
+    if (scrubPointerRef.current !== null) return;
+    setCurrentTime(Math.max(0, Math.min(totalDuration, video.currentTime)));
+  };
+  const reloadVideo = () => {
+    setMediaError(null);
+    const video = videoRef.current;
+    if (!video) return;
+    video.load();
+  };
+  const rebuild = async () => {
+    if (dirty && !await persist()) return;
+    await onAssemble();
+  };
+  const leaveTimeline = async (action: () => void) => {
+    if (dirty && !await persist()) return;
+    action();
+  };
+  const montageMenuScene = menu ? scenes.find((scene) => scene.id === menu.sceneId) : undefined;
+  const liveForeground = visibleLayouts.at(-1);
+  const liveFadeOpacity = (() => {
+    if (!liveForeground) return 0;
+    const localTime = clampTimelineNumber(currentTime - liveForeground.start, 0, liveForeground.duration);
+    const previous = layout[liveForeground.index - 1];
+    let opacity = 0;
+    if (previous?.transition === "fade") {
+      const duration = Math.min(previous.scene.transitionDurationSeconds ?? 0.5, liveForeground.duration / 2);
+      if (duration > 0 && localTime < duration) opacity = Math.max(opacity, 1 - localTime / duration);
+    }
+    if (liveForeground.transition === "fade") {
+      const duration = Math.min(liveForeground.scene.transitionDurationSeconds ?? 0.5, liveForeground.duration / 2);
+      const remaining = liveForeground.duration - localTime;
+      if (duration > 0 && remaining < duration) opacity = Math.max(opacity, 1 - remaining / duration);
+    }
+    if (liveForeground.scene.fadeEdges) {
+      const duration = Math.min(liveForeground.scene.transitionDurationSeconds ?? 0.5, liveForeground.duration / 2);
+      if (duration > 0) opacity = Math.max(opacity, 1 - Math.min(1, localTime / duration), 1 - Math.min(1, (liveForeground.duration - localTime) / duration));
+    }
+    return clampTimelineNumber(opacity, 0, 1);
+  })();
+  const liveLayerOpacity = (entry: TimelineClipLayout) => {
+    if (visibleLayouts.length < 2) return 1;
+    const older = visibleLayouts[0]!;
+    const newer = visibleLayouts[1]!;
+    if (older.transition !== "mix" || older.overlapToNext <= 0) return entry.scene.id === newer.scene.id ? 1 : 0;
+    const progress = clampTimelineNumber((currentTime - newer.start) / older.overlapToNext, 0, 1);
+    return entry.scene.id === older.scene.id ? 1 - progress : progress;
+  };
+  const liveTransform = (entry: TimelineClipLayout) => {
+    const scene = entry.scene;
+    const configured = scene.kenBurnsDirection ?? "auto";
+    const projectDirection = project.settings.assembly.kenBurnsDirection ?? "in";
+    const direction = configured === "auto"
+      ? !project.settings.assembly.kenBurns ? "off" : projectDirection === "alternate" ? (scene.order % 2 === 0 ? "in" : "out") : projectDirection
+      : configured;
+    if (direction === "off") return "scale(1)";
+    const progress = clampTimelineNumber((currentTime - entry.start) / entry.duration, 0, 1);
+    const maximum = clampTimelineNumber(scene.kenBurnsZoom ?? 1.1, 1, 1.5);
+    const scale = direction === "out" ? maximum - (maximum - 1) * progress : 1 + (maximum - 1) * progress;
+    return `scale(${scale.toFixed(4)})`;
+  };
+
+  return (
+    <div className="timeline-studio-backdrop">
+      <section className={`timeline-studio${propertiesOpen && primary ? " properties-open" : ""}`}>
+        <header className="timeline-topbar">
+          <button className="timeline-icon-button" onClick={() => void leaveTimeline(onClose)} title="Назад"><ChevronLeft size={19} /></button>
+          <div className="timeline-project-title">
+            <strong>{project.title}</strong>
+            <small>{scenes.length} сцен · {formatTimestamp(totalDuration)} · {project.aspectRatio === "16:9" ? "1280×720" : project.aspectRatio}</small>
+          </div>
+          <div className="timeline-transport">
+            <button disabled={scenes.length === 0} onClick={() => seekTimeline(Math.max(0, currentTime - 5))}><ArrowLeft size={14} /></button>
+            <button className="play" disabled={scenes.length === 0 || (mediaMode === "final" && !project.outputPath)} onClick={() => void togglePlayback()}>{playing ? <Pause size={17} /> : <Play size={17} />}</button>
+            <button disabled={scenes.length === 0} onClick={() => seekTimeline(Math.min(totalDuration, currentTime + 5))}><ArrowRight size={14} /></button>
+            <time>{formatTimestamp(currentTime)} <span>/ {formatTimestamp(totalDuration)}</span></time>
+          </div>
+          <div className="timeline-top-actions">
+            <button className="timeline-icon-button" onClick={onOpenFolder} title="Открыть папку"><FolderOpen size={16} /></button>
+            <label className="timeline-zoom" title="Ctrl + колесо — масштаб под курсором"><span>−</span><input type="range" min="8" max="160" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /><span>+</span><em>{Math.round(zoom)}px/с</em></label>
+            <button className="generate-button compact" disabled={busy || scenes.length === 0} onClick={() => void rebuild()}><RotateCcw size={14} />{saving ? "Сохраняю…" : "Пересобрать"}</button>
+          </div>
+        </header>
+
+        <div className="timeline-stage">
+          <main className="timeline-preview-area">
+            <div className="timeline-media-frame">
+              {mediaMode === "final" && finalVideoSource ? (
+                <video
+                  key={`final-${finalVideoSource}-${project.updatedAt}`}
+                  ref={videoRef}
+                  data-mode="final"
+                  src={api.mediaUrl(finalVideoSource)}
+                  preload="metadata"
+                  playsInline
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                  onEnded={() => setPlaying(false)}
+                  onLoadedMetadata={(event) => handleLoadedMetadata(event.currentTarget)}
+                  onTimeUpdate={(event) => handleVideoTime(event.currentTarget)}
+                  onError={(event) => {
+                    const error = event.currentTarget.error;
+                    reportMediaError(error?.message || "Final.mp4 не удалось загрузить", error?.code);
+                  }}
+                />
+              ) : mediaMode === "live" && visibleLayouts.length > 0 ? (
+                <div ref={livePreviewRef} className="timeline-live-preview">
+                  {visibleLayouts.map((entry) => {
+                    const localTime = clampTimelineNumber(currentTime - entry.start, 0, entry.duration);
+                    const rate = clampTimelineNumber(entry.scene.playbackRate ?? 1, 0.25, 4);
+                    const mediaTime = (entry.scene.trimStartSeconds ?? 0) + localTime * rate;
+                    const opacity = liveLayerOpacity(entry);
+                    const sourceVolume = project.settings.video.muteSource ? 0 : (entry.scene.sourceVolume ?? project.settings.video.sourceVolume) / 100;
+                    const narrationVolume = (entry.scene.narrationVolume ?? 100) / 100;
+                    return (
+                      <div key={entry.scene.id} className="timeline-live-layer" style={{ opacity, transform: liveTransform(entry) }}>
+                        {entry.scene.videoPath ? (
+                          <video
+                            data-timeline-media
+                            data-timeline-time={mediaTime}
+                            data-timeline-rate={rate}
+                            data-timeline-volume={sourceVolume * opacity}
+                            src={api.mediaUrl(entry.scene.videoPath)}
+                            poster={entry.scene.imagePath ? api.mediaUrl(entry.scene.imagePath) : undefined}
+                            preload="auto"
+                            playsInline
+                          />
+                        ) : entry.scene.imagePath ? (
+                          <img src={api.mediaUrl(entry.scene.imagePath)} alt={entry.scene.title} />
+                        ) : (
+                          <div className="timeline-no-media"><Image size={34} /><span>У сцены нет изображения</span></div>
+                        )}
+                        {entry.scene.audioPath && (
+                          <audio
+                            data-timeline-media
+                            data-timeline-time={mediaTime}
+                            data-timeline-rate={rate}
+                            data-timeline-volume={narrationVolume * opacity}
+                            src={api.mediaUrl(entry.scene.audioPath)}
+                            preload="auto"
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {project.settings.music.enabled !== false && project.settings.music.path && (
+                    <audio
+                      key={project.settings.music.path}
+                      data-timeline-media
+                      data-timeline-loop="true"
+                      data-timeline-time={currentTime}
+                      data-timeline-rate="1"
+                      data-timeline-volume={project.settings.music.volume / 100}
+                      src={api.mediaUrl(project.settings.music.path)}
+                      preload="auto"
+                      loop
+                    />
+                  )}
+                  <div className="timeline-live-fade" style={{ opacity: liveFadeOpacity }} />
+                  <span className="timeline-live-label">Живой предпросмотр · сцена {(liveForeground?.index ?? 0) + 1}</span>
+                </div>
+              ) : (
+                <div className="timeline-no-media"><Video size={38} /><span>Сначала сгенерируйте материалы сцены</span></div>
+              )}
+              {(mediaMode === "live" ? visibleLayouts.length > 0 : Boolean(finalVideoSource)) && !mediaError && <button className="timeline-big-play" onClick={() => void togglePlayback()}>{playing ? <Pause size={26} /> : <Play size={27} />}</button>}
+              {mediaMode === "final" && mediaError && <div className="timeline-media-error"><Video size={28} /><strong>Видео не открылось</strong><span>{mediaError}</span><button onClick={reloadVideo}><RotateCcw size={13} />Повторить</button></div>}
+            </div>
+            <div className="timeline-preview-switch">
+              <button className={mediaMode === "live" ? "active" : ""} disabled={scenes.length === 0} onClick={() => { videoRef.current?.pause(); pendingSeekRef.current = null; livePlaybackRef.current = null; setMediaMode("live"); setPlaying(false); }}>Предпросмотр</button>
+              <button className={mediaMode === "final" ? "active" : ""} disabled={!project.outputPath || dirty} title={dirty ? "Сначала примените изменения" : "Открыть собранный файл"} onClick={() => { livePlaybackRef.current = null; pendingSeekRef.current = currentTime; setMediaMode("final"); setPlaying(false); }}>Final.mp4</button>
+            </div>
+          </main>
+
+          {propertiesOpen && primary && (
+            <aside className="timeline-properties">
+              <header><div><b>{selected.length}</b><strong>{selected.length === 1 ? "Свойства сцены" : `Свойства ${selected.length} сцен`}</strong></div><button onClick={() => setPropertiesOpen(false)}><X size={16} /></button></header>
+              <div className="timeline-properties-scroll">
+                {selected.length === 1 && (
+                  <div className="timeline-property-thumb">
+                    {primary.imagePath ? <img src={api.mediaUrl(primary.imagePath)} alt="" /> : <Image size={30} />}
+                    <span>{primary.order + 1}. {primary.title}</span>
+                  </div>
+                )}
+                <section>
+                  <small>СОСТОЯНИЕ</small>
+                  <button disabled={busy} className={`timeline-switch-row${selected.every((scene) => scene.includeInAssembly !== false) ? " on" : ""}`} onClick={() => patchSelected({ includeInAssembly: !selected.every((scene) => scene.includeInAssembly !== false) })}>
+                    <span>Сцена участвует в сборке</span><i />
+                  </button>
+                </section>
+                {selected.length === 1 && (
+                  <section>
+                    <small>ТАЙМИНГ И ОБРЕЗКА</small>
+                    <div className="timeline-two-fields">
+                      <label>Длительность, с<input type="number" min="1" max="600" step="0.1" value={primary.durationOverrideSeconds ?? primary.durationSeconds} onChange={(event) => patchSelected({ durationOverrideSeconds: Math.max(1, Number(event.target.value)) })} /></label>
+                      <label>Скорость<select value={primary.playbackRate ?? 1} onChange={(event) => patchSelected({ playbackRate: Number(event.target.value) })}><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1.0×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2.0×</option></select></label>
+                      <label>С начала, с<input type="number" min="0" step="0.1" value={primary.trimStartSeconds ?? 0} onChange={(event) => { const start = Math.max(0, Number(event.target.value)); patchSelected({ trimStartSeconds: start, trimEndSeconds: primary.trimEndSeconds !== undefined && primary.trimEndSeconds <= start ? undefined : primary.trimEndSeconds }); }} /></label>
+                      <label>До, с<input type="number" min={(primary.trimStartSeconds ?? 0) + 0.1} step="0.1" placeholder="до конца" value={primary.trimEndSeconds ?? ""} onChange={(event) => patchSelected({ trimEndSeconds: event.target.value ? Math.max((primary.trimStartSeconds ?? 0) + 0.1, Number(event.target.value)) : undefined })} /></label>
+                    </div>
+                  </section>
+                )}
+                <section>
+                  <small>ЗВУК</small>
+                  <label className="timeline-range-field"><span>Громкость озвучки <b>{primary.narrationVolume ?? 100}%</b></span><input type="range" min="0" max="150" value={primary.narrationVolume ?? 100} onChange={(event) => patchSelected({ narrationVolume: Number(event.target.value) })} /></label>
+                  <label className="timeline-range-field"><span>Громкость видео <b>{primary.sourceVolume ?? project.settings.video.sourceVolume}%</b></span><input type="range" min="0" max="100" value={primary.sourceVolume ?? project.settings.video.sourceVolume} onChange={(event) => patchSelected({ sourceVolume: Number(event.target.value) })} /></label>
+                  <div className="timeline-audio-actions">
+                    <button disabled={busy} onClick={() => patchSelected({ narrationVolume: (primary.narrationVolume ?? 100) > 0 ? 0 : 100 })}>{(primary.narrationVolume ?? 100) > 0 ? <EyeOff size={13} /> : <Volume2 size={13} />}{(primary.narrationVolume ?? 100) > 0 ? "Отключить озвучку" : "Включить озвучку"}</button>
+                    <button disabled={busy || !project.settings.voice.enabled} onClick={() => void regenerateSelected("audio")}><RotateCcw size={13} />Перегенерировать звук</button>
+                  </div>
+                </section>
+                <section>
+                  <small>ПАНОРАМА ФОТО-СЦЕНЫ</small>
+                  <div className="timeline-two-fields">
+                    <label>Направление<select value={primary.kenBurnsDirection ?? "auto"} onChange={(event) => patchSelected({ kenBurnsDirection: event.target.value as TimelineScene["kenBurnsDirection"] })}><option value="auto">Авто</option><option value="in">Приближение</option><option value="out">Отдаление</option><option value="off">Отключено</option></select></label>
+                    <label>Зум<select value={primary.kenBurnsZoom ?? 1.1} onChange={(event) => patchSelected({ kenBurnsZoom: Number(event.target.value) })}><option value="1.05">Мягкий 5%</option><option value="1.1">Обычный 10%</option><option value="1.15">Сильный 15%</option><option value="1.2">20%</option></select></label>
+                  </div>
+                </section>
+                <section>
+                  <small>ПЕРЕХОД К СЛЕДУЮЩЕЙ СЦЕНЕ</small>
+                  <label className="timeline-full-field">Тип<select value={primary.transition ?? "auto"} onChange={(event) => { const transition = event.target.value; patchSelected(transition === "auto" ? { transition: undefined, transitionDurationSeconds: primary.transitionDurationSeconds === 0 ? 0.5 : primary.transitionDurationSeconds } : transition === "none" ? { transition: "none", transitionDurationSeconds: 0 } : { transition: transition as TimelineScene["transition"], transitionDurationSeconds: primary.transitionDurationSeconds && primary.transitionDurationSeconds > 0 ? primary.transitionDurationSeconds : 0.5 }); }}><option value="auto">Как в проекте</option><option value="mix">Смешивание</option><option value="fade">Затухание через чёрный</option><option value="none">Без перехода</option></select></label>
+                  <label className="timeline-range-field"><span>Длительность перехода <b>{primary.transition === "none" ? 0 : primary.transitionDurationSeconds ?? 0.5} с</b></span><input type="range" min="0" max="5" step="0.05" value={primary.transition === "none" ? 0 : primary.transitionDurationSeconds ?? 0.5} onChange={(event) => selected.length === 1 ? setTransitionDuration(primary.id, Number(event.target.value)) : patchSelected(Number(event.target.value) <= 0.01 ? { transition: "none", transitionDurationSeconds: 0 } : { transition: primary.transition === "none" ? "mix" : primary.transition, transitionDurationSeconds: Number(event.target.value) })} /></label>
+                  <button className="timeline-remove-transition" disabled={busy || primary.order >= scenes.length - 1} onClick={() => patchSelected({ transition: "none", transitionDurationSeconds: 0 })}><X size={13} />Удалить переход</button>
+                  <button className={`timeline-switch-row${primary.fadeEdges ? " on" : ""}`} onClick={() => patchSelected({ fadeEdges: !primary.fadeEdges })}><span>Затемнение на краях сцены</span><i /></button>
+                  <p className="timeline-live-note">Изменения видны сразу в режиме «Предпросмотр». Маркер перехода на стыке можно растягивать мышью.</p>
+                </section>
+                {selected.length === 1 && (
+                  <section>
+                    <small>ПРОМПТЫ СЦЕНЫ</small>
+                    <label className="timeline-full-field">Изображение<textarea rows={4} value={primary.imagePrompt} onChange={(event) => patchSelected({ imagePrompt: event.target.value })} /></label>
+                    <label className="timeline-full-field">Видео / движение<textarea rows={3} value={primary.animationPrompt} onChange={(event) => patchSelected({ animationPrompt: event.target.value })} /></label>
+                  </section>
+                )}
+                {selected.length > 1 && <p className="timeline-bulk-note">Изменения применятся ко всем выбранным сценам.</p>}
+              </div>
+              <footer><button className="outline-button" onClick={() => { setScenes(initialScenes()); setDirty(false); }}>Отмена</button><button className="generate-button compact" disabled={!dirty || busy} onClick={() => void persist()}><Check size={14} />Применить</button></footer>
+            </aside>
+          )}
+        </div>
+
+        <div className="timeline-sequencer">
+          <div className="timeline-track-labels">
+            <span>ВРЕМЯ</span>
+            <strong><Video size={15} />Видео</strong>
+            <strong><Mic2 size={15} />Озвучка</strong>
+            <strong><Music2 size={15} />Музыка</strong>
+            <strong><Captions size={15} />Субтитры</strong>
+            <span>ОБЗОР</span>
+          </div>
+          <div ref={timelineScrollRef} className="timeline-scroll" title="Alt + колесо — прокрутка, Ctrl + колесо — масштаб">
+            <div className="timeline-canvas" style={{ width: timelineWidth }}>
+              <div className="timeline-ruler-new seekable" onPointerDown={beginScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={endScrub}>
+                {Array.from({ length: Math.floor(timelineDuration / 5) + 1 }, (_, index) => <time key={index} style={{ left: index * 5 * zoom }}>{formatTimestamp(index * 5)}</time>)}
+              </div>
+              <div className="timeline-grid-track video-track">
+                {layout.map((entry) => (
+                  <button
+                    key={entry.scene.id}
+                    draggable={!busy}
+                    style={{ left: entry.start * zoom, width: Math.max(8, entry.duration * zoom) }}
+                    className={`timeline-clip${selectedIds.includes(entry.scene.id) ? " selected" : ""}${entry.scene.includeInAssembly === false ? " excluded" : ""}`}
+                    onDragStart={() => { dragIdRef.current = entry.scene.id; }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => dropAt(entry.scene.id, event.clientX > event.currentTarget.getBoundingClientRect().left + event.currentTarget.clientWidth / 2)}
+                    onClick={(event) => chooseScene(entry.scene.id, event)}
+                    onContextMenu={(event) => { event.preventDefault(); if (!selectedIds.includes(entry.scene.id)) setSelectedIds([entry.scene.id]); setMenu({ x: event.clientX, y: event.clientY, sceneId: entry.scene.id }); }}
+                  >
+                    {entry.scene.imagePath ? <img src={api.mediaUrl(entry.scene.imagePath)} alt="" draggable={false} /> : <Image size={18} />}
+                    <i>{entry.scene.order + 1}</i><em>{entry.duration.toFixed(1)}с</em><GripVertical size={13} />
+                  </button>
+                ))}
+                {layout.slice(0, -1).map((entry) => {
+                  const duration = entry.transition === "none" ? 0 : entry.scene.transitionDurationSeconds ?? 0.5;
+                  const markerWidth = Math.max(18, duration * zoom);
+                  const center = entry.transition === "mix" && entry.overlapToNext > 0 ? entry.end - entry.overlapToNext / 2 : entry.end;
+                  return (
+                    <button
+                      key={`transition-${entry.scene.id}`}
+                      className={`timeline-transition-marker ${entry.transition}${activeTransitionId === entry.scene.id ? " selected" : ""}`}
+                      style={{ left: center * zoom - markerWidth / 2, width: markerWidth }}
+                      title={entry.transition === "none" ? "Добавить переход" : `${entry.transition === "mix" ? "Смешивание" : "Затухание"} · ${duration.toFixed(2)} с`}
+                      onClick={(event) => { event.stopPropagation(); selectTransition(entry.scene.id); }}
+                    >
+                      <span className="left" onPointerDown={(event) => beginTransitionResize(event, entry, -1)} onPointerMove={moveTransitionResize} onPointerUp={endTransitionResize} onPointerCancel={endTransitionResize} />
+                      <b>{entry.transition === "none" ? "+" : "∞"}</b>
+                      <span className="right" onPointerDown={(event) => beginTransitionResize(event, entry, 1)} onPointerMove={moveTransitionResize} onPointerUp={endTransitionResize} onPointerCancel={endTransitionResize} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="timeline-grid-track audio-track">{layout.map((entry) => <button key={entry.scene.id} style={{ left: entry.start * zoom, width: Math.max(8, entry.duration * zoom) }} className={entry.scene.audioPath ? "ready" : "missing"} onClick={(event) => chooseScene(entry.scene.id, event)} onDoubleClick={() => void regenerateSelected("audio", [entry.scene.id])} title="Клик — свойства звука, двойной клик — перегенерировать"><Volume2 size={12} />{entry.scene.audioPath ? `${entry.scene.narrationVolume ?? 100}%` : "Нет озвучки"}</button>)}</div>
+              <div className="timeline-grid-track music-track"><span>{project.settings.music.path && project.settings.music.enabled !== false ? "Фоновая музыка" : "Музыка не добавлена"}</span></div>
+              <div className="timeline-grid-track subtitle-track">{layout.map((entry) => <span key={entry.scene.id} style={{ left: entry.start * zoom, width: Math.max(8, entry.duration * zoom) }}>{project.settings.subtitles.enabled && entry.scene.narration ? entry.scene.narration.slice(0, 28) : "—"}</span>)}</div>
+              <div className="timeline-overview">{layout.map((entry) => <i key={entry.scene.id} className={entry.scene.includeInAssembly === false ? "excluded" : ""} style={{ left: entry.start * zoom, width: entry.duration * zoom }} />)}</div>
+              <div ref={playheadRef} className="timeline-playhead" style={{ left: 0, transform: `translateX(${Math.min(timelineWidth, playheadLeft)}px)` }}><i /></div>
+            </div>
+          </div>
+        </div>
+
+        {selected.length > 1 && (
+          <div className="timeline-selection-bar"><b>Выбрано {selected.length}</b><button disabled={busy} onClick={toggleSelected}>{selected.some((scene) => scene.includeInAssembly === false) ? <Eye size={14} /> : <EyeOff size={14} />} {selected.some((scene) => scene.includeInAssembly === false) ? "Включить" : "Отключить"}</button><button onClick={() => setPropertiesOpen(true)}><SlidersHorizontal size={14} />Свойства</button><button disabled={busy} onClick={deleteSelected}><Trash2 size={14} />Удалить</button><button disabled={busy} className="primary" onClick={() => void regenerateSelected("all")}><RotateCcw size={14} />Перегенерировать</button></div>
+        )}
+
+        {menu && montageMenuScene && (
+          <div className="context-backdrop timeline-context-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
+            <div className="context-menu timeline-context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 245), top: Math.min(menu.y, window.innerHeight - 390) }} onMouseDown={(event) => event.stopPropagation()}>
+              <button onClick={() => { setPropertiesOpen(true); setMenu(null); }}><SlidersHorizontal size={14} />Свойства сцены</button>
+              <button disabled={busy} onClick={() => { void regenerateSelected("image", [montageMenuScene.id]); setMenu(null); }}><Image size={14} />Перегенерировать фото</button>
+              <button disabled={busy || !project.settings.video.enabled} onClick={() => { void regenerateSelected("video", [montageMenuScene.id]); setMenu(null); }}><Video size={14} />Перегенерировать видео</button>
+              <button disabled={busy || !project.settings.voice.enabled} onClick={() => { void regenerateSelected("audio", [montageMenuScene.id]); setMenu(null); }}><Mic2 size={14} />Перегенерировать озвучку</button>
+              <button disabled={busy} onClick={() => { void regenerateSelected("all", [montageMenuScene.id]); setMenu(null); }}><RotateCcw size={14} />Перегенерировать всё</button>
+              <hr />
+              <button disabled={busy} onClick={() => { toggleSelected(); setMenu(null); }}>{selected.some((scene) => scene.includeInAssembly === false) ? <Eye size={14} /> : <EyeOff size={14} />}{selected.some((scene) => scene.includeInAssembly === false) ? `Включить ${selected.length > 1 ? "выбранные" : "сцену"}` : `Отключить ${selected.length > 1 ? "выбранные" : "сцену"}`}</button>
+              <button disabled={busy} onClick={() => { duplicatePrimary(montageMenuScene); setMenu(null); }}><Copy size={14} />Дублировать</button>
+              <button onClick={() => { copySceneSettings(montageMenuScene); setMenu(null); }}><Save size={14} />Копировать настройки</button>
+              <button disabled={!copiedSettings} onClick={() => { if (copiedSettings) patchSelected(copiedSettings); setMenu(null); }}><Download size={14} />Вставить настройки</button>
+              <hr />
+              <button disabled={busy} className="danger" onClick={() => { deleteSelected(); setMenu(null); }}><Trash2 size={14} />{selected.length > 1 ? "Удалить выбранные" : "Удалить сцену"}</button>
+            </div>
+          </div>
+        )}
+
+        <button className="timeline-scenes-button" onClick={() => void leaveTimeline(onShowScenes)}><Grid2X2 size={14} />Показать сцены</button>
+      </section>
+    </div>
+  );
+}
+
+function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOpenFolder, onAssemble, onSave, onEditScenario, onToggleScene }: { project: Project; initialMode: "preview" | "timeline"; onClose: () => void; onRegenerate: (sceneId: string | string[], target?: "image" | "video" | "audio" | "all") => Promise<void>; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void }) {
   const api = window.goldWork ?? fallbackApi;
   const [mode, setMode] = useState(initialMode);
   const [menu, setMenu] = useState<{ x: number; y: number; scene: Scene } | null>(null);
@@ -2584,6 +3814,9 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
   const busyGenerating = project.status === "generating" || project.status === "paused";
   const selectedScene = project.scenes.find((scene) => scene.id === selectedSceneId);
   const totalDuration = Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0));
+  if (mode === "timeline") {
+    return <TimelineEditor project={project} onClose={onClose} onShowScenes={() => setMode("preview")} onOpenFolder={onOpenFolder} onAssemble={onAssemble} onSave={onSave} onRegenerate={onRegenerate} />;
+  }
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="preview-modal">
@@ -2596,11 +3829,11 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
             </div>
           </div>
           <div>
-            <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}>
+            <button className="active" onClick={() => setMode("preview")}>
               <Grid2X2 size={14} />
               Сцены
             </button>
-            <button className={mode === "timeline" ? "active" : ""} onClick={() => setMode("timeline")}>
+            <button onClick={() => setMode("timeline")}>
               <Clock3 size={14} />
               Таймлайн
             </button>
@@ -2745,9 +3978,9 @@ function ProjectPreviewModal({ project, initialMode, onClose, onRegenerate, onOp
           <button className="outline-button" onClick={onClose}>
             Закрыть
           </button>
-          <button className="generate-button" onClick={() => setMode(mode === "preview" ? "timeline" : "preview")}>
-            {mode === "preview" ? <Clock3 size={15} /> : <Grid2X2 size={15} />}
-            {mode === "preview" ? "Открыть таймлайн" : "Показать сцены"}
+          <button className="generate-button" onClick={() => setMode("timeline")}>
+            <Clock3 size={15} />
+            Открыть таймлайн
           </button>
         </footer>
       </section>
@@ -2764,7 +3997,7 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
   const [youtubeApiKey, setYouTubeApiKey] = useState("");
   const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, baseUrl: "" });
   const [voicerKey, setVoicerKey] = useState("");
-  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "gemini-omni-flash-preview", proxyUrl: "" });
+  const [google, setGoogle] = useState<GoogleSettings>({ configured: false, veoModel: "veo-3.1-lite-generate-preview", proxyUrl: "" });
   const [googleKey, setGoogleKey] = useState("");
   const [connectionMessage, setConnectionMessage] = useState("");
   useEffect(() => {
@@ -2878,9 +4111,9 @@ function SettingsPage({ appInfo }: { appInfo: Awaited<ReturnType<DesktopApi["get
               <Field label="КЛЮЧ GOOGLE AI STUDIO">
                 <input type="password" value={googleKey} onChange={(event) => setGoogleKey(event.target.value)} placeholder={google.configured ? "Оставьте пустым, чтобы не менять" : "AIza… или AQ.…"} />
               </Field>
-              <Field label="МОДЕЛЬ ВИДЕО" hint="gemini-omni-flash-preview — Omni Flash (быстро, image-to-video, звук). veo-3.1-fast-generate-preview — классический Veo.">
+              <Field label="МОДЕЛЬ ВИДЕО" hint="Lite — самая дешёвая, для большого числа сцен. Fast — компромисс. Обычная Veo 3.1 — лучшее качество и самая дорогая.">
                 <select value={google.veoModel} onChange={(event) => setGoogle({ ...google, veoModel: event.target.value })}>
-                  <option value="gemini-omni-flash-preview">Gemini Omni Flash (рекомендуется)</option>
+                  <option value="veo-3.1-lite-generate-preview">Veo 3.1 Lite (рекомендуется, дешевле всего)</option>
                   <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
                   <option value="veo-3.1-generate-preview">Veo 3.1 (максимальное качество)</option>
                 </select>
@@ -3027,37 +4260,124 @@ function ToolPage({ section, onAction }: { section: SectionKey; onAction: () => 
   );
 }
 
-function ConsoleDock({ open, queue, log, onToggle }: { open: boolean; queue: QueueTask[]; log: Array<{ time: string; level: string; text: string }>; onToggle: () => void }) {
-  const running = queue.filter((task) => task.status === "running").length;
+function describeConsoleEntry(entry: ConsoleLogEntry): string {
+  const details = entry.details ?? {};
+  const label = String(details.label ?? details.kind ?? "Задача");
+  const attempt = details.attempts ? ` · попытка ${details.attempts}/${details.maxAttempts ?? "?"}` : "";
+  const messages: Record<string, string> = {
+    "queue.project.started": `Генерация проекта запущена: ${details.scenes ?? "?"} сцен, ${details.tasks ?? "?"} задач`,
+    "queue.project.reassemble": "Запущена пересборка Final.mp4",
+    "queue.scene.regeneration.started": `Перегенерация запущена: ${details.scenes ?? 1} сцен · ${details.target ?? "all"}`,
+    "timeline.player.error": `Плеер не открыл ${details.file ?? "Final.mp4"}${details.code ? ` · код ${details.code}` : ""}`,
+    "queue.task.started": `${label}: запуск${attempt}`,
+    "queue.task.completed": `${label}: готово${details.resultFile ? ` · ${details.resultFile}` : ""}`,
+    "queue.task.retry_scheduled": `${label}: ошибка, повтор будет автоматически${attempt}`,
+    "queue.task.retry_ready": `${label}: повторный запуск готов`,
+    "queue.task.blocked": `${label}: заблокировано предыдущей ошибкой`,
+    "queue.task.failed": `${label}: ошибка после всех попыток`,
+    "queue.task.failed_permanently": `${label}: постоянная ошибка провайдера, повторы остановлены`,
+    "queue.task.failed_while_paused": `${label}: ошибка во время паузы`,
+    "queue.task.placeholder_used": `${label}: использована локальная заглушка`,
+    "queue.task.video_fallback": `${label}: AI-видео недоступно, использован кадр с движением камеры`,
+    "queue.run.completed": `Генерация завершена: ${details.completed ?? details.tasks ?? "?"} задач`,
+    "queue.run.failed": `Генерация завершилась с ошибками: ${details.failed ?? "?"}`,
+    "queue.run.cancelled": `Генерация остановлена: отменено ${details.cancelled ?? "?"} задач`,
+    "queue.project.paused": "Генерация поставлена на паузу",
+    "queue.project.resumed": "Генерация продолжена",
+    "queue.project.stopped": "Генерация остановлена",
+    "queue.restored_paused": `После перезапуска восстановлено на паузе: ${details.tasks ?? "?"} задач`,
+    "app.session.started": "Запущена новая сессия Gold Work Studio",
+    "app.ready": "Приложение готово к работе"
+  };
+  if (entry.message === "director.progress") return String(details.stage ?? "AI-режиссёр выполняет задачу");
+  if (entry.message === "queue.task.stage") return `${label}: ${details.stage ?? "выполняется"}`;
+  if (entry.message === "ui.action") return String(details.text ?? "Действие интерфейса");
+  if (entry.message === "ipc.failed") return `Ошибка операции ${details.channel ?? "IPC"}`;
+  if (entry.message === "ipc.request") return `Запрос ${details.channel ?? "IPC"}`;
+  if (entry.message === "ipc.success") return `Готово ${details.channel ?? "IPC"}`;
+  return messages[entry.message] ?? entry.message;
+}
+
+function formatConsoleLine(entry: ConsoleLogEntry): string {
+  const details = entry.details && Object.keys(entry.details).length > 0 ? ` ${JSON.stringify(entry.details)}` : "";
+  return `${entry.timestamp} [${entry.level.toUpperCase()}] ${describeConsoleEntry(entry)}${details}`;
+}
+
+function ConsoleViewer({ entries, compact = false, viewState, onViewStateChange, onClear, onOpenFile }: { entries: ConsoleLogEntry[]; compact?: boolean; viewState: ConsoleViewState; onViewStateChange: (next: ConsoleViewState) => void; onClear: () => void; onOpenFile: () => void }) {
+  const { query, level, autoScroll } = viewState;
   const linesRef = useRef<HTMLDivElement>(null);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = entries.filter((entry) => {
+    if (level !== "all" && entry.level !== level) return false;
+    if (!normalizedQuery) return true;
+    return `${describeConsoleEntry(entry)} ${entry.message} ${JSON.stringify(entry.details ?? {})}`.toLowerCase().includes(normalizedQuery);
+  });
   useEffect(() => {
-    if (open && linesRef.current) linesRef.current.scrollTop = linesRef.current.scrollHeight;
-  }, [log, open]);
+    if (autoScroll && linesRef.current) linesRef.current.scrollTop = linesRef.current.scrollHeight;
+  }, [filtered.length, filtered[filtered.length - 1]?.id, autoScroll]);
+  const copyVisible = () => void navigator.clipboard.writeText(filtered.map(formatConsoleLine).join("\n")).catch(() => undefined);
+  return (
+    <div className={`console-viewer${compact ? " compact" : ""}`}>
+      <div className="console-toolbar">
+        <label><Search size={13} /><input value={query} onChange={(event) => onViewStateChange({ ...viewState, query: event.target.value })} placeholder="Поиск по журналу…" /></label>
+        <select value={level} onChange={(event) => onViewStateChange({ ...viewState, level: event.target.value as "all" | LogLevel })}>
+          <option value="all">Все уровни</option>
+          <option value="info">Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+          <option value="debug">Debug</option>
+        </select>
+        <button className={autoScroll ? "active" : ""} onClick={() => onViewStateChange({ ...viewState, autoScroll: !autoScroll })} title="Автопрокрутка"><ArrowDown size={13} /></button>
+        <button onClick={copyVisible} title="Копировать видимые строки"><Copy size={13} /></button>
+        <button onClick={onOpenFile} title="Открыть полный лог-файл"><FolderOpen size={13} /></button>
+        <button onClick={onClear} title="Очистить консоль на экране"><Trash2 size={13} /></button>
+        <span>{filtered.length}/{entries.length}</span>
+      </div>
+      <div
+        className="console-lines"
+        ref={linesRef}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          if (element.scrollHeight - element.scrollTop - element.clientHeight > 36 && autoScroll) onViewStateChange({ ...viewState, autoScroll: false });
+        }}
+      >
+        {filtered.length === 0 && <div className="console-empty">Событий по выбранному фильтру пока нет.</div>}
+        {filtered.map((entry) => (
+          <div className={`console-line level-${entry.level}`} key={entry.id}>
+            <time>{new Date(entry.timestamp).toLocaleTimeString("ru-RU")}</time>
+            <b>{entry.level.toUpperCase()}</b>
+            <span>{describeConsoleEntry(entry)}</span>
+            {entry.details && Object.keys(entry.details).length > 0 && (
+              <details><summary>данные</summary><pre>{JSON.stringify(entry.details, null, 2)}</pre></details>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConsoleDock({ open, queue, entries, viewState, onViewStateChange, onToggle, onClear, onOpenFile }: { open: boolean; queue: QueueTask[]; entries: ConsoleLogEntry[]; viewState: ConsoleViewState; onViewStateChange: (next: ConsoleViewState) => void; onToggle: () => void; onClear: () => void; onOpenFile: () => void }) {
+  const running = queue.filter((task) => task.status === "running").length;
   return (
     <div className={`console-dock${open ? " open" : ""}`}>
-      <button className="console-head" onClick={onToggle}>
-        <span>
+      <div className="console-head">
+        <button onClick={onToggle}>
           <SquareTerminal size={14} />
-          CONSOLE OUTPUT <em>{log.length}</em>
-        </span>
-        <span>
-          <b style={{ opacity: 0.7 }}>очередь: {running}/{queue.length}</b>
-          {open ? "⌄" : "⌃"}
-        </span>
-      </button>
-      {open && (
-        <div className="console-lines" ref={linesRef}>
-          {log.length === 0 && (
-            <p><time>{new Date().toLocaleTimeString("ru-RU")}</time><b>INFO</b> Интерфейс GoldWork Studio запущен</p>
-          )}
-          {log.map((line, index) => (
-            <p key={index}>
-              <time>{line.time}</time>
-              <b>{line.level}</b> {line.text}
-            </p>
-          ))}
-        </div>
-      )}
+          CONSOLE OUTPUT <em>{entries.length}</em>
+        </button>
+        <button onClick={onToggle}>очередь: {running}/{queue.length} {open ? "⌄" : "⌃"}</button>
+      </div>
+      {open && <ConsoleViewer entries={entries} viewState={viewState} onViewStateChange={onViewStateChange} compact onClear={onClear} onOpenFile={onOpenFile} />}
+    </div>
+  );
+}
+
+function ConsolePage({ entries, viewState, onViewStateChange, onClear, onOpenFile }: { entries: ConsoleLogEntry[]; viewState: ConsoleViewState; onViewStateChange: (next: ConsoleViewState) => void; onClear: () => void; onOpenFile: () => void }) {
+  return (
+    <div className="console-page">
+      <PageHeading icon={<SquareTerminal size={24} />} title="Консоль" subtitle="События сценария, генерации, провайдеров, повторных попыток и сборки" />
+      <ConsoleViewer entries={entries} viewState={viewState} onViewStateChange={onViewStateChange} onClear={onClear} onOpenFile={onOpenFile} />
     </div>
   );
 }

@@ -272,12 +272,12 @@ export class ProjectService {
       if (input.scenes && (current.status === "generating" || current.status === "paused")) {
         throw new Error("Нельзя менять состав сцен во время активной генерации. Сначала остановите очередь.");
       }
-      const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined;
+      const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined || input.characterReference !== undefined;
       const active = current.status === "generating" || current.status === "paused";
       return {
         ...input,
         status: input.status ?? (contentChanged && !active ? (input.scenes ?? current.scenes).length ? "ready" : "draft" : current.status),
-        outputPath: contentChanged ? undefined : input.outputPath ?? current.outputPath
+        outputPath: contentChanged ? input.outputPath : input.outputPath ?? current.outputPath
       };
     });
   }

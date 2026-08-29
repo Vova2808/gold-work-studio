@@ -12,6 +12,7 @@ interface TopicRow {
   updated_at: string;
   message_count: number;
   analysis?: string | null;
+  model_id?: string | null;
 }
 
 interface MessageRow {
@@ -56,6 +57,9 @@ export class ChatTopicRepository {
     if (!columns.some((column) => column.name === "analysis")) {
       this.database.exec("ALTER TABLE chat_topics ADD COLUMN analysis TEXT");
     }
+    if (!columns.some((column) => column.name === "model_id")) {
+      this.database.exec("ALTER TABLE chat_topics ADD COLUMN model_id TEXT");
+    }
   }
 
   close(): void {
@@ -65,7 +69,7 @@ export class ChatTopicRepository {
 
   list(): ChatTopicSummary[] {
     const rows = this.db().prepare(`
-      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, COUNT(m.id) AS message_count
+      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, t.model_id, COUNT(m.id) AS message_count
       FROM chat_topics t
       LEFT JOIN chat_messages m ON m.topic_id = t.id
       GROUP BY t.id
@@ -76,7 +80,7 @@ export class ChatTopicRepository {
 
   get(id: string): ChatTopic | undefined {
     const row = this.db().prepare(`
-      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, t.analysis, COUNT(m.id) AS message_count
+      SELECT t.id, t.title, t.preview, t.created_at, t.updated_at, t.analysis, t.model_id, COUNT(m.id) AS message_count
       FROM chat_topics t
       LEFT JOIN chat_messages m ON m.topic_id = t.id
       WHERE t.id = ?
@@ -105,13 +109,20 @@ export class ChatTopicRepository {
     return this.get(topicId)!;
   }
 
-  create(title = "Новая тема"): ChatTopic {
+  create(title = "Новая тема", modelId?: string): ChatTopic {
     const now = new Date().toISOString();
     const id = randomUUID();
     this.db().prepare(`
-      INSERT INTO chat_topics (id, title, preview, created_at, updated_at) VALUES (?, ?, '', ?, ?)
-    `).run(id, normalizeTitle(title), now, now);
+      INSERT INTO chat_topics (id, title, preview, created_at, updated_at, model_id) VALUES (?, ?, '', ?, ?, ?)
+    `).run(id, normalizeTitle(title), now, now, normalizeModelId(modelId));
     return this.get(id)!;
+  }
+
+  setModel(topicId: string, modelId: string): ChatTopic {
+    if (!this.get(topicId)) throw new Error("Тема чата не найдена");
+    this.db().prepare("UPDATE chat_topics SET model_id = ?, updated_at = ? WHERE id = ?")
+      .run(normalizeModelId(modelId), new Date().toISOString(), topicId);
+    return this.get(topicId)!;
   }
 
   append(topicId: string, message: AiChatMessage): ChatTopic {
@@ -157,8 +168,13 @@ function mapSummary(row: TopicRow): ChatTopicSummary {
     preview: row.preview,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    messageCount: Number(row.message_count)
+    messageCount: Number(row.message_count),
+    modelId: row.model_id?.trim() || undefined
   };
+}
+
+function normalizeModelId(value?: string): string | null {
+  return value?.trim().slice(0, 120) || null;
 }
 
 function normalizeTitle(value: string): string {

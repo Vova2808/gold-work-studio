@@ -1,6 +1,8 @@
-import { app, BrowserWindow } from "electron";
+import electron from "electron";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+const { app, BrowserWindow } = electron;
 
 const targetUrl = process.env.GOLD_WORK_SMOKE_URL ?? "http://127.0.0.1:5173/";
 const captureDirectory = join(process.cwd(), "captures");
@@ -181,14 +183,14 @@ async function run() {
     button?.click();
   })()`);
   await wait(250);
-  const timelineOpened = await window.webContents.executeJavaScript("Boolean(document.querySelector('.timeline-tracks'))");
+  const timelineOpened = await window.webContents.executeJavaScript("Boolean(document.querySelector('.timeline-studio'))");
   if (!timelineOpened) fail("таймлайн не открылся");
   window.webContents.invalidate();
   await wait(250);
   const previewImage = await window.webContents.capturePage();
   await writeFile(previewCapturePath, previewImage.toPNG());
   await trace("preview-capture-written");
-  await window.webContents.executeJavaScript("document.querySelector('.modal-close')?.click()");
+  await window.webContents.executeJavaScript("document.querySelector('.timeline-topbar > .timeline-icon-button')?.click()");
   await wait(150);
 
   await window.webContents.executeJavaScript(`(() => {
@@ -229,9 +231,9 @@ async function run() {
   })()`);
   await wait(100);
   const streamPromptReady = await window.webContents.executeJavaScript(`(() => {
-    const input = document.querySelector(".chat-composer input");
+    const input = document.querySelector(".chat-composer textarea");
     if (!input) return false;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "Проверка потокового ответа");
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, "Проверка потокового ответа");
     input.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   })()`);
@@ -272,16 +274,16 @@ async function run() {
   if (!nicheClicked) fail("кнопка анализа ниши не найдена");
   await wait(100);
   const directorControlsReady = await window.webContents.executeJavaScript(
-    "Boolean(document.querySelector('.chat-composer input')?.value.includes('Проанализируй нишу'))",
+    "Boolean(document.querySelector('.chat-composer textarea')?.value.includes('Проанализируй нишу'))",
   );
   if (!directorControlsReady) fail("кнопки AI-генератора не работают");
   await trace("director-controls-ready");
 
   const referenceSent = await window.webContents.executeJavaScript(`(() => {
-    const input = document.querySelector(".chat-composer input");
+    const input = document.querySelector(".chat-composer textarea");
     const send = document.querySelector(".chat-composer .send");
     if (!input || !send) return false;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "https://youtube.com/watch?v=smoke сделай сильный хук");
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, "https://youtube.com/watch?v=smoke сделай сильный хук");
     input.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   })()`);
@@ -308,7 +310,7 @@ async function run() {
   let referenceProjectCreated = false;
   for (let attempt = 0; attempt < 20 && !referenceProjectCreated; attempt += 1) {
     referenceProjectCreated = await window.webContents.executeJavaScript(`(() => {
-      const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => (item.textContent?.includes("Написать сценарий") || item.textContent?.includes("Согласен")) && !item.disabled);
+      const button = [...document.querySelectorAll(".reference-analysis button")].find((item) => (item.textContent?.includes("Написать сценарий") || item.textContent?.includes("Создать проект") || item.textContent?.includes("Согласен")) && !item.disabled);
       if (!button) return false;
       button.click();
       return true;

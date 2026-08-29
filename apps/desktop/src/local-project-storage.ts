@@ -102,10 +102,11 @@ export class LocalProjectStorage {
   }
 
   /** Портрет главного героя проекта — используется как референс для всех сцен. */
-  async saveCharacterReference(project: Project, data: Buffer): Promise<string> {
+  async saveCharacterReference(project: Project, data: Buffer, character: { name: string; prompt: string; updatedAt: string }): Promise<string> {
     const directory = await this.ensureProject(project);
     const path = join(directory, "character.png");
     await writeAtomic(path, data);
+    await writeAtomic(join(directory, "character.json"), JSON.stringify({ ...character, imagePath: path }, null, 2));
     return path;
   }
 
