@@ -5,16 +5,26 @@
     "type": "module",
     "main": "dist/main/index.cjs",
     "scripts": {
-        "dev": "electron-vite dev",
-        "build": "electron-vite build",
+        "dev": "node ../../scripts/write-build-identity.mjs && electron-vite dev",
+        "build": "node ../../scripts/write-build-identity.mjs && electron-vite build",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "portable": "electron-builder --win portable --config electron-builder.yml",
-        "test": "tsx --test src/units.test.ts"
+        "smoke:remotion": "tsx scripts/remotion-pipeline-smoke.ts",
+        "smoke:ai-story-ui": "electron scripts/ai-story-ui-smoke.mjs",
+        "smoke:remotion-project": "tsx scripts/remotion-project-smoke.ts",
+        "check:flow": "node scripts/run-flow-live-check.mjs",
+        "test": "tsx --test src/units.test.ts src/scenario-repair.test.ts src/ai-story-visuals.test.ts src/stock-client.test.ts src/stock-project-service.test.ts src/montage-grammar.test.ts src/montage-planner.test.ts src/proxy-utils.test.ts src/service-proxy-routing.test.ts src/flow-pipeline.test.ts src/flow-reliability.test.ts src/flow-rpc.test.ts src/flow-browser-session.test.ts src/lumean-recovery.test.ts src/voice-calibration.test.ts src/ready-script.test.ts src/narration-writer.test.ts src/channel-profile-store.test.ts src/channel-character-service.test.ts src/project-trash.test.ts src/scenario-progress.test.ts src/story-characters.test.ts src/channel-analytics.test.ts src/diagnostics.test.ts src/timeline-preview.test.ts src/effect-library.test.ts src/documentary-plan.test.ts src/documentary-search.test.ts src/documentary-project-service.test.ts src/documentary-automation.test.ts"
     },
     "dependencies": {
         "@gold-work/core": "workspace:*",
+        "@gold-work/remotion-video": "workspace:*",
         "@gold-work/shared": "workspace:*",
+        "@remotion/bundler": "4.0.520",
+        "@remotion/renderer": "4.0.520",
         "ffmpeg-static": "^5.2.0",
+        "onnxruntime-node": "1.22.0",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
         "socket.io": "4.8.1"
     },
     "devDependencies": {

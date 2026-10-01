@@ -3,10 +3,13 @@ import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { atomicWrite } from "./fs-utils.js";
+import { parseProxyUrl, proxyDisplayName } from "./proxy-utils.js";
 import { describeCookiesProblem, validateCookiesContent, type SaveYouTubeSettingsInput, type YouTubeSettings } from "@gold-work/shared";
 
 interface StoredYouTubeSettings {
   encryptedApiKey?: string;
+  encryptedProxyUrl?: string;
+  downloadRoute?: "system" | "proxy" | "public-dns";
   cookiesFilePath?: string;
   workDirPath?: string;
 }
@@ -22,6 +25,9 @@ export class YouTubeStore {
     const stored = await this.read();
     return {
       configured: Boolean(stored.encryptedApiKey),
+      proxyConfigured: Boolean(stored.encryptedProxyUrl),
+      proxyDisplayName: proxyDisplayName(await this.proxyUrl()),
+      downloadRoute: stored.downloadRoute ?? (stored.encryptedProxyUrl ? "proxy" : "system"),
       cookiesFileConfigured: Boolean(stored.cookiesFilePath),
       cookiesFileName: stored.cookiesFilePath ? basename(stored.cookiesFilePath) : undefined,
       workDirConfigured: Boolean(stored.workDirPath),
@@ -67,6 +73,19 @@ export class YouTubeStore {
   async save(input: SaveYouTubeSettingsInput): Promise<YouTubeSettings> {
     const current = await this.read();
     let changed = false;
+    if (input.downloadRoute !== undefined) {
+      if (!["system", "proxy", "public-dns"].includes(input.downloadRoute)) throw new Error("Неизвестный маршрут загрузки YouTube");
+      current.downloadRoute = input.downloadRoute; changed = true;
+    }
+    if (input.clearProxy || input.proxyUrl !== undefined) {
+      const proxyUrl = input.clearProxy ? "" : input.proxyUrl!.trim();
+      if (proxyUrl) {
+        parseProxyUrl(proxyUrl);
+        if (!safeStorage.isEncryptionAvailable()) throw new Error("Защищённое хранилище Windows недоступно");
+        current.encryptedProxyUrl = safeStorage.encryptString(proxyUrl).toString("base64");
+      } else delete current.encryptedProxyUrl;
+      changed = true;
+    }
     if (input.apiKey?.trim()) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error("Защищённое хранилище Windows недоступно");
       current.encryptedApiKey = safeStorage.encryptString(input.apiKey.trim()).toString("base64");
@@ -111,6 +130,19 @@ export class YouTubeStore {
     delete current.encryptedApiKey;
     await this.write(current);
     return this.publicSettings();
+  }
+
+  /** Decrypted only in the main process; public settings contain no credentials. */
+  async proxyUrl(): Promise<string | undefined> {
+    const encrypted = (await this.read()).encryptedProxyUrl;
+    if (!encrypted) return undefined;
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Защищённое хранилище Windows недоступно");
+    return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+  }
+
+  async downloadRoute() {
+    const stored = await this.read();
+    return stored.downloadRoute ?? (stored.encryptedProxyUrl ? "proxy" : "system");
   }
 
   private async read(): Promise<StoredYouTubeSettings> {

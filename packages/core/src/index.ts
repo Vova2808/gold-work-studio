@@ -1,5 +1,9 @@
+import { equalJson } from './json-equal.js';
 import {
   createDefaultProjectSettings,
+  createDocumentarySettings,
+  projectScenarioQualityIssue,
+  voiceCalibrationMatches,
   type AnalyzeReferenceInput,
   type CreateReferenceProjectInput,
   type CreateProjectInput,
@@ -52,11 +56,16 @@ export interface VideoProvider {
   animate(imagePath: string, prompt: string, durationSeconds: number, context: ProviderContext): Promise<GeneratedMedia>;
 }
 
+export interface ProjectMutationOptions {
+  /** Load candidate evidence only for these scenes; deferred evidence is retained on commit. */
+  candidateSceneIds?: readonly string[];
+}
+
 export interface ProjectRepository {
-  list(): Promise<Project[]>;
-  get(id: string): Promise<Project | undefined>;
+  list(options?: {omitCandidates?: boolean}): Promise<Project[]>;
+  get(id: string, options?: {omitCandidates?: boolean}): Promise<Project | undefined>;
   save(project: Project): Promise<void>;
-  mutate(id: string, updater: (project: Project) => Project): Promise<Project>;
+  mutate(id: string, updater: (project: Project) => Project, options?: ProjectMutationOptions): Promise<Project>;
   delete(id: string): Promise<void>;
 }
 
@@ -71,27 +80,52 @@ export const createId = (prefix: string): string =>
 function mergeSettings(settings?: ProjectSettings): ProjectSettings {
   const defaults = createDefaultProjectSettings();
   if (!settings) return defaults;
+  const stockVideoPercent = Number.isFinite(settings.stockVideoPercent)
+    ? Math.min(100, Math.max(0, Math.round(settings.stockVideoPercent)))
+    : defaults.stockVideoPercent;
   return {
     ...defaults,
     ...settings,
+    stockVideoPercent,
     script: { ...defaults.script, ...settings.script },
     voice: { ...defaults.voice, ...settings.voice },
     image: { ...defaults.image, ...settings.image, references: [...(settings.image?.references ?? [])] },
     video: { ...defaults.video, ...settings.video },
     music: { ...defaults.music, ...settings.music },
-    subtitles: { ...defaults.subtitles, ...settings.subtitles },
+    subtitles: { ...defaults.subtitles, ...settings.subtitles, enabled: false },
     assembly: { ...defaults.assembly, ...settings.assembly }
   };
 }
 
 export function normalizeProject(project: Project): Project {
-  return {
+  const mergedSettings = mergeSettings(project.settings);
+  const settings: ProjectSettings = {
+    ...mergedSettings,
+    voice: {
+      ...mergedSettings.voice,
+      calibration: voiceCalibrationMatches(
+        mergedSettings.voice.calibration,
+        mergedSettings.voice.provider,
+        mergedSettings.voice.voice,
+        project.language
+      ) ? mergedSettings.voice.calibration : undefined
+    }
+  };
+  const normalized: Project = {
     ...project,
-    settings: mergeSettings(project.settings),
+    settings,
+    mediaMode: ["stock", "ai", "mixed"].includes(project.mediaMode ?? "")
+      ? project.mediaMode
+      : settings.video.enabled ? "ai" : "stock",
+    motionTemplate: project.motionTemplate?.trim() || "Без шаблона",
     scenes: [...project.scenes]
       .sort((a, b) => a.order - b.order)
       .map((scene, index) => ({ ...scene, order: index, status: scene.status ?? "draft" }))
   };
+  if (normalized.status === "ready" && projectScenarioQualityIssue(normalized)) {
+    normalized.status = "draft";
+  }
+  return normalized;
 }
 
 export class MockDirectorProvider implements DirectorProvider {
@@ -202,13 +236,13 @@ export class ProjectService {
     private readonly director: DirectorProvider
   ) {}
 
-  async list(): Promise<Project[]> {
-    const projects = await this.projects.list();
+  async list(options?: {omitCandidates?: boolean}): Promise<Project[]> {
+    const projects = await this.projects.list(options);
     return projects.map(normalizeProject).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async get(id: string): Promise<Project | undefined> {
-    const project = await this.projects.get(id);
+  async get(id: string, options?: {omitCandidates?: boolean}): Promise<Project | undefined> {
+    const project = await this.projects.get(id, options);
     return project ? normalizeProject(project) : undefined;
   }
 
@@ -221,9 +255,36 @@ export class ProjectService {
     settings.video.enabled = input.mode === "pro";
     settings.assembly.kenBurns = input.mode === "standard";
     settings.assembly.fadeTransitions = input.mode === "standard";
+    const mediaMode = input.mediaMode ?? (settings.video.enabled ? "ai" : "stock");
+    if (mediaMode === "ai") {
+      // AI Story должен стартовать с реальными Flow-провайдерами, а не
+      // с Mock Image: Veo не может использовать BMP-заглушку как первый кадр.
+      settings.image.provider = "flow";
+      settings.video.provider = "flow";
+      settings.voice.provider = "elevenlabs";
+      settings.voice.voice = "";
+      settings.video.model = "veo_3_1_i2v_s_fast";
+      settings.video.animationPercent = 15;
+      settings.video.selectionMode = "auto";
+      settings.assembly.kenBurns = true;
+      settings.assembly.kenBurnsDirection = "alternate";
+      settings.assembly.fadeTransitions = true;
+      settings.assembly.transitionType = "mix";
+      settings.assembly.transitionDurationSeconds = 0.4;
+      if (settings.assembly.montage) settings.assembly.montage.enabled = false;
+    }
+    if (input.mediaMode === "stock") {
+      settings.assembly.documentary = createDocumentarySettings();
+      settings.assembly.montage = { enabled: true, planner: "local", density: "balanced", graphicBeatPercent: 0, hardCutPercent: 100 };
+      settings.assembly.transitionType = "none";
+      settings.assembly.fadeTransitions = false;
+      settings.video.enabled = false;
+      settings.video.sourceVolume = 0;
+    }
     const project: Project = normalizeProject({
       id: createId("project"),
       ...input,
+      mediaMode,
       status: scenes.length ? "ready" : "draft",
       createdAt: now,
       updatedAt: now,
@@ -261,7 +322,10 @@ export class ProjectService {
       updatedAt: now,
       scenes: input.analysis.scenes.map((scene, order) => ({ ...scene, id: createId("scene"), order, status: "draft" })),
       settings,
-      referenceAnalysis: input.analysis
+      referenceAnalysis: input.analysis,
+      montagePlan: input.analysis.montagePlan,
+      channelProfileId: input.channelProfileId,
+      videoBrief: input.videoBrief
     });
     await this.projects.save(project);
     return project;
@@ -269,33 +333,54 @@ export class ProjectService {
 
   async update(id: string, input: UpdateProjectInput): Promise<Project> {
     return this.mutate(id, (current) => {
+      if (input.storyCharacters && (current.status === "generating" || current.status === "paused")) {
+        throw new Error("Нельзя менять персонажей во время производства.");
+      }
       if (input.scenes && (current.status === "generating" || current.status === "paused")) {
         throw new Error("Нельзя менять состав сцен во время активной генерации. Сначала остановите очередь.");
       }
-      const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined;
+      const lastRenderProvided = Object.prototype.hasOwnProperty.call(input, "lastRender");
+      const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined || input.characterReference !== undefined || input.channelProfileId !== undefined || input.mediaMode !== undefined || input.motionTemplate !== undefined || input.videoBrief !== undefined || input.montagePlan !== undefined;
       const active = current.status === "generating" || current.status === "paused";
       return {
         ...input,
         status: input.status ?? (contentChanged && !active ? (input.scenes ?? current.scenes).length ? "ready" : "draft" : current.status),
-        outputPath: contentChanged ? undefined : input.outputPath ?? current.outputPath
+        outputPath: contentChanged ? input.outputPath : input.outputPath ?? current.outputPath,
+        lastRender: lastRenderProvided ? input.lastRender : contentChanged ? undefined : current.lastRender,
+        montagePlan: input.scenes !== undefined ? input.montagePlan : input.montagePlan ?? current.montagePlan
       };
     });
   }
 
-  async mutate(id: string, updater: (project: Project) => UpdateProjectInput): Promise<Project> {
+  async mutate(id: string, updater: (project: Project) => UpdateProjectInput, options?: ProjectMutationOptions): Promise<Project> {
     return this.projects.mutate(id, (stored) => {
       const current = normalizeProject(stored);
       const input = updater(structuredClone(current));
-      return normalizeProject({
+      // Display snapshots deliberately omit heavy candidate lists. Editing a
+      // caption/timeline from such a snapshot must retain server-owned evidence.
+      if (input.scenes) {
+        const byId = new Map(current.scenes.map(scene => [scene.id, scene]));
+        input.scenes = input.scenes.map(scene => {
+          if (!scene.documentary?.candidatesDeferred) return scene;
+          const saved = byId.get(scene.id)?.documentary;
+          // A projection-aware repository restores this evidence atomically
+          // from its current full snapshot. Do not replace it with an empty list.
+          if (saved?.candidatesDeferred) return scene;
+          const { candidatesDeferred: _deferred, candidateCount: _count, ...doc } = scene.documentary;
+          return { ...scene, documentary: { ...doc, candidates: saved?.candidates ?? [] } };
+        });
+      }
+      const next = normalizeProject({
         ...current,
         ...input,
         id: current.id,
         createdAt: current.createdAt,
-        updatedAt: new Date().toISOString(),
+        updatedAt: current.updatedAt,
         scenes: input.scenes ?? current.scenes,
         settings: input.settings ?? current.settings
       });
-    });
+      return equalJson(next, current) ? current : { ...next, updatedAt: new Date().toISOString() };
+    }, options);
   }
 
   async duplicate(id: string): Promise<Project> {
@@ -309,11 +394,16 @@ export class ProjectService {
       createdAt: now,
       updatedAt: now,
       outputPath: undefined,
+      lastRender: undefined,
+      montagePlan: undefined,
+      storyCharacters: source.storyCharacters?.map(character => ({ ...character, imagePath: undefined, candidate: undefined, pendingGeneration: undefined, error: undefined, status: "draft" })),
+      storyCharacterSheet: undefined,
       scenes: source.scenes.map((scene, order) => ({
         ...scene,
         id: createId("scene"),
         order,
         status: "draft",
+        visualBeats: undefined,
         imagePath: undefined,
         videoPath: undefined,
         audioPath: undefined

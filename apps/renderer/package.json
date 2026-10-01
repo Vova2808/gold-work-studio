@@ -4,16 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "dev": "vite --config vite.config.ts --host 127.0.0.1",
+    "build": "vite build --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@gold-work/remotion-video": "workspace:*",
     "@gold-work/shared": "workspace:*",
+    "@remotion/player": "4.0.520",
     "@vitejs/plugin-react": "^4.5.2",
+    "country-flag-icons": "^1.6.20",
     "lucide-react": "^0.515.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "remotion": "4.0.520",
     "socket.io-client": "4.8.1",
     "vite": "^6.3.5"
   },

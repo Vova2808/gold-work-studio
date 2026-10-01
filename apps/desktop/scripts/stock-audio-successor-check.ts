@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import type {Project} from '@gold-work/shared';
+import {buildDocumentaryTimeline} from '@gold-work/remotion-video';
+import {EffectLibrary} from '../src/effect-library.js';
+import {LocalProjectStorage} from '../src/local-project-storage.js';
+import {planDocumentaryEffects} from '../src/documentary-effects.js';
+import {renderDocumentaryAudio} from '../src/documentary-fast-render.js';
+import {effectFfmpeg,probeEffectMedia} from '../src/effect-media.js';
+const root=resolve('captures/stock-audio-successor-20260926');await mkdir(root,{recursive:true});
+const registryPath='C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json',registry=await readFile(registryPath,'utf8');
+const original=(JSON.parse(registry) as Project[]).find(p=>p.id==='project_muihr14p_xsah7wf')!;
+const p=structuredClone(original);p.id='local-audio-qa';p.scenes=p.scenes.slice(15,23);
+for(const s of p.scenes){s.documentary!.effects=[];s.documentary!.requirement.accent='none';s.documentary!.motionGraphic=undefined;}
+const fact=p.scenes.find(s=>s.narration.includes('80 километров'))!;assert.ok(fact);
+fact.documentary!.motionGraphic={kind:'statistic',enabled:true,title:'путь длиной около',value:'80 километров',startSeconds:0,durationSeconds:fact.documentary!.timing!.durationInFrames/30,origin:'manual'};
+const library=new EffectLibrary('D:/GoldWorkStorage/Library'),assets=(await library.snapshot()).assets;
+p.scenes=await planDocumentaryEffects(p,library,new LocalProjectStorage(join(root,'projects')));
+const timeline=buildDocumentaryTimeline(p),output=await renderDocumentaryAudio(timeline,root);assert.ok(output);
+const sounds=p.scenes.flatMap(s=>s.documentary!.effects.filter(e=>e.kind==='audio').map(e=>({scene:s.order+1,name:e.name,start:e.startSeconds,duration:e.durationSeconds,volume:e.defaults.volume,sourcePeakDb:assets.find(a=>a.id===e.assetId)?.metadata?.peakDb})));
+assert.ok(sounds.length,'An approved semantic accent must be available');
+const info=await probeEffectMedia(output),log=await effectFfmpeg(['-i',output,'-af','volumedetect','-f','null','-']);
+const peakDb=Number(/max_volume:\s*(-?[\d.]+) dB/.exec(log)?.[1]);
+assert.ok(peakDb<=-.4);assert.ok(Math.abs(info.durationSeconds-timeline.durationInFrames/30)<.03);
+assert.equal(await readFile(registryPath,'utf8'),registry);
+await writeFile(join(root,'result.json'),JSON.stringify({output,duration:info.durationSeconds,peakDb,sounds,reusedVoices:p.scenes.length,registryUnchanged:true,noNewTts:true},null,2));
+console.log(JSON.stringify({duration:info.durationSeconds,peakDb,sounds},null,2));

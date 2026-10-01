@@ -1,0 +1,12 @@
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import type {Project} from '@gold-work/shared';
+import {localSpeechWords} from '../src/local-speech-recognition.js';
+import {runFfmpeg} from '../src/standard-renderer.js';
+const root=resolve('captures/vidrush-refinement-20260928/reading');await mkdir(root,{recursive:true});
+const project=(JSON.parse(await readFile('C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json','utf8')) as Project[]).find(p=>p.id==='project_mukba0q1_0cubga6')!;
+const scene=project.scenes[Number(process.argv[2]??0)]!,wav=join(root,'narration.wav');
+await runFfmpeg(['-y','-i',scene.audioPath!,'-ar','16000','-ac','1','-c:a','pcm_s16le',wav]);
+const started=Date.now(),words=await localSpeechWords(wav,root,console.log);
+const result={sceneId:scene.id,narration:scene.narration,seconds:(Date.now()-started)/1000,words};
+await writeFile(join(root,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

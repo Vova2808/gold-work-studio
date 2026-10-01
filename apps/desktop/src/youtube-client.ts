@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { evaluateFreeSpace, formatBytes, parseYouTubeVideoId, type TranscriptSegment, type YouTubeAnalysisContext, type YouTubeChannelContext, type YouTubeChannelRef, type YouTubeChannelVideoStat } from "@gold-work/shared";
 import { YouTubeStore } from "./youtube-store.js";
+import { observeNetwork } from "./diagnostics.js";
 
 type AudioTranscriber = (audio: Buffer, format: string) => Promise<TranscriptSegment[]>;
 
@@ -23,6 +24,24 @@ export class YouTubeClient {
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** Public counters only: one inexpensive channels.list, no AI, videos or comments. */
+  async publicChannelStats(ref: YouTubeChannelRef): Promise<import("@gold-work/shared").PublicYouTubeChannelStats> {
+    const key = await this.requiredKey();
+    const filter: Record<string, string> = ref.kind === "id" ? { id: ref.value } : ref.kind === "user" ? { forUsername: ref.value } : { forHandle: ref.value };
+    const response = await this.api("channels", { part: "snippet,statistics", ...filter }, key);
+    const channel = asItems(response)[0] as YouTubeChannel | undefined;
+    if (!channel?.id || !channel.statistics) throw new Error("YouTube не нашёл канал по этой ссылке. Укажите его актуальный @адрес или /channel/UC…");
+    const count = (value: string | undefined): number | null => {
+      if (value === undefined) return null;
+      const n = Number(value);
+      if (!Number.isSafeInteger(n) || n < 0) throw new Error("YouTube вернул некорректную статистику канала");
+      return n;
+    };
+    return { channelId: channel.id, title: channel.snippet?.title ?? "YouTube",
+      views: count(channel.statistics.viewCount), videos: count(channel.statistics.videoCount),
+      subscribers: channel.statistics.hiddenSubscriberCount ? null : count(channel.statistics.subscriberCount) };
   }
 
   async collect(url: string): Promise<YouTubeAnalysisContext> {
@@ -311,7 +330,7 @@ export class YouTubeClient {
     // До 3 попыток с таймаутом 12с: googleapis.com может быть недоступен (сеть/блокировки) — не висим минутами.
     for (let attempt = 0; attempt < 3 && !response; attempt += 1) {
       try {
-        response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+        response = await observeNetwork(String(url), "GET", "system", () => fetch(url, { signal: AbortSignal.timeout(12_000) }));
       } catch (error) {
         lastNetworkError = error;
         await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
@@ -498,7 +517,7 @@ interface YouTubeVideo {
 interface YouTubeChannel {
   id?: string;
   snippet?: { title?: string; description?: string };
-  statistics: { subscriberCount?: string; viewCount?: string; videoCount?: string };
+  statistics: { subscriberCount?: string; hiddenSubscriberCount?: boolean; viewCount?: string; videoCount?: string };
   contentDetails?: { relatedPlaylists?: { uploads?: string } };
 }
 

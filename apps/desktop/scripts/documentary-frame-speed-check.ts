@@ -1,0 +1,12 @@
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
+import {readVideoFrames} from '../src/documentary-video-catalog.js';
+const label=process.argv.includes('--baseline')?'baseline':'combined';
+const root=resolve('captures/stock-release-20260927/frame-extraction',label);await mkdir(root,{recursive:true});
+const projects=JSON.parse(await readFile('C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json','utf8'));
+const scene=projects.find((p:any)=>p.id==='project_muihr14p_xsah7wf').scenes[0];
+const start=scene.trimStartSeconds??0,length=Math.min(4,(scene.trimEndSeconds??scene.documentary.selected.durationSeconds)-start);
+const times=Array.from({length:12},(_,i)=>start+length*(.02+.96*i/11));
+const began=Date.now();const images=await readVideoFrames(scene.videoPath,root,times,true);
+const result={label,frames:images.length,seconds:(Date.now()-began)/1000,providerRequests:0};
+await writeFile(join(root,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

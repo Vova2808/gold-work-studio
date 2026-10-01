@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MemoryProjectRepository, MockDirectorProvider, ProjectService } from "./index.js";
-import { parseYouTubeVideoId } from "@gold-work/shared";
+import { parseYouTubeVideoId, scenarioQualityFingerprint } from "@gold-work/shared";
+
+test("Stock v2 is opt-in on new explicit stock projects; reads preserve AI Story and legacy plans", async () => {
+  const repository = new MemoryProjectRepository();
+  const service = new ProjectService(repository, new MockDirectorProvider());
+  const input = { title: "Version boundary", topic: "Test", language: "English", aspectRatio: "16:9" as const, mode: "standard" as const };
+  const legacy = await service.create(input);
+  const ai = await service.create({ ...input, mediaMode: "ai" });
+  const before = JSON.stringify([legacy, ai]);
+  const next = await service.create({ ...input, mediaMode: "stock" });
+  assert.equal(next.settings.assembly.documentary?.version, 2);
+  assert.equal(next.settings.assembly.montage?.graphicBeatPercent, 0);
+  assert.equal(next.settings.video.enabled, false);
+  assert.equal(next.settings.video.sourceVolume, 0);
+  assert.equal(legacy.settings.assembly.documentary, undefined);
+  assert.equal(ai.settings.assembly.documentary, undefined);
+  assert.equal(JSON.stringify([await service.get(legacy.id), await service.get(ai.id)]), before);
+});
 
 test("mock director creates a ready project with three scenes", async () => {
   const repository = new MemoryProjectRepository();
@@ -21,6 +38,7 @@ test("mock director creates a ready project with three scenes", async () => {
   assert.equal(project.scenes.length, 3);
   assert.equal(project.settings.voice.enabled, true);
   assert.equal(project.settings.video.enabled, false);
+  assert.equal(project.settings.stockVideoPercent, 35);
   assert.equal(project.settings.assembly.kenBurns, true);
   assert.equal(project.settings.assembly.fadeTransitions, true);
   assert.deepEqual(await service.list(), [project]);
@@ -33,12 +51,53 @@ test("pro projects enable the video stage", async () => {
     topic: "Animated scenes",
     aspectRatio: "16:9",
     language: "English",
-    mode: "pro"
+    mode: "pro",
+    mediaMode: "mixed",
+    motionTemplate: "Документальный"
   });
 
   assert.equal(project.settings.video.enabled, true);
   assert.equal(project.settings.assembly.kenBurns, false);
   assert.equal(project.settings.assembly.fadeTransitions, false);
+  assert.equal(project.mediaMode, "mixed");
+  assert.equal(project.motionTemplate, "Документальный");
+});
+
+test("new AI projects default to a simple alternating slideshow without changing stock montage defaults", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const ai = await service.create({
+    title: "AI story",
+    topic: "Character story",
+    aspectRatio: "16:9",
+    language: "Русский",
+    mode: "pro",
+    mediaMode: "ai"
+  });
+  assert.equal(ai.settings.assembly.kenBurns, true);
+  assert.equal(ai.settings.assembly.kenBurnsDirection, "alternate");
+  assert.equal(ai.settings.assembly.fadeTransitions, true);
+  assert.equal(ai.settings.assembly.transitionType, "mix");
+  assert.equal(ai.settings.assembly.transitionDurationSeconds, 0.4);
+  assert.equal(ai.settings.assembly.montage?.enabled, false);
+  assert.equal(ai.settings.image.provider, "flow");
+  assert.equal(ai.settings.video.provider, "flow");
+  assert.equal(ai.settings.video.model, "veo_3_1_i2v_s_fast");
+  assert.equal(ai.settings.video.animationPercent, 15);
+  assert.equal(ai.settings.video.selectionMode, "auto");
+
+  const stock = await service.create({
+    title: "Stock story",
+    topic: "Documentary",
+    aspectRatio: "16:9",
+    language: "Русский",
+    mode: "standard",
+    mediaMode: "stock"
+  });
+  assert.equal(stock.settings.assembly.kenBurnsDirection, "smart");
+  assert.equal(stock.settings.assembly.transitionDurationSeconds, 0.5);
+  assert.equal(stock.settings.assembly.montage?.enabled, true);
+  assert.equal(stock.settings.image.provider, "mock-image");
+  assert.equal(stock.settings.video.provider, "mock-video");
 });
 
 test("reference analysis can be refined and converted into a ready project", async () => {
@@ -68,6 +127,60 @@ test("reference analysis can be refined and converted into a ready project", asy
   assert.equal(project.settings.video.enabled, false);
 });
 
+test("AnyModel projects become ready only with a current final scenario audit", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const base = await service.analyzeReference({ url: "https://youtu.be/demo", language: "Русский" });
+  const anyModelAnalysis = { ...base, provider: "anymodel:test" };
+
+  const unaudited = await service.createFromReference({
+    analysis: anyModelAnalysis,
+    aspectRatio: "16:9",
+    mode: "standard"
+  });
+  assert.equal(unaudited.status, "draft");
+
+  const auditedAnalysis = {
+    ...anyModelAnalysis,
+    scenarioQuality: {
+      version: 1 as const,
+      checkedAt: new Date().toISOString(),
+      targetSeconds: 60,
+      totalDurationSeconds: 60,
+      wordCount: 120,
+      sceneCount: anyModelAnalysis.scenes.length,
+      fingerprint: scenarioQualityFingerprint(anyModelAnalysis.scenes),
+      complete: true,
+      endingResolved: true,
+      repaired: false,
+      requiredBeats: []
+    }
+  };
+  const audited = await service.createFromReference({
+    analysis: auditedAnalysis,
+    aspectRatio: "16:9",
+    mode: "standard"
+  });
+  assert.equal(audited.status, "ready");
+
+  const edited = await service.update(audited.id, {
+    scenes: audited.scenes.map((scene, index) => index === 0
+      ? { ...scene, narration: `${scene.narration} Ручная правка.` }
+      : scene)
+  });
+  assert.equal(edited.status, "draft");
+
+  const readyScript = await service.createFromReference({
+    analysis: {
+      ...auditedAnalysis,
+      scenarioQuality: { ...auditedAnalysis.scenarioQuality, complete: false, endingResolved: false }
+    },
+    aspectRatio: "16:9",
+    mode: "standard",
+    videoBrief: { prompt: "", competitorTranscripts: [], creationMode: "script", readyScript: "Готовый текст пользователя" }
+  });
+  assert.equal(readyScript.status, "ready");
+});
+
 test("project service updates order, duplicates and deletes projects", async () => {
   const repository = new MemoryProjectRepository();
   const service = new ProjectService(repository, new MockDirectorProvider());
@@ -86,6 +199,8 @@ test("project service updates order, duplicates and deletes projects", async () 
 
   const updated = await service.update(source.id, {
     topic: "Новая тема",
+    mediaMode: "mixed",
+    motionTemplate: "Энергичный",
     scenes: [
       { ...first, order: 2 },
       { ...second, order: 0 },
@@ -93,6 +208,8 @@ test("project service updates order, duplicates and deletes projects", async () 
     ]
   });
   assert.equal(updated.topic, "Новая тема");
+  assert.equal(updated.mediaMode, "mixed");
+  assert.equal(updated.motionTemplate, "Энергичный");
   assert.deepEqual(updated.scenes.map((scene) => scene.title), [second.title, third.title, first.title]);
   assert.deepEqual(updated.scenes.map((scene) => scene.order), [0, 1, 2]);
 
@@ -100,6 +217,8 @@ test("project service updates order, duplicates and deletes projects", async () 
   assert.notEqual(duplicate.id, source.id);
   assert.equal(duplicate.title, "Проект — копия");
   assert.equal(duplicate.status, "draft");
+  assert.equal(duplicate.mediaMode, "mixed");
+  assert.equal(duplicate.motionTemplate, "Энергичный");
   assert.notDeepEqual(duplicate.scenes.map((scene) => scene.id), updated.scenes.map((scene) => scene.id));
 
   await service.delete(source.id);
@@ -127,6 +246,23 @@ test("concurrent patches are merged and active generation locks scene structure"
     service.update(project.id, { scenes: project.scenes.slice(0, 1) }),
     /Нельзя менять состав сцен/
   );
+});
+
+test("timeline can keep the existing Final.mp4 while saving montage settings", async () => {
+  const service = new ProjectService(new MemoryProjectRepository(), new MockDirectorProvider());
+  const project = await service.create(
+    { title: "Монтаж", topic: "Тема", aspectRatio: "16:9", language: "Русский", mode: "standard" },
+    true
+  );
+  await service.update(project.id, { outputPath: "C:/project/Final.mp4", status: "complete" });
+  const preserved = await service.update(project.id, {
+    scenes: project.scenes.map((scene) => ({ ...scene, transition: "fade" as const })),
+    outputPath: "C:/project/Final.mp4"
+  });
+  assert.equal(preserved.outputPath, "C:/project/Final.mp4");
+
+  const invalidated = await service.update(project.id, { topic: "Полностью новая тема" });
+  assert.equal(invalidated.outputPath, undefined);
 });
 
 test("project keeps the saved director chat topic link", async () => {

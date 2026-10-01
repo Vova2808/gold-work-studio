@@ -1,7 +1,14 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { access, copyFile, mkdir, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { atomicWrite } from "./fs-utils.js";
-import type { Project, Scene } from "@gold-work/shared";
+import {projectJsonChunks} from './project-json.js';
+import type { Project, Scene, StockAssetSource, StockMediaType } from "@gold-work/shared";
+
+export interface StockAssetStorageSlot {
+  /** Zero-based alternate index. Omit for the primary scene asset. */
+  alternateIndex?: number;
+}
 
 function safeSegment(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 80) || "untitled";
@@ -63,6 +70,7 @@ function createSilentWav(durationSeconds: number): Buffer {
 }
 
 export class LocalProjectStorage {
+  private snapshotWrites = new Map<string,{latest:Project;promise:Promise<string>}>();
   constructor(readonly rootPath: string) {}
 
   projectDirectory(projectId: string): string {
@@ -76,6 +84,14 @@ export class LocalProjectStorage {
 
   finalPath(projectId: string): string {
     return join(this.projectDirectory(projectId), "Final.mp4");
+  }
+
+  channelCharacterDirectory(channelProfileId: string): string {
+    return join(this.rootPath, ".channels", safeSegment(channelProfileId), "characters");
+  }
+
+  trashedProjectDirectory(trashId: string): string {
+    return join(this.rootPath, ".trash", "projects", safeSegment(trashId));
   }
 
   sceneVideoPath(project: Project, scene: Scene): string {
@@ -102,11 +118,80 @@ export class LocalProjectStorage {
   }
 
   /** Портрет главного героя проекта — используется как референс для всех сцен. */
-  async saveCharacterReference(project: Project, data: Buffer): Promise<string> {
+  async saveStoryCharacterReference(project: Project, characterId: string, data: Buffer): Promise<string> {
+    const directory = join(await this.ensureProject(project), "characters", safeSegment(characterId));
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, `${randomUUID()}.png`);
+    await writeAtomic(path, data);
+    return path;
+  }
+
+  async saveCharacterReference(project: Project, data: Buffer, character: { name: string; prompt: string; characterPrompt?: string; stylePrompt?: string; updatedAt: string }): Promise<string> {
     const directory = await this.ensureProject(project);
     const path = join(directory, "character.png");
     await writeAtomic(path, data);
+    await writeAtomic(join(directory, "character.json"), JSON.stringify({ ...character, imagePath: path }, null, 2));
     return path;
+  }
+
+  /** Неизменяемая копия общей дорожки. Последующая перегенерация одной части
+   * пишет её обычный voice-файл, не портя звук соседних частей. */
+  async snapshotNarration(project: Project, scene: Scene): Promise<string> {
+    if (!scene.audioPath) throw new Error("Нет готовой озвучки для разделения");
+    const destination = join(this.projectDirectory(project.id), "narration-sources", safeSegment(scene.id), randomUUID(), basename(scene.audioPath));
+    await mkdir(dirname(destination), {recursive: true});
+    await copyFile(scene.audioPath, destination);
+    return destination;
+  }
+
+  /** Новая версия героя не перезаписывает предыдущий reference канала. */
+  async saveChannelCharacterReference(
+    channelProfileId: string,
+    versionId: string,
+    data: Buffer,
+    character: { name: string; prompt: string; characterPrompt?: string; stylePrompt?: string; updatedAt: string; sourceProjectId?: string }
+  ): Promise<string> {
+    const directory = this.channelCharacterDirectory(channelProfileId);
+    await mkdir(directory, { recursive: true });
+    const stem = safeSegment(versionId);
+    const path = join(directory, `${stem}.png`);
+    await writeAtomic(path, data);
+    await writeAtomic(join(directory, `${stem}.json`), JSON.stringify({ ...character, versionId, channelProfileId, imagePath: path }, null, 2));
+    return path;
+  }
+
+  /** Перемещает локальные файлы ролика во внутреннюю корзину без удаления. */
+  async moveProjectToTrash(projectId: string, trashId: string): Promise<boolean> {
+    const source = this.projectDirectory(projectId);
+    const destination = this.trashedProjectDirectory(trashId);
+    assertChildPath(this.rootPath, source);
+    assertChildPath(join(this.rootPath, ".trash", "projects"), destination);
+    if (!await pathExists(source)) return false;
+    if (await pathExists(destination)) throw new Error("В корзине уже существуют файлы этого проекта");
+    await mkdir(dirname(destination), { recursive: true });
+    await rename(source, destination);
+    return true;
+  }
+
+  /** Возвращает файлы проекта; существующая папка никогда не перезаписывается. */
+  async restoreProjectFromTrash(projectId: string, trashId: string): Promise<boolean> {
+    const source = this.trashedProjectDirectory(trashId);
+    const destination = this.projectDirectory(projectId);
+    assertChildPath(join(this.rootPath, ".trash", "projects"), source);
+    assertChildPath(this.rootPath, destination);
+    if (!await pathExists(source)) return false;
+    if (await pathExists(destination)) throw new Error("Нельзя восстановить файлы: папка проекта уже существует");
+    await mkdir(dirname(destination), { recursive: true });
+    await rename(source, destination);
+    return true;
+  }
+
+  /** Окончательно удаляет только проверенный путь внутри внутренней корзины. */
+  async purgeTrashedProject(trashId: string): Promise<void> {
+    const trashRoot = join(this.rootPath, ".trash", "projects");
+    const target = this.trashedProjectDirectory(trashId);
+    assertChildPath(trashRoot, target);
+    await rm(target, { recursive: true, force: true });
   }
 
   async saveGeneratedVideo(project: Project, scene: Scene, data: Buffer): Promise<string> {
@@ -116,10 +201,64 @@ export class LocalProjectStorage {
     return path;
   }
 
+  /** Сохраняет только уже выбранный пользователем сток и отдельный файл атрибуции. */
+  async saveStockAsset(
+    project: Project,
+    scene: Scene,
+    mediaType: StockMediaType,
+    data: Buffer,
+    extension: string,
+    source: StockAssetSource,
+    slot: StockAssetStorageSlot = {}
+  ): Promise<string> {
+    await this.ensureProject(project);
+    const directory = this.sceneDirectory(project, scene);
+    await mkdir(directory, { recursive: true });
+    const safeExtension = extension.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const allowed = mediaType === "image" ? ["jpg", "png", "webp"] : ["mp4", "webm", "mov"];
+    if (!allowed.includes(safeExtension)) throw new Error("Неподдерживаемый формат стокового файла");
+    const alternateIndex = slot.alternateIndex;
+    if (alternateIndex !== undefined && (!Number.isInteger(alternateIndex) || alternateIndex < 0 || alternateIndex > 99)) {
+      throw new Error("Некорректный индекс дополнительного stock-файла");
+    }
+    const prefix = alternateIndex === undefined
+      ? "stock"
+      : `stock-alt-${String(alternateIndex + 1).padStart(2, "0")}`;
+    const path = join(directory, `${prefix}-${mediaType}.${safeExtension}`);
+    await writeAtomic(path, data);
+    await writeAtomic(join(directory, `${prefix}-source.json`), JSON.stringify(source, null, 2));
+    return path;
+  }
+
   async ensureProject(project: Project): Promise<string> {
+    const active=this.snapshotWrites.get(project.id);
+    if(active){
+      // Several scene workers can reach backup after newer registry mutations.
+      // Retain only the newest pending snapshot, not eight 20-MB copies waiting
+      // to rewrite the same files. All callers await the durable final write.
+      if(!project.updatedAt||!active.latest.updatedAt||project.updatedAt>=active.latest.updatedAt)active.latest=project;
+      return active.promise;
+    }
+    const state={latest:project,promise:Promise.resolve('')};
+    const run=async()=>{
+      try{
+        for(;;){
+          const latest=state.latest;
+          const directory=await this.writeProjectSnapshot(latest);
+          if(state.latest===latest)return directory;
+        }
+      }finally{if(this.snapshotWrites.get(project.id)===state)this.snapshotWrites.delete(project.id);}
+    };
+    // Publish the state before the first filesystem await.
+    this.snapshotWrites.set(project.id,state);
+    state.promise=run();
+    return state.promise;
+  }
+
+  private async writeProjectSnapshot(project: Project): Promise<string> {
     const directory = this.projectDirectory(project.id);
     await mkdir(join(directory, "scenes"), { recursive: true });
-    await writeAtomic(join(directory, "project.json"), JSON.stringify(project, null, 2));
+    await writeAtomic(join(directory, "project.json"), projectJsonChunks(project));
     await writeAtomic(
       join(directory, "scenario.json"),
       JSON.stringify(
@@ -169,5 +308,23 @@ export class LocalProjectStorage {
 
   async writeSceneManifest(project: Project, scene: Scene): Promise<void> {
     await writeAtomic(join(this.sceneDirectory(project, scene), "scene.json"), JSON.stringify(scene, null, 2));
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function assertChildPath(root: string, target: string): void {
+  const resolvedRoot = resolve(root);
+  const resolvedTarget = resolve(target);
+  const child = relative(resolvedRoot, resolvedTarget);
+  if (!child || child.startsWith("..") || child.includes(":")) {
+    throw new Error("Небезопасный путь внутренней корзины");
   }
 }

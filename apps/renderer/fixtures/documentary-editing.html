@@ -1,0 +1,33 @@
+<!doctype html><html lang="ru"><head><meta charset="UTF-8"><title>Documentary editor — local fixture</title></head><body><div id="root"></div><script type="module">
+import { fallbackApi as api } from '/src/fallback-api.ts';
+import { createDocumentarySettings } from '@gold-work/shared';
+if(window.goldWork) throw new Error('Real providers forbidden in fixture');
+const project = await api.createProject({title:'Проверка монтажа', topic:'Локальная проверка', language:'ru', aspectRatio:'16:9', mediaMode:'stock', mode:'standard'});
+project.settings.voice.enabled = false;
+project.settings.assembly.documentary = createDocumentarySettings();
+const poster = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="1280" height="720" fill="#183044"/><text x="80" y="180" fill="white" font-size="60">Local editor check</text></svg>');
+const effect = {id:'sound-1',assetId:'local',assetVersion:1,name:'Локальный райзер',filePath:'',kind:'audio',role:'sound',enabled:true,startSeconds:-2,durationSeconds:2.5,sourceDurationSeconds:2.5,defaults:{blend:'normal',opacity:100,volume:100,sourceAudio:false,trimStartSeconds:0,fadeInSeconds:.04,fadeOutSeconds:.15},x:0,y:0,scale:1,blend:'normal'};
+// A tiny generated WAV keeps this check local and independent of provider/media files.
+const bytes = new Uint8Array(44+8000*3*2), v = new DataView(bytes.buffer);
+const str=(offset,text)=>[...text].forEach((c,i)=>v.setUint8(offset+i,c.charCodeAt(0)));
+str(0,'RIFF');v.setUint32(4,bytes.length-8,true);str(8,'WAVE');str(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,16000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,bytes.length-44,true);
+for(let i=0;i<24000;i++)v.setInt16(44+i*2,Math.sin(i/8000*Math.PI*2*220)*1000,true);
+effect.filePath='data:audio/wav;base64,'+btoa(Array.from(bytes,c=>String.fromCharCode(c)).join(''));
+project.scenes=Array.from({length:107},(_,order)=>({id:'local-scene-'+order,order,title:'Кадр '+(order+1),narration:'Проверка редактора.',imagePrompt:'',animationPrompt:'',durationSeconds:3,status:'ready',imagePath:poster,
+documentary:{version:2,requirement:{text:'Проверка',entities:[],years:[],queries:[],preferredKind:'video'},candidates:[],verified:true,pinned:false,illustrative:false,reviewNote:'',caption:{text:'',enabled:false,position:'bottom',animation:'fade',fontSize:52,color:'#ffffff',backgroundColor:'#12171d',opacity:80},layout:'full',effects:order===1?[effect]:[],timing:{sourceKey:'silent',durationInFrames:90,speechSeconds:0}}}));
+await api.updateProject(project.id,project);
+const listeners=new Set();window.qaProgress=p=>listeners.forEach(fn=>fn({projectId:project.id,phase:'searching',completed:1,total:107,selected:1,skipped:0,failed:0,message:'Подбор продолжается',...p}));
+api.onAutoStockProgress=fn=>{listeners.add(fn);return()=>listeners.delete(fn)};
+api.prepareDocumentaryPreview=()=>api.getProject(project.id);
+api.prepareDocumentaryMap=async(_id,place,radiusKm)=>({kind:'satellite',imagePath:poster,latitude:place.latitude,longitude:place.longitude,radiusKm,featureCount:0,imageryDate:'2016',createdAt:new Date().toISOString()});
+api.mediaUrl=path=>path;
+if(new URLSearchParams(location.search).has('transitions')){
+  const asset={id:'local-transition',name:'Локальный визуальный переход',state:'ready',kind:'image',category:'transition',defaults:{trimStartSeconds:0,trimEndSeconds:.8,fadeInSeconds:.1,fadeOutSeconds:.1,volume:100,sourceAudio:true,opacity:70,blend:'screen'},metadata:{durationSeconds:.8}};
+  api.getEffectLibrary=async()=>({assets:[asset],rootPath:'fixture'});
+  api.prepareDocumentaryEffect=async()=>({...effect,id:'visual-local',assetId:asset.id,name:asset.name,filePath:poster,kind:'image',role:'transition',durationSeconds:.8,defaults:asset.defaults});
+}
+window.qaUpdate=async()=>{const p=await api.getProject(project.id);p.scenes[5].title+='.';await api.updateProject(p.id,{scenes:p.scenes});};
+window.qaProject=()=>api.getProject(project.id);
+window.goldWork=api;
+await import('/src/main.tsx');
+</script></body></html>

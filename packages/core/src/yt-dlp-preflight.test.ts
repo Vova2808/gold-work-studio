@@ -5,7 +5,13 @@ import {
   describeCookiesProblem,
   evaluateFreeSpace,
   formatBytes,
+  isBareDurationReply,
+  isDirectorChatOnlyRequest,
+  isScenarioGenerationRequest,
+  isTranscriptAnalysisRequest,
+  parseExplicitDurationSeconds,
   parseDurationSeconds,
+  parsePastedTranscript,
   ttsLanguageCode,
   validateCookiesContent
 } from "@gold-work/shared";
@@ -77,4 +83,40 @@ test("parseDurationSeconds understands common length inputs", () => {
   assert.equal(parseDurationSeconds("300"), 300); // >60 → секунды
   assert.equal(parseDurationSeconds("сделай хук жёстче"), null);
   assert.equal(parseDurationSeconds("добавь 5 фактов"), null);
+});
+
+test("длина из транскрипции не запускает сценарий", () => {
+  const transcript = "Вот транскрипция: [0:00] Начало истории. [0:09] Прошло 34 минуты. [0:18] Финал истории.";
+  assert.equal(parseExplicitDurationSeconds(transcript), null);
+  assert.equal(parseExplicitDurationSeconds("сделай ролик на 30 секунд"), 30);
+  assert.equal(parseExplicitDurationSeconds("собери сценарий на 5 минут"), 300);
+  assert.equal(parseExplicitDurationSeconds("можешь написать ролик на минуту"), 60);
+  assert.equal(parseExplicitDurationSeconds("просто создай ролик с историей на минуты"), 60);
+});
+
+test("команды чата различают создание сценария и разбор транскрипции", () => {
+  assert.equal(isScenarioGenerationRequest("можешь написать на основе этого сценарий ролика на минуту"), true);
+  assert.equal(isScenarioGenerationRequest("можешь тогда собрать ролик на 16 минут"), true);
+  assert.equal(isScenarioGenerationRequest("просто обсуди сильные стороны ролика"), false);
+  assert.equal(isDirectorChatOnlyRequest("можешь написать это сюда в чат как устроен ролик просто разбор"), true);
+  assert.equal(isScenarioGenerationRequest("можешь написать это сюда в чат как устроен ролик просто разбор"), false);
+  assert.equal(isDirectorChatOnlyRequest("как улучшить сценарий этого ролика?"), true);
+  assert.equal(isScenarioGenerationRequest("как улучшить сценарий этого ролика?"), false);
+  assert.equal(isDirectorChatOnlyRequest("объясни структуру ролика"), true);
+  assert.equal(isDirectorChatOnlyRequest("разбери теперь ролик"), false);
+  assert.equal(isTranscriptAnalysisRequest("можешь разобрать его и что можно улучшить"), true);
+  assert.equal(isTranscriptAnalysisRequest("вот транскрибация, разбери её"), true);
+  assert.equal(isTranscriptAnalysisRequest("создай ролик на минуту"), false);
+  assert.equal(isBareDurationReply("5 минут"), true);
+  assert.equal(isBareDurationReply("на минуту"), true);
+  assert.equal(isBareDurationReply("почему этот ролик длится 5 минут?"), false);
+});
+
+test("вставленная транскрипция разбирается на сегменты", () => {
+  const segments = parsePastedTranscript("Вот озвучка: [0:00] Первая фраза. [0:05] Вторая фраза. [0:12] Третья фраза.".padEnd(130, " "));
+  assert.equal(segments.length, 3);
+  assert.deepEqual(segments.map((segment) => segment.startSeconds), [0, 5, 12]);
+  assert.deepEqual(segments.map((segment) => segment.durationSeconds), [5, 7, 5]);
+  const plain = parsePastedTranscript(`Вот озвучка: ${"длинный текст ролика ".repeat(20)}`);
+  assert.equal(plain.length, 1, "озвучка без таймкодов тоже сохраняется как источник");
 });

@@ -1,0 +1,22 @@
+import { readFile, mkdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { bundle } from "@remotion/bundler";
+import { openBrowser, renderStill, selectComposition } from "@remotion/renderer";
+import { documentaryTemplates, type Project } from "@gold-work/shared";
+import { buildDocumentaryTimeline } from "@gold-work/remotion-video";
+import { serveDocumentaryRenderMedia } from "../src/documentary-render-media.js";
+import { runFfmpeg } from "../src/standard-renderer.js";
+const root=resolve("captures/stock-templates");await mkdir(root,{recursive:true});
+const p=(JSON.parse(await readFile("C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json","utf8")) as Project[]).find(p=>p.id==="project_mu8iia3v_qhpe9y9")!;
+p.settings.voice.enabled=false;
+p.scenes=documentaryTemplates.map(([template,label],order)=>{const s=structuredClone(p.scenes[order%2]!);s.id=`template-${order}`;s.order=order;s.durationSeconds=2;s.durationOverrideSeconds=2;s.videoPath=undefined;s.audioPath=undefined;s.transition="none";s.documentary!.timing=undefined;s.documentary!.effects=[];s.documentary!.template=template;s.documentary!.layout=template.startsWith("compare-")?"compare":"full";s.documentary!.comparison={sceneId:`template-${order===0?1:0}`,leftLabel:"SS United States",rightLabel:"Icon of the Seas"};s.documentary!.caption={...s.documentary!.caption,enabled:!template.startsWith("compare-"),text:label,animation:"slide"};return s;});
+const timeline=buildDocumentaryTimeline(p),close=await serveDocumentaryRenderMedia(timeline);
+const require=createRequire(import.meta.url);
+const url=await bundle({entryPoint:require.resolve("@gold-work/remotion-video/entry"),publicDir:null,outDir:join(root,"bundle")});
+const browser=await openBrowser("chrome");
+try {const composition=await selectComposition({serveUrl:url,id:"GoldWorkDocumentaryV2",inputProps:timeline,puppeteerInstance:browser});
+for(let i=0;i<documentaryTemplates.length;i++)await renderStill({serveUrl:url,composition,inputProps:timeline,frame:i*60+25,output:join(root,`template-${String(i).padStart(2,"0")}.png`),scale:.5,puppeteerInstance:browser});
+await runFfmpeg(["-y","-framerate","1","-i",join(root,"template-%02d.png"),"-vf","scale=384:216,tile=4x5","-frames:v","1",join(root,"matrix.jpg")]);
+console.log(`Rendered ${documentaryTemplates.length} actual template frames: ${root}`);
+}finally{await browser.close({silent:true});await close();}

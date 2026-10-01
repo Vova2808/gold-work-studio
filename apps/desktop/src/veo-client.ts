@@ -1,5 +1,6 @@
 import { GoogleStore } from "./google-store.js";
 import { parseProxyUrl, proxyRequest, type ProxyResponse } from "./proxy-utils.js";
+import { describeNetworkError, googleError } from "./google-errors.js";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 const REQUEST_TIMEOUT_MS = 15 * 60_000;
@@ -44,13 +45,18 @@ export class VeoClient {
   async test(): Promise<{ ok: boolean; message: string }> {
     try {
       const key = await this.requiredKey();
-      const response = await this.request(`${BASE}/models?pageSize=1`, {
+      const settings = await this.store.publicSettings();
+      const model = settings.veoModel?.trim() || "veo-3.1-lite-generate-preview";
+      const response = await this.request(`${BASE}/models/${encodeURIComponent(model)}`, {
         headers: { "x-goog-api-key": key },
         timeoutMs: 30_000
       });
       if (!response.ok) throw new Error(googleError(response));
-      const settings = await this.store.publicSettings();
-      return { ok: true, message: `Google AI Studio подключён. Модель видео: ${settings.veoModel}.` };
+      const methods = response.json<{ supportedGenerationMethods?: string[] }>().supportedGenerationMethods ?? [];
+      if (!methods.includes("predictLongRunning")) {
+        throw new Error(`Модель ${model} не умеет генерировать видео. Выберите Veo 3.1 Lite, Fast или обычную Veo 3.1.`);
+      }
+      return { ok: true, message: `Google AI Studio и SOCKS5 работают. Модель ${model} видна ключу. Генерация требует оплаченной квоты проекта — она проверится при запуске первой сцены.` };
     } catch (error) {
       return { ok: false, message: describeNetworkError(error) };
     }
@@ -59,7 +65,7 @@ export class VeoClient {
   /** Оживляет кадр сцены: промпт + стартовая картинка. Возвращает MP4. */
   async generateVideo(prompt: string, aspectRatio: string, sourceImage?: Buffer): Promise<Buffer> {
     const settings = await this.store.publicSettings();
-    const model = settings.veoModel?.trim() || "gemini-omni-flash-preview";
+    const model = settings.veoModel?.trim() || "veo-3.1-lite-generate-preview";
     const ratio = aspectRatio === "9:16" ? "9:16" : "16:9";
     const text = prompt.trim() || "Gentle cinematic camera motion, natural movement of the subject, single continuous shot";
     try {
@@ -183,33 +189,6 @@ export class VeoClient {
     const { proxyUrl } = await this.store.publicSettings();
     return proxyRequest(url, init, parseProxyUrl(proxyUrl));
   }
-}
-
-function googleError(response: ProxyResponse): string {
-  const text = response.text();
-  let message = "";
-  try {
-    message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? "";
-  } catch {
-    // не JSON
-  }
-  if (/User location is not supported/i.test(message)) {
-    return "Google не обслуживает запросы из вашего региона. Укажите SOCKS5-прокси в Настройки → Google AI Studio (или включите VPN) — ключ при этом рабочий.";
-  }
-  if (response.status === 429) return `Google: превышены лимиты видео (${message}). Подождите или уменьшите число анимируемых сцен.`;
-  if (response.status === 400 && /API key|API_KEY/i.test(message)) return "Google отклонил ключ API. Проверьте ключ в Настройках.";
-  if (response.status === 403) return `Google отказал в доступе: ${message || "проверьте, что у аккаунта есть доступ к модели"}`;
-  return `Google ${response.status}: ${message || text.slice(0, 200)}`;
-}
-
-function describeNetworkError(error: unknown): string {
-  if (error instanceof Error) {
-    if (error.name === "TimeoutError" || /aborted/i.test(error.message)) {
-      return "Google не ответил за отведённое время. Проверьте VPN/интернет и повторите.";
-    }
-    return error.message;
-  }
-  return String(error);
 }
 
 function sleep(ms: number): Promise<void> {

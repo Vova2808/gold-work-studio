@@ -15,11 +15,15 @@ function sleep(ms: number): Promise<void> {
  */
 let temporaryCounter = 0;
 
-export async function atomicWrite(filePath: string, data: string | Buffer): Promise<void> {
+export async function atomicWrite(filePath: string, data: string | Buffer | AsyncIterable<string>): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   // Счётчик обязателен: параллельные записи одного файла в одну миллисекунду делили tmp-имя (ENOENT на rename).
   const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${temporaryCounter++}.tmp`;
-  await writeFile(temporaryPath, data);
+  try { await writeFile(temporaryPath, data); }
+  catch (error) {
+    await rm(temporaryPath, {force: true}).catch(() => undefined);
+    throw error;
+  }
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     try {

@@ -7,7 +7,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev": "pnpm --filter @gold-work/desktop dev",
-    "build": "pnpm -r --if-present build",
+    "build": "pnpm --filter @gold-work/desktop... --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "portable": "pnpm build && pnpm --filter @gold-work/desktop portable"

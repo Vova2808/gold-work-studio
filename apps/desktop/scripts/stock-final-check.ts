@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { readFile,mkdir,writeFile } from 'node:fs/promises';
+import { join,resolve } from 'node:path';
+import type { Project } from '@gold-work/shared';
+import { buildDocumentaryTimeline } from '@gold-work/remotion-video';
+import { runFfmpeg, mediaDurationSeconds } from '../src/standard-renderer.js';
+const projectId=process.argv.find(arg=>arg.startsWith('--project-id='))?.slice('--project-id='.length)??'project_mu8iia3v_qhpe9y9';
+assert.match(projectId,/^project_[a-zA-Z0-9_]+$/);
+const p:Project=JSON.parse(await readFile('C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json','utf8')).find((p:Project)=>p.id===projectId);
+assert.ok(p.outputPath);const timeline=buildDocumentaryTimeline(p),expected=timeline.durationInFrames/timeline.fps;
+const duration=await mediaDurationSeconds(p.outputPath);assert.ok(Math.abs(duration-expected)<.06);
+const root=resolve(projectId==='project_mu8iia3v_qhpe9y9'?'captures/stock-final':`captures/review-${projectId}/final/contact`);await mkdir(root,{recursive:true});
+const sceneArgument=process.argv.slice(2).find(arg=>!arg.startsWith('--'));
+const only=sceneArgument?Number(sceneArgument):undefined;
+if(only!==undefined)assert.ok(Number.isInteger(only)&&only>=1&&only<=timeline.scenes.length);
+let cursor=0;
+async function worker(){for(;;){const index=cursor++,scene=timeline.scenes[index];if(!scene)return;
+  if(only!==undefined&&index+1!==only)continue;
+  await runFfmpeg(['-y','-threads','1','-ss',String((scene.fromFrame+Math.floor(scene.durationInFrames/2))/timeline.fps),'-i',p.outputPath!,'-frames:v','1','-vf',`scale=240:135,drawtext=text='${index+1}':fontcolor=white:fontsize=18:box=1:boxcolor=black@0.7:x=5:y=5`,join(root,`scene-${String(index).padStart(3,'0')}.jpg`)]);
+}}
+await Promise.all([worker(),worker()]);
+if(only===undefined)await runFfmpeg(['-y','-framerate','1','-i',join(root,'scene-%03d.jpg'),'-vf',`tile=10x${Math.ceil(timeline.scenes.length/10)}`,'-frames:v','1',join(root,'all-scenes.jpg')]);
+const result={projectId,duration,expected,sampledScenes:only===undefined?timeline.scenes.length:1,contact:only===undefined?join(root,'all-scenes.jpg'):undefined};
+await writeFile(join(root,'contact-report.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

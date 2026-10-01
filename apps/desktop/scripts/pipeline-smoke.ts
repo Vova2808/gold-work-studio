@@ -24,7 +24,8 @@ try {
     topic: "Локальная сборка",
     aspectRatio: "16:9",
     language: "Русский",
-    mode: "standard"
+    mode: "standard",
+    mediaMode: "ai"
   });
   const scene: Scene = {
     id: "scene_smoke",
@@ -58,7 +59,9 @@ try {
     scenes: [scene, secondScene, excludedScene],
     settings: {
       ...project.settings,
-      subtitles: { ...project.settings.subtitles, enabled: true },
+      // Этот smoke намеренно полностью локальный: продуктовый AI Story по
+      // умолчанию использует Flow, а здесь проверяются очередь, FFmpeg и файлы.
+      image: { ...project.settings.image, provider: "mock-image" },
       music: { path: musicPath, volume: 20 }
     }
   });
@@ -84,12 +87,16 @@ try {
   assert.equal(completed?.status, "complete");
   assert.ok(completed?.outputPath);
   assert.ok((await stat(completed.outputPath)).size > 1000);
+  const completedSnapshot = JSON.parse(
+    await readFile(join(storage.projectDirectory(project.id), "project.json"), "utf8")
+  ) as { status?: string; outputPath?: string; lastRender?: { engine?: string } };
+  assert.equal(completedSnapshot.status, "complete", "project.json должен отражать терминальный статус");
+  assert.equal(completedSnapshot.outputPath, completed.outputPath, "project.json должен содержать актуальный Final.mp4");
+  assert.equal(completedSnapshot.lastRender?.engine, "ffmpeg", "project.json должен содержать отчёт фактического рендера");
   assert.ok((await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "image-prompt.txt"), "utf8")).includes("кинематографичный"));
-  const assContent = await readFile(join(storage.sceneDirectory(completed, completed.scenes[0] as Scene), "subtitles.ass"), "utf8");
-  // popWords включён по умолчанию: караоке-теги {\k..} разбивают фразу, проверяем по словам.
-  assert.ok(assContent.includes("Dialogue:") && assContent.includes("локального") && assContent.includes("\\k"), "субтитры сцены должны содержать текст озвучки с караоке-разметкой");
+  assert.equal(completed.settings.subtitles.enabled, false, "пользовательские субтитры должны оставаться отключёнными");
 
-  await pipeline.regenerateScene(project.id, secondScene.id);
+  await pipeline.regenerateScene(project.id, completed.scenes.map((scene) => scene.id));
   await pipeline.drain();
   const regenerated = await projectService.get(project.id);
   assert.equal(regenerated?.status, "complete");
@@ -99,6 +106,8 @@ try {
   await logger.flush();
   const log = await readFile(logger.path, "utf8");
   assert.ok(log.includes("queue.task.completed"));
+  assert.ok(log.includes("FFmpeg: проверяю готовый файл"), "готовый ролик проверяется до завершения очереди");
+  assert.ok(!log.includes("запускаю визуальный монтаж Remotion"), "AI Story не сообщает о неиспользуемом движке");
   assert.ok(log.includes("[REDACTED]"));
   assert.ok(!log.includes("must-not-leak"));
   assert.ok(!log.includes("raw-secret"));
