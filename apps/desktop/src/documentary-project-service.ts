@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
+import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
+import {documentarySceneContext,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import type { ProjectService } from "@gold-work/core";
@@ -9,7 +11,7 @@ import { documentaryVideoCoverage } from "@gold-work/shared";
 import type { LocalProjectStorage } from "./local-project-storage.js";
 import type { StockClient } from "./stock-client.js";
 import { checksumFile } from "./effect-library.js";
-import { prepareDocumentaryMedia, prepareDocumentaryRangePoster } from "./documentary-media-cache.js";
+import { prepareDocumentaryMedia, prepareDocumentaryRangePoster,prepareDocumentaryDiagram } from "./documentary-media-cache.js";
 import { DocumentarySearch, documentarySearchUnavailable } from "./documentary-search.js";
 import { downloadDocumentaryFile, withDocumentaryDownloadBudget, documentaryDownloadTimedOut } from "./documentary-download.js";
 import { atomicWrite } from "./fs-utils.js";
@@ -57,7 +59,13 @@ function documentaryQueryForKind(query: string, requirement: DocumentaryRequirem
   return result.replace(/\s+/g, " ").trim();
 }
 
-export function documentarySearchQueries(requirement: DocumentaryRequirement, kind?: "video" | "image"): string[] {
+export function documentarySearchQueries(requirement: DocumentaryRequirement, kind?: "video" | "image", context?:DocumentarySceneContext): string[] {
+  if(kind==='image'&&context&&documentaryGeneralDiagramScope(context,requirement.identities)){
+    // Keep the exact planner's detail queries first for a script-grounded
+    // schematic; adding the model prefix to all of them finds whole vehicles.
+    return [...new Set([...requirement.queries,...documentarySearchQueries(requirement,kind)]
+      .map(query=>documentaryQueryForKind(query,requirement,kind)).filter(Boolean))].slice(0,4);
+  }
   if (kind) {
     // Video-only vocabulary needlessly excludes still evidence in full-text
     // indexes. Keep the named subject and the actual action/detail intact.
@@ -616,7 +624,7 @@ export class DocumentaryProjectService {
           let inspections = inspectionCounts.get(inspectionKey) ?? 0;
           if (inspections >= inspectionLimit) continue;
           const pool: DocumentaryCandidate[] = [];
-          const queries = documentarySearchQueries(requirement, kind);
+          const queries = documentarySearchQueries(requirement, kind, documentarySceneContext(project,scene));
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>) => {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
@@ -1061,7 +1069,8 @@ export class DocumentaryProjectService {
         automatic: false, review: "pending", rights: "unknown", rightsNote: "", file: originalName, bytes: (await stat(path)).size, origins: [], state: "copied",
         defaults: { blend: "normal", opacity: 100, volume: 0, sourceAudio: false, trimStartSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0 },
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-      const prepared = await measureDocumentaryStage("media-preparation", { projectId, sceneId, sourceCacheHit: Boolean(localCopy), checksum }, () => prepareDocumentaryMedia(root, mediaAsset, this.materialRoot, project.scenes, join(this.storage.projectDirectory(projectId), "Documentary")));
+      const prepared = await measureDocumentaryStage("media-preparation", { projectId, sceneId, sourceCacheHit: Boolean(localCopy), checksum }, async () =>
+        prepareDocumentaryDiagram(root,mediaAsset,candidate,await prepareDocumentaryMedia(root, mediaAsset, this.materialRoot, project.scenes, join(this.storage.projectDirectory(projectId), "Documentary"))));
       if (candidate.kind === "video" && !prepared.metadata?.videoCodec || candidate.kind === "image" && !prepared.metadata?.width) throw new Error("Оригинал не соответствует выбранному типу медиа");
       const selected = { ...candidate, localPath: path, bytes: mediaAsset.bytes, width: prepared.metadata?.width, height: prepared.metadata?.height, durationSeconds: prepared.metadata?.durationSeconds };
       const visualHash = prepared.poster ? await documentaryVisualHash(join(root, prepared.poster)) : undefined;

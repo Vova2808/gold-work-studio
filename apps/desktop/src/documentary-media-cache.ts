@@ -1,11 +1,34 @@
 import { mkdir, readFile, stat, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { EffectAsset, Scene } from "@gold-work/shared";
+import type { DocumentaryCandidate, EffectAsset, Scene } from "@gold-work/shared";
 import { effectFfmpeg, prepareEffectMedia, probeEffectMedia } from "./effect-media.js";
 import { atomicWrite } from "./fs-utils.js";
 import { copyImmutableDocumentaryFile } from "./documentary-storage.js";
 import { documentaryVisualHash } from "./documentary-visual-hash.js";
 import { createHash, randomUUID } from "node:crypto";
+
+/** Technical SVG exports often have black lines on transparency. Give their
+ * server-rendered raster the same white drawing sheet during inspection and
+ * playback. Preserve the downloaded original and all unrelated PNG cutouts. */
+export async function prepareDocumentaryDiagram(root:string,asset:EffectAsset,candidate:DocumentaryCandidate,prepared:Partial<EffectAsset>):Promise<Partial<EffectAsset>> {
+  if(candidate.provider!=='commons'||candidate.kind!=='image'||!candidate.title.toLowerCase().endsWith('.svg'))return prepared;
+  const width=prepared.metadata?.width,height=prepared.metadata?.height;
+  if(!width||!height)return prepared;
+  const proxy=`Proxies/${asset.id}-diagram.png`,poster=`Previews/${asset.id}-diagram.jpg`;
+  await mkdir(join(root,'Proxies'),{recursive:true});await mkdir(join(root,'Previews'),{recursive:true});
+  if(!await stat(join(root,proxy)).then(info=>info.size>0,()=>false)){
+    const temporary=join(root,'Proxies',`${asset.id}-${randomUUID()}.part.png`);
+    await effectFfmpeg(['-y','-i',join(root,asset.file),'-f','lavfi','-i',`color=c=white:s=${width}x${height}`,
+      '-filter_complex','[1:v][0:v]overlay=shortest=1:format=auto,format=rgb24','-frames:v','1',temporary]);
+    await rename(temporary,join(root,proxy));
+  }
+  if(!await stat(join(root,poster)).then(info=>info.size>0,()=>false)){
+    const temporary=join(root,'Previews',`${asset.id}-${randomUUID()}.part.jpg`);
+    await effectFfmpeg(['-y','-i',join(root,proxy),'-vf','scale=640:640:force_original_aspect_ratio=decrease','-frames:v','1',temporary]);
+    await rename(temporary,join(root,poster));
+  }
+  return {...prepared,proxy,preview:proxy,poster};
+}
 
 /** A range poster is distinct from the immutable source's common cover. */
 export async function prepareDocumentaryRangePoster(root: string, scene: Scene): Promise<Scene> {

@@ -4,6 +4,7 @@ import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
 import {documentarySceneContext,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
+import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
 import {documentaryAnnotationInstruction,readDocumentaryAnnotations} from './documentary-annotations.js';
 import {documentarySourceQualityIssue,documentaryQualityPresentation,documentaryTechnicalQualityInstruction,enforceDocumentaryTechnicalQuality} from './documentary-source-quality.js';
@@ -30,6 +31,7 @@ import { directCatalogChoices, representativeCatalogChoices, documentaryDistract
 
 type Completion = Pick<AnyModelClient, "documentaryCompletion" | "configured"> & Partial<Pick<AnyModelClient,"probeDocumentaryConnection"|"documentaryAnalysisModel">>;
 type Review = NonNullable<DocumentaryScene["visualReview"]>;
+const inspectionFramesKey=(scene:Scene)=>`${scene.documentary!.checksum!}${scene.imagePath?.endsWith('-diagram.png')?'-diagram-white-v1':''}`;
 /** Metadata orders downloads only; every selected source still needs its real-frame review. */
 export function documentaryMetadataShortlist(scene: Scene, candidates: DocumentaryCandidate[]): DocumentaryCandidate[] {
   const requirement=scene.documentary?.requirement;
@@ -154,7 +156,7 @@ export class DocumentaryIntelligence {
   private analysisPauseRemainingMs = 0;
   private analysisPauseRevision = 0;
   private analysisWaiters = new Set<()=>void>();
-  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;sourceEra?:Record<string,unknown> }>();
+  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;sourceEra?:Record<string,unknown>;legacyImageSamples?:string[] }>();
   constructor(private readonly client: Completion, private readonly rootFor: (id: string) => string, private readonly beforePaidRequest: () => Promise<void> = async () => {}, private readonly sharedVideoCatalogRoot?: string,
     private readonly retryWait:(ms:number)=>Promise<void>=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {}
   async available() { return this.client.configured(); }
@@ -548,6 +550,13 @@ export class DocumentaryIntelligence {
       input=JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra)});
       system+=documentaryEraProvenanceInstruction;
     }
+    const generalDiagramScope=visualReview&&words.mediaKind==='image'&&narrativeContext
+      ?documentaryGeneralDiagramScope(narrativeContext,identities):undefined;
+    if(generalDiagramScope){
+      previousRequests.push({system,input});
+      input=JSON.stringify({...JSON.parse(input),generalDiagramScope});
+      system+=documentaryGeneralDiagramPolicy;
+    }
     const enforceVisualEvidence=(value:Record<string,unknown>):Record<string,unknown>=>{
       value=enforceDocumentaryTechnicalQuality(value);
       if(!activeItem&&!mapCandidate&&!rivalryTarget&&!narrativeContext)return value;
@@ -575,6 +584,13 @@ export class DocumentaryIntelligence {
     }
     const key = createHash("sha256").update(JSON.stringify([2, purpose, system, input, images])).digest("hex");
     const root = join(this.rootFor(projectId), "Documentary", "Analysis"); await mkdir(root, { recursive: true });
+    const legacyImages=images.length?this.inspection.getStore()?.legacyImageSamples:undefined;
+    if(legacyImages)for(const previous of [{system,input},...previousRequests]){
+      const oldKey=createHash('sha256').update(JSON.stringify([2,purpose,previous.system,previous.input,legacyImages])).digest('hex');
+      const old=await readAnalysisCheckpoint(join(root,`${oldKey}.json`));
+      if(old&&old.state!=='failed'&&!(old.state==='rejected'&&old.rejection==='model-unavailable')&&(old.state!=='complete'||!old.result))
+        throw new DocumentaryAnalysisError('Проверка прежнего изображения имеет неизвестный результат. Новая подложка схемы не разрешает повторную оплату.','pending',purpose);
+    }
     const path = join(root, `${key}.json`);
     const saved = await readAnalysisCheckpoint(path);
     if (saved?.state === "complete" && saved.result) { recordDiagnosticEvent("info", "documentary.analysis.cache", { projectId, purpose, cache: "completed" }); return enforceVisualEvidence(saved.result); }
@@ -903,13 +919,20 @@ export class DocumentaryIntelligence {
     }
     const legacyRankingInput=JSON.stringify({...fullRanking,candidates:candidatesForRanking});
     const narrativeContext=documentarySceneContext(project,scene);
-    const rankingInput=JSON.stringify({...fullRanking,narrativeContext,candidates:candidatesForRanking});
+    const generalDiagramScope=documentaryGeneralDiagramScope(narrativeContext,requiredIdentities);
+    const legacyContextInput=JSON.stringify({...fullRanking,narrativeContext,candidates:candidatesForRanking});
+    const rankingInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:candidatesForRanking});
     const previousRankings = [{ system: rankingSystem, input: previousRankingInput }, { system: rankingSystem, input: rankingInput }, { system: scopedSystem, input: JSON.stringify(shortInput) }, { system: scopedSystem, input: previousInput }, { system, input: JSON.stringify(input) }];
     const activeItemPolicy=layout&&graphic.kind==='feature-list'&&graphic.activeIndex!==undefined
       ?' The active list item is a literal visual target: metadata must plausibly describe that phenomenon/object itself, not just its associated system or consequence. For rain, a generic canal, tugboat, dam or technical drawing without rain is not a promising source. Do not fill the ranking with broadly related candidates when none plausibly depicts the active item; return ids:[] so other search sources can be tried.':'';
-    const currentRankingSystem=rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction;
-    const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,candidates:candidatesForRanking.map(candidate=>
+    const legacyContextSystem=rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction;
+    const currentRankingSystem=legacyContextSystem+(generalDiagramScope?documentaryGeneralDiagramPolicy:'');
+    const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:candidatesForRanking.map(candidate=>
       ({...candidate,id:shortKeys.find(item=>item.shortKey===candidate.id)!.key}))});
+    if(generalDiagramScope){
+      const {generalDiagramScope:_,...legacyLong}=JSON.parse(longRankingInput);
+      previousRankings.push({system:legacyContextSystem,input:legacyContextInput},{system:legacyContextSystem,input:JSON.stringify(legacyLong)});
+    }
     const longRankingKey=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',currentRankingSystem,longRankingInput,[]])).digest('hex');
     const longRanking=await readAnalysisCheckpoint(join(this.rootFor(project.id),'Documentary','Analysis',`${longRankingKey}.json`));
     // The same request with long IDs is a protocol migration, not a new paid
@@ -919,7 +942,9 @@ export class DocumentaryIntelligence {
       const keys=resolveDocumentaryCandidateKeys(longRanking.result.ids as string[],shortKeys.map(item=>item.key));
       return keys.map(key=>shortKeys.find(item=>item.key===key)!.candidate);
     }
-    const negatives=await documentaryNegativeRankingCache(this.rootFor(project.id),rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,rankingInput);
+    const negatives=await documentaryNegativeRankingCache(this.rootFor(project.id),currentRankingSystem,rankingInput);
+    const previousContextNegatives=generalDiagramScope?await documentaryNegativeRankingCache(this.rootFor(project.id),legacyContextSystem,legacyContextInput):undefined;
+    if(previousContextNegatives)previousRankings.push({system:legacyContextSystem,input:JSON.stringify({...fullRanking,narrativeContext,candidates:previousContextNegatives.remainingCandidates})});
     const legacyNegatives=await documentaryNegativeRankingCache(this.rootFor(project.id),rankingSystem+downloadPreference+activeItemPolicy,legacyRankingInput);
     const legacyReducedInput=JSON.stringify({...fullRanking,candidates:legacyNegatives.remainingCandidates});
     if(negatives.allRejected){
@@ -930,8 +955,8 @@ export class DocumentaryIntelligence {
     // the pool. Send only new metadata, retaining the exact old request as an
     // uncertainty guard so reducing the payload cannot replay a pending charge.
     const reducedInput=negatives.remainingCandidates.length<candidatesForRanking.length
-      ?JSON.stringify({...fullRanking,narrativeContext,candidates:negatives.remainingCandidates}):rankingInput;
-    const response = await this.complete(project.id, "candidate-relevance", rankingSystem + downloadPreference + activeItemPolicy+documentaryContinuityInstruction, reducedInput, [],
+      ?JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:negatives.remainingCandidates}):rankingInput;
+    const response = await this.complete(project.id, "candidate-relevance", currentRankingSystem, reducedInput, [],
       [{system:currentRankingSystem,input:longRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyReducedInput},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:JSON.stringify({...fullRanking,narrativeContext})},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:rankingInput},...previousRankings,
         ...previousRankings.map(request => ({ ...request, system: request.system + downloadPreference }))]);
     if (!Array.isArray(response.ids) || response.ids.some(id => typeof id !== "string")) throw new Error("Некорректный ответ предварительного отбора материалов; ответ сохранён");
@@ -947,7 +972,7 @@ export class DocumentaryIntelligence {
       const part=documentaryRequiredVisiblePart(scene.narration);
       if(review.status==='accepted'&&part){
         progress('Проверяю видимые детали механизма без подсказки источника…');
-        const root=join(this.rootFor(project.id),'Documentary','Frames',scene.documentary!.checksum!);
+        const root=join(this.rootFor(project.id),'Documentary','Frames',inspectionFramesKey(scene));
         const times=review.sampleSeconds.length?review.sampleSeconds:[0];
         const images=scene.videoPath?await readVideoFrames(scene.videoPath,root,times):[`data:image/jpeg;base64,${(await readFile(join(root,'0.000.jpg'))).toString('base64')}`];
         const inventory=await this.complete(project.id,'visual-detail-inventory',
@@ -1003,7 +1028,13 @@ export class DocumentaryIntelligence {
     const width = selected.width ?? 0, height = selected.height ?? 0;
     const qualityIssue=documentarySourceQualityIssue(selected,project.aspectRatio,documentaryQualityPresentation(scene));
     if (qualityIssue||selected.kind==='video'&&duration<1.5) return { status: "rejected", confidence: 1, reason:qualityIssue??"Слишком короткое видео", checkedAt: new Date().toISOString(), sampleSeconds: [], quality: `${width}×${height}` };
-    const root = join(this.rootFor(project.id), "Documentary", "Frames", scene.documentary!.checksum!); await mkdir(root, { recursive: true });
+    const root = join(this.rootFor(project.id), "Documentary", "Frames", inspectionFramesKey(scene)); await mkdir(root, { recursive: true });
+    if(inspectionFramesKey(scene)!==scene.documentary!.checksum){
+      const old=await readFile(join(this.rootFor(project.id),'Documentary','Frames',scene.documentary!.checksum!,'0.000.jpg')).catch(error=>{
+        if(error.code==='ENOENT')return undefined;throw error;
+      });
+      if(old)this.inspection.getStore()!.legacyImageSamples=[`data:image/jpeg;base64,${old.toString('base64')}`];
+    }
     const sample = async (times: number[]) => {
       if (scene.videoPath) return readVideoFrames(scene.videoPath, root, times);
       const images: string[] = [];
@@ -1092,14 +1123,15 @@ export class DocumentaryIntelligence {
       }
     }
     const confidence = Math.max(0, Math.min(1, Number(value.confidence) || 0));
-    const identifiedEntity = documentaryIdentityMatches(scene.documentary!.requirement, String(value.identifiedEntity)) ? String(value.identifiedEntity) : undefined;
-    const identityIssue = documentaryIdentityReviewIssue(scene.documentary!.requirement, value) || documentaryActionReviewIssue(scene, value);
+    const generalDiagram=selected.kind==='image'&&documentaryGeneralDiagramVerified(value,documentarySceneContext(project,scene),scene.documentary!.requirement.identities);
+    const identifiedEntity = !generalDiagram&&documentaryIdentityMatches(scene.documentary!.requirement, String(value.identifiedEntity)) ? String(value.identifiedEntity) : undefined;
+    const identityIssue = (!generalDiagram&&documentaryIdentityReviewIssue(scene.documentary!.requirement, value)) || documentaryActionReviewIssue(scene, value);
     const editorialIssue = identityIssue || (selected.kind === "video" && value.status === "accepted" && value.isCameraFootage === true ? documentaryRangeEditorialIssue(value) : undefined);
     const cameraConfirmed = selected.kind !== "video" || value.isCameraFootage === true && !editorialIssue;
     return { status: value.status === "accepted" && !identityIssue && cameraConfirmed && confidence >= minimumVisualConfidence && (!subjects.length || identifiedEntity) ? "accepted" : value.status === "rejected" ? "rejected" : "uncertain", confidence, identifiedEntity,
       annotations:readDocumentaryAnnotations(value,narrationContext,checked),
       ...(documentaryGeneralActionIssue(scene) ? { actionMatch: value.actionMatch === true, actionEvidence: String(value.actionEvidence ?? "").slice(0, 1600) } : {}),
-      reason: `${editorialIssue ? `${editorialIssue} ` : cameraConfirmed ? "" : "Видеофрагмент не подтверждён как натурная съёмка. "}${value.status === "accepted" && confidence < minimumVisualConfidence ? `Недостаточная уверенность проверки (${Math.round(confidence * 100)}%). ` : ""}${String(value.reason ?? "Недостаточно данных для подтверждения")}`.slice(0, 1800), quality: `${width}×${height}; ${String(value.quality ?? "").slice(0, 500)}`,
+      reason: `${generalDiagram?'Поясняющая схема общего принципа; не изображение конкретной модели. ':''}${editorialIssue ? `${editorialIssue} ` : cameraConfirmed ? "" : "Видеофрагмент не подтверждён как натурная съёмка. "}${value.status === "accepted" && confidence < minimumVisualConfidence ? `Недостаточная уверенность проверки (${Math.round(confidence * 100)}%). ` : ""}${String(value.reason ?? "Недостаточно данных для подтверждения")}`.slice(0, 1800), quality: `${width}×${height}; ${String(value.quality ?? "").slice(0, 500)}`,
       checkedAt: new Date().toISOString(), sampleSeconds: checked, ...(selected.kind === "video" ? { trimStartSeconds: start, trimEndSeconds: end } : {}) };
   }
 

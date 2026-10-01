@@ -6,6 +6,7 @@ import type { StockClient } from "./stock-client.js";
 import { atomicWrite } from "./fs-utils.js";
 import type { DocumentaryYouTube } from "./documentary-youtube.js";
 import { documentaryCandidateKey } from "./documentary-reuse.js";
+import {recordDiagnosticEvent} from './diagnostics.js';
 
 type Fetcher = typeof globalThis.fetch;
 type RecordValue = Record<string, unknown>;
@@ -81,8 +82,13 @@ export function commonsCandidates(payload: unknown, query: string): DocumentaryC
     const page = record(pageValue), info = record(list(page.imageinfo)[0]), ext = record(info.extmetadata);
     const meta = (key: string) => documentaryPlainText(record(ext[key]).value);
     const mime = string(info.mime);
-    const kind = /^video\//.test(mime) ? "video" : /^image\/(?:jpeg|png|webp|tiff)/.test(mime) ? "image" : undefined;
-    const downloadUrl = safeHttps(info.url), pageUrl = safeHttps(info.descriptionurl);
+    // Commons supplies a server-rendered PNG for SVG. Never feed downloaded
+    // SVG markup to the renderer or upscale a tiny raster as if it were HD.
+    const vector = mime === 'image/svg+xml';
+    const rendered = safeHttps(info.thumburl);
+    const vectorRaster = vector && /\.png(?:\?|$)/i.test(rendered) && Number(info.thumbwidth)>=1200 && Number(info.thumbheight)>=350;
+    const kind = /^video\//.test(mime) ? "video" : /^image\/(?:jpeg|png|webp|tiff)/.test(mime)||vectorRaster ? "image" : undefined;
+    const downloadUrl = vectorRaster ? rendered : safeHttps(info.url), pageUrl = safeHttps(info.descriptionurl);
     if (!kind || !downloadUrl || !pageUrl) return [];
     const license = meta("LicenseShortName") || meta("UsageTerms");
     const rights = /^(?:CC0|Public domain|PDM)/i.test(license) ? "public-domain" as const
@@ -91,8 +97,8 @@ export function commonsCandidates(payload: unknown, query: string): DocumentaryC
     return [{ id: `commons:${String(page.pageid)}`, provider: "commons" as const, kind, title: string(page.title).replace(/^File:/, ""),
       description: meta("ImageDescription"), pageUrl, downloadUrl, previewUrl: safeHttps(info.thumburl) || undefined,
       author, license, licenseUrl: safeHttps(record(ext.LicenseUrl).value), rights,
-      attribution: [author, meta("Credit"), license, pageUrl].filter(Boolean).join(" · "), width: Number(info.width) || undefined, height: Number(info.height) || undefined,
-      durationSeconds: Number(info.duration) || undefined, bytes: Number(info.size) || undefined, query, retrievedAt: new Date().toISOString(), capturedAt: meta("DateTimeOriginal") || meta("DateTime") || undefined, match: "unverified" as const, concerns: [] }];
+      attribution: [author, meta("Credit"), license, pageUrl].filter(Boolean).join(" · "), width: Number(vectorRaster?info.thumbwidth:info.width) || undefined, height: Number(vectorRaster?info.thumbheight:info.height) || undefined,
+      durationSeconds: Number(info.duration) || undefined, bytes: vectorRaster?undefined:Number(info.size) || undefined, query, retrievedAt: new Date().toISOString(), capturedAt: meta("DateTimeOriginal") || meta("DateTime") || undefined, match: "unverified" as const, concerns: vectorRaster?['PNG-визуализация исходной SVG-схемы Wikimedia Commons; содержание требует проверки']:[] }];
   }).map(commonsAttributionLicense);
 }
 
@@ -124,7 +130,7 @@ export class DocumentarySearch {
 
   private async cached(provider: string, query: string, kind: string): Promise<DocumentaryCandidate[]> {
     if (provider === "local") return this.local(query);
-    const key = createHash("sha256").update(JSON.stringify([provider === "internet-archive" ? 5 : ["commons", "pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, query, kind])).digest("hex");
+    const key = createHash("sha256").update(JSON.stringify([provider === "internet-archive" ? 5 : provider==='commons'?4:["pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, query, kind])).digest("hex");
     const existing = this.inFlight.get(key); if (existing) return existing;
     const work = (async () => {
       const file = this.cachePath ? join(this.cachePath, `${key}.json`) : undefined;
@@ -182,7 +188,29 @@ export class DocumentarySearch {
       const url = new URL("https://commons.wikimedia.org/w/api.php");
       for (const [key, value] of Object.entries({ action: "query", format: "json", formatversion: "2", generator: "search", gsrsearch: kind === "video" ? `${query} filetype:video` : query,
         gsrnamespace: "6", gsrlimit: "24", prop: "imageinfo", iiprop: "url|extmetadata|size|mime", iiurlwidth: "640" })) url.searchParams.set(key, value);
-      return commonsCandidates(await this.json(url, provider), query);
+      const payload=await this.json(url,provider);
+      const pages=list(record(record(payload).query).pages);
+      const vectors=kind==='image'?pages.filter(page=>string(record(list(record(page).imageinfo)[0]).mime)==='image/svg+xml'):[];
+      if(vectors.length){
+        const rasterUrl=new URL('https://commons.wikimedia.org/w/api.php');
+        for(const [key,value] of Object.entries({action:'query',format:'json',formatversion:'2',pageids:vectors.map(page=>String(record(page).pageid)).join('|'),
+          prop:'imageinfo',iiprop:'url|size|mime',iiurlwidth:'1600'}))rasterUrl.searchParams.set(key,value);
+        // One bounded metadata request for every SVG in this search. Original
+        // raster thumbnails keep their small size; no paid model call is added.
+        const rendered=await this.json(rasterUrl,provider).catch(error=>{
+          recordDiagnosticEvent('warn','documentary.search.svg-preview-unavailable',{provider,message:String(error).slice(0,250)});
+          return undefined;
+        });
+        const rasterPages=list(record(record(rendered).query).pages);
+        for(const page of vectors){
+          const replacement=rasterPages.find(item=>record(item).pageid===record(page).pageid);
+          if(replacement){
+            const original=record(list(record(page).imageinfo)[0]);
+            record(page).imageinfo=[{...original,...record(list(record(replacement).imageinfo)[0])}];
+          }
+        }
+      }
+      return commonsCandidates(payload, query);
     }
     if (provider === "pexels" || provider === "pixabay") {
       if (!this.stock) throw new Error("Stock API не настроен");
