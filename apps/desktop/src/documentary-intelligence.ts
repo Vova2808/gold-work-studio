@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
-import {documentarySceneContext,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
 import {documentaryAnnotationInstruction,readDocumentaryAnnotations} from './documentary-annotations.js';
@@ -17,6 +17,7 @@ import { groundedDocumentaryMotion } from "@gold-work/shared";
 import { AnyModelCompletionUncertainError, AnyModelOutputFormatError, AnyModelProviderResponseError, type AnyModelClient } from "./anymodel-client.js";
 import { DocumentaryAnalysisError } from "./documentary-analysis-error.js";
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
+import {receivedDocumentaryRanking} from './documentary-ranking-response.js';
 import { atomicWrite } from "./fs-utils.js";
 import { measureDocumentaryStage } from "./documentary-metrics.js";
 import { recordDiagnosticEvent } from "./diagnostics.js";
@@ -115,6 +116,10 @@ export async function readAnalysisCheckpoint(path: string): Promise<{ state: str
     value = JSON.parse(content);
     if (!value || typeof value !== "object" || typeof value.state !== "string") throw new Error("Invalid checkpoint");
   } catch { throw new Error("Контрольная точка анализа повреждена; платный повтор отключён"); }
+  if(value.state==='received'&&value.purpose==='candidate-relevance'&&typeof value.raw==='string'){
+    const result=receivedDocumentaryRanking(value.raw);
+    if(result)return {...value,state:'complete',result};
+  }
   if(value.state==='pending'&&typeof value.batchFile==='string'&&/^ranking-batch-[a-f0-9]{64}\.json$/.test(value.batchFile)&&Number.isInteger(value.batchMember)){
     const batch=await readFile(join(dirname(path),value.batchFile),'utf8').then(text=>JSON.parse(text),error=>{if(error.code==='ENOENT')return undefined;throw error;});
     const result=batch?.state==='complete'&&value.batchMember>=0&&value.batchMember<4?batch.outputs?.[value.batchMember]:undefined;
@@ -538,6 +543,8 @@ export class DocumentaryIntelligence {
       input=JSON.stringify({...JSON.parse(input),narrativeContext});
       system+=documentaryContinuityInstruction+documentaryContinuityEvidenceInstruction;
       previousRequests.push({system,input});
+      previousRequests.push({system:system+documentaryLegacyEraProvenanceInstruction,
+        input:JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra,true)})});
       input=JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra)});
       system+=documentaryEraProvenanceInstruction;
     }
@@ -546,7 +553,7 @@ export class DocumentaryIntelligence {
       if(!activeItem&&!mapCandidate&&!rivalryTarget&&!narrativeContext)return value;
       const review=(row:Record<string,unknown>)=>{
         if(row.status!=='accepted')return row;
-        const narrativeIssue=narrativeContext&&documentaryNarrativeEvidenceIssue(row,sourceEra);
+        const narrativeIssue=narrativeContext&&documentaryNarrativeEvidenceIssue(row,sourceEra,narrativeContext);
         if(narrativeIssue)return {...row,status:'uncertain',reason:narrativeIssue,annotations:[]};
         if(rivalryTarget&&row.identifiedEntity!==rivalryTarget)return {...row,status:'uncertain',reason:`Не подтверждён основной участник этой сцены: ${rivalryTarget}. ${String(row.reason??'')}`};
         if(mapCandidate&&row.mapGeographyMatch!==true)return {...row,status:'uncertain',reason:`Не подтверждено соответствие карты географии рассказа. ${String(row.mapGeographyEvidence??row.reason??'')}`};
@@ -555,6 +562,17 @@ export class DocumentaryIntelligence {
       };
       return Array.isArray(value.reviews)?{...value,reviews:value.reviews.map(row=>row&&typeof row==='object'?review(row as Record<string,unknown>):row)}:review(value);
     };
+    // Adding distant script dates must not conceal an unknown request made
+    // with the earlier, neighbouring-scenes-only context. Include the current
+    // and all prior policy variants, for ranking as well as visual checks.
+    for(const request of [{system,input},...previousRequests]){
+      try{
+        const data=JSON.parse(request.input);
+        if(!data.narrativeContext||!Object.hasOwn(data.narrativeContext,'earlierTimeReferences'))continue;
+        const {earlierTimeReferences:_,...legacyContext}=data.narrativeContext;
+        previousRequests.push({system:request.system,input:JSON.stringify({...data,narrativeContext:legacyContext})});
+      }catch{/* Non-JSON legacy requests retain their original key above. */}
+    }
     const key = createHash("sha256").update(JSON.stringify([2, purpose, system, input, images])).digest("hex");
     const root = join(this.rootFor(projectId), "Documentary", "Analysis"); await mkdir(root, { recursive: true });
     const path = join(root, `${key}.json`);
@@ -618,7 +636,7 @@ export class DocumentaryIntelligence {
       // just to obtain richer graphics.
       const enrich=images.length>0&&['visual-overview','visual-range','catalog-range-check','catalog-range-batch'].includes(purpose);
       const editorial=purpose==='search-plan'?' Optional motionGraphic kinds: subject-card for an introductory named person/object (title=exact name, kicker=literal role only if stated in this narration). For this composition, search for a sharp photograph of the exact subject with a clearly separated silhouette, within the existing still-image budget; do not request generated imagery or substitute a random person. quote displays an exact contiguous passage of this narration (max 320 chars), subsequently highlighted using actual local voice timing; do not invent a quotation or speaker attribution. bar-chart compares 2-5 quantities (cards=[{label,value}], every label/value explicitly associated in this passage, identical units, no inferred figures). These are sparse editorial events, not mandatory on every shot. Other existing motionGraphic kinds remain supported.':'';
-      const concise=purpose==='catalog-range-batch'?' Keep each prose evidence/reason field within 20 words. Use concise concrete observations without repeating the narration. Keep every required field and review each group separately. Omit optional annotations on rejected or uncertain groups. Return only the complete compact JSON object.':'';
+      const concise=enrich?' Keep each prose evidence/reason field within 20 words. Use concise concrete observations without repeating the narration. Keep every required field and review each group separately when groups are supplied. Omit optional annotations on rejected or uncertain reviews. Return only the complete compact JSON object.':'';
       this.rankingBatch??=new DocumentaryRankingBatch((batchSystem,batchInput,batchModel,onPartial)=>this.client.documentaryCompletion(batchSystem,batchInput,[],undefined,onPartial,batchModel,1600),this.rootFor);
       const raw = purpose==='candidate-relevance'&&!images.length&&Array.isArray(words.candidates)&&words.candidates.length>0
         ?await this.rankingBatch.request(projectId,model,system,input,savePartial,(batchFile,batchMember)=>atomicWrite(path,JSON.stringify({state:'pending',purpose,model,createdAt,batchFile,batchMember})))
@@ -627,7 +645,12 @@ export class DocumentaryIntelligence {
       // Preserve a received response even if its format is invalid: do not charge again to parse it.
       await atomicWrite(path, JSON.stringify({ state: "received", purpose, model, overviewSamplingVersion, raw }));
       received = true;
-      const parsed = documentaryJson(raw);
+      let parsed:Record<string,unknown>;
+      try{parsed=documentaryJson(raw);}catch(error){
+        const ranking=purpose==='candidate-relevance'&&receivedDocumentaryRanking(raw);
+        if(!ranking)throw error;
+        parsed=ranking;
+      }
       const result = enrich ? enforceDocumentaryTechnicalQuality(parsed,true) : parsed;
       this.consecutiveConnectionFailures = 0;
       this.connectionRecoveries = 0;
@@ -884,6 +907,18 @@ export class DocumentaryIntelligence {
     const previousRankings = [{ system: rankingSystem, input: previousRankingInput }, { system: rankingSystem, input: rankingInput }, { system: scopedSystem, input: JSON.stringify(shortInput) }, { system: scopedSystem, input: previousInput }, { system, input: JSON.stringify(input) }];
     const activeItemPolicy=layout&&graphic.kind==='feature-list'&&graphic.activeIndex!==undefined
       ?' The active list item is a literal visual target: metadata must plausibly describe that phenomenon/object itself, not just its associated system or consequence. For rain, a generic canal, tugboat, dam or technical drawing without rain is not a promising source. Do not fill the ranking with broadly related candidates when none plausibly depicts the active item; return ids:[] so other search sources can be tried.':'';
+    const currentRankingSystem=rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction;
+    const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,candidates:candidatesForRanking.map(candidate=>
+      ({...candidate,id:shortKeys.find(item=>item.shortKey===candidate.id)!.key}))});
+    const longRankingKey=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',currentRankingSystem,longRankingInput,[]])).digest('hex');
+    const longRanking=await readAnalysisCheckpoint(join(this.rootFor(project.id),'Documentary','Analysis',`${longRankingKey}.json`));
+    // The same request with long IDs is a protocol migration, not a new paid
+    // decision. Reuse only a completed answer for this exact context/policy;
+    // unknown and older-context forms stay in the guards passed below.
+    if(longRanking?.state==='complete'&&Array.isArray(longRanking.result?.ids)&&longRanking.result.ids.every(id=>typeof id==='string')){
+      const keys=resolveDocumentaryCandidateKeys(longRanking.result.ids as string[],shortKeys.map(item=>item.key));
+      return keys.map(key=>shortKeys.find(item=>item.key===key)!.candidate);
+    }
     const negatives=await documentaryNegativeRankingCache(this.rootFor(project.id),rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,rankingInput);
     const legacyNegatives=await documentaryNegativeRankingCache(this.rootFor(project.id),rankingSystem+downloadPreference+activeItemPolicy,legacyRankingInput);
     const legacyReducedInput=JSON.stringify({...fullRanking,candidates:legacyNegatives.remainingCandidates});
@@ -897,7 +932,7 @@ export class DocumentaryIntelligence {
     const reducedInput=negatives.remainingCandidates.length<candidatesForRanking.length
       ?JSON.stringify({...fullRanking,narrativeContext,candidates:negatives.remainingCandidates}):rankingInput;
     const response = await this.complete(project.id, "candidate-relevance", rankingSystem + downloadPreference + activeItemPolicy+documentaryContinuityInstruction, reducedInput, [],
-      [{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyReducedInput},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:JSON.stringify({...fullRanking,narrativeContext})},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:rankingInput},...previousRankings,
+      [{system:currentRankingSystem,input:longRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyReducedInput},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:JSON.stringify({...fullRanking,narrativeContext})},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:rankingInput},...previousRankings,
         ...previousRankings.map(request => ({ ...request, system: request.system + downloadPreference }))]);
     if (!Array.isArray(response.ids) || response.ids.some(id => typeof id !== "string")) throw new Error("Некорректный ответ предварительного отбора материалов; ответ сохранён");
     const unique = resolveDocumentaryCandidateKeys(response.ids as string[], negatives.remainingCandidates.map(item=>String(item.id)));

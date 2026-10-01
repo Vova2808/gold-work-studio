@@ -84,7 +84,12 @@ export function documentarySearchQueries(requirement: DocumentaryRequirement, ki
     // than repeat a size-class label (e.g. the new locks). Retain that actual
     // discovery query as well as the identity-prefixed version. It is only a
     // candidate source; the mandatory identities still govern visual approval.
-    return [...new Set([...queries, ...(concise ? [concise] : []), ...(requirement.searchRefined ? requirement.queries : []), subjects[0]!])].slice(0, 4);
+    // Keep one literal detail query even before an AI refinement. Prefixing
+    // every query with an inherited model name hid engine diagrams/parts from
+    // discovery, then the bare-model fallback returned more whole vehicles.
+    // This is discovery only: identity and actual-frame checks still apply.
+    const detailQuery = requirement.queries.find(query => query.trim() && !queries.includes(query));
+    return [...new Set([...queries, ...(concise ? [concise] : []), ...(requirement.searchRefined ? requirement.queries : detailQuery ? [detailQuery] : []), subjects[0]!])].slice(0, 4);
   }
   // Preserve the generated object/detail queries before adding a bare-name fallback.
   // Context entities can be a location/company, so they must not displace the actual footage query.
@@ -179,7 +184,7 @@ export function documentaryDetailScore(candidate: DocumentaryCandidate, requirem
   return details.reduce((score, word) => score + (title.has(word) ? 3 : description.has(word) ? 1 : 0), 0);
 }
 
-export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], entities: string[], used: Set<string>, years: string[] = [], allowUnlabelledStockVideos = false, refinedPhotoQueries: string[] = []): DocumentaryCandidate[] {
+export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], entities: string[], used: Set<string>, years: string[] = [], allowUnlabelledStockVideos = false, refinedPhotoQueries: string[] = [], requirement?: DocumentaryRequirement): DocumentaryCandidate[] {
   const normalize = (text: string) => ` ${text.toLowerCase().normalize("NFKD").replace(/(?<=\p{L})\.(?=\p{L})/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
   const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => !["the", "of", "and", "inc"].includes(word));
   const titleMatches = (candidate: DocumentaryCandidate) => entities.some(entity => normalize(candidate.title).includes(normalize(entity)));
@@ -225,7 +230,8 @@ export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], 
       if (vesselPrefix) return false;
       return terms.length > 1 && terms.filter(term => metadataWords.has(term)).length / terms.length >= .5;
     });
-  }).sort((a, b) => Number(titleMatches(b)) - Number(titleMatches(a)) || Number(b.match === "exact-metadata") - Number(a.match === "exact-metadata") || yearsMatched(b) - yearsMatched(a)
+  }).sort((a, b) => (requirement ? documentaryDetailScore(b, requirement) - documentaryDetailScore(a, requirement) : 0)
+    || yearsMatched(b) - yearsMatched(a) || Number(titleMatches(b)) - Number(titleMatches(a)) || Number(b.match === "exact-metadata") - Number(a.match === "exact-metadata")
     || (allowUnlabelledStockVideos ? queryMatch(b) - queryMatch(a) : 0) || Number(used.has(a.id)) - Number(used.has(b.id)));
 }
 
@@ -657,7 +663,7 @@ export class DocumentaryProjectService {
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
             && !tried.has(documentaryCandidateKey(candidate)) && !blockedCatalogs.has(documentaryCandidateKey(candidate)) && (candidate.localPath || candidate.provider !== "youtube" || this.youtube?.downloadAvailable?.() !== false)
             && (candidate.kind !== "image" || !documentaryReuseIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined } }))
-            && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates), requirement.searchRefined ? requirement.queries : []);
+            && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates), requirement.queries, requirement);
           const earlyCandidates = quick ? documentaryMetadataShortlist(scene, candidates).slice(0, 1) : [];
           if (quick && !earlyCandidates.length) continue;
           await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, candidates, searchError: sourceErrors.join("\n") || undefined } }));

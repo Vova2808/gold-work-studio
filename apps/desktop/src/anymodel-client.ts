@@ -449,7 +449,13 @@ export class AnyModelClient {
     let visualOutputTokens = 1800;
     if (images.length && !audio) {
       try {
-        const data = JSON.parse(text) as { frames?: Array<{ id: number; sample: number }>; groups?: Array<{sampleSeconds?:number[]}> };
+        const data = JSON.parse(text) as { frames?: Array<{ id: number; sample: number }>; groups?: Array<{sampleSeconds?:number[]}>;
+          narrativeContext?:{current?:{text?:unknown};preceding?:unknown;following?:unknown} };
+        // A real single-image review hit finish_reason:length after adding
+        // subject/era/detail provenance. Reserve room for the richer JSON;
+        // simple image/catalogue/text requests keep their previous ceilings.
+        if(typeof data.narrativeContext?.current?.text==='string'&&Array.isArray(data.narrativeContext.preceding)&&Array.isArray(data.narrativeContext.following))
+          visualOutputTokens=2800;
         if (data.frames?.length === images.length && data.frames.every(frame=>Number.isInteger(frame.id)&&Number.isFinite(frame.sample)))
           frameLabels = data.frames.map(frame=>`Frame id=${frame.id}, source time=${frame.sample.toFixed(3)} seconds. Return this exact id for THIS image, not its position in the list.`);
         // Three independent five-frame reviews include three sets of identity,
@@ -457,7 +463,7 @@ export class AnyModelClient {
         // cut the third JSON object off after an already-paid long response.
         if(Array.isArray(data.groups)&&data.groups.length>=1&&data.groups.length<=3
           &&data.groups.every(group=>Array.isArray(group.sampleSeconds)&&group.sampleSeconds.length===5&&group.sampleSeconds.every(Number.isFinite))
-          &&images.length===data.groups.length*5)visualOutputTokens=Math.max(1800,data.groups.length*1400);
+          &&images.length===data.groups.length*5)visualOutputTokens=Math.max(visualOutputTokens,data.groups.length*1400);
       } catch { /* Non-catalogue prompts keep their original image ordering. */ }
     }
     const complete = audio ? this.chatOnce.bind(this) : this.chat.bind(this);

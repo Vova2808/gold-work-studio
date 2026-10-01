@@ -28,3 +28,13 @@ test('metadata planning and image checks keep the existing model and reasoning p
   await client.documentaryCompletion('Actual image check','{}',['data:image/jpeg;base64,fixture']);
   assert.deepEqual(sent.map(args=>[args[0],args[2],args[3]]),[['unchanged',9000,'medium'],['unchanged',9000,'medium'],['unchanged',1800,'medium']]);
 });
+
+test('contextual image reviews have a bounded complete-answer allowance without replacing their model',async()=>{
+  const store={publicSettings:async()=>({configured:true,textModel:'configured',transcriptionModel:'audio'})} as unknown as AnyModelStore;
+  const client=new AnyModelClient(store),sent:unknown[][]=[];
+  (client as any).chat=async(...args:unknown[])=>{sent.push(args);return '{}';};
+  const narrativeContext={current:{text:'The 2004 race.'},preceding:[],following:[]};
+  await client.documentaryCompletion('Review actual pixels',JSON.stringify({narrativeContext}),['data:image/jpeg;base64,fixture'],undefined,undefined,'configured');
+  await client.documentaryCompletion('Metadata',JSON.stringify({narrativeContext}),[],undefined,undefined,'configured',1600);
+  assert.deepEqual(sent.map(args=>[args[0],args[2],args[3]]),[['configured',2800,'medium'],['configured',1600,'medium']]);
+});
