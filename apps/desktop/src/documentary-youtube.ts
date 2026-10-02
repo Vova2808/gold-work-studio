@@ -159,6 +159,10 @@ export class DocumentaryYouTube {
       await this.runner(['--ignore-config','--no-playlist','--no-progress','--no-part','--force-overwrites','--socket-timeout','10','--retries','0','--fragment-retries','0','--extractor-retries','0',
         '--js-runtimes','node','--ffmpeg-location',ffmpegPath!.replace('app.asar','app.asar.unpacked'),
         '-f','bestvideo[ext=mp4][height<=480]/best[ext=mp4][height<=480]',
+        // Stream-copying a four-second section between distant keyframes can
+        // report success with an empty MP4 (observed: 262 bytes, no video).
+        // Decode only these low-resolution samples to keep all three useful.
+        '--force-keyframes-at-cuts',
         ...ranges.flatMap(range=>['--download-sections',`*${range.start}-${range.end}`]),
         '--restrict-filenames','--no-simulate','--print-to-file','before_dl:%(filename)j',join(directory,'active.json'),
         '--print-to-file','after_move:%(filepath)j',join(directory,'complete.json'),

@@ -1,5 +1,20 @@
 export type DocumentaryAnalysisTier='fast'|'careful';
 
+/** Metadata only chooses what to inspect next. Keep detailed reasoning for
+ * actual pixels, planning and transcription, including every careful model. */
+export function documentaryReasoningEffort(model:string,input:string,hasMedia:boolean):'low'|'medium' {
+  if(hasMedia||model!=='ag/gemini-2.5-flash')return 'medium';
+  try {
+    const data=JSON.parse(input);
+    const ranking=(item:unknown):boolean=>Boolean(item&&typeof item==='object'
+      &&Array.isArray((item as {candidates?:unknown}).candidates)
+      &&(item as {candidates:unknown[]}).candidates.length>0);
+    if(ranking(data)||Array.isArray(data.requests)&&data.requests.length>0&&data.requests.length<=4
+      &&data.requests.every((request:{data?:unknown})=>ranking(request?.data)))return 'low';
+  }catch { /* Other text tasks retain their existing reasoning profile. */ }
+  return 'medium';
+}
+
 /** A fast metadata opinion never approves pixels. Literal details stay careful. */
 export function documentaryAnalysisTier(purpose:string,input:string):DocumentaryAnalysisTier {
   if(purpose==='candidate-relevance'||purpose==='visual-source-preview')return 'fast';

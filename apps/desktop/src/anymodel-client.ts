@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import {documentaryReasoningEffort} from './documentary-analysis-routing.js';
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as waitForRetry } from "node:timers/promises";
@@ -471,7 +472,7 @@ export class AnyModelClient {
       { role: "system", content: system },
       { role: "user", content: audio ? [{ type: "text", text }, { type: "input_audio", input_audio: { data: audio.slice(audio.indexOf(",") + 1), format: "mp3" } }]
         : images.length ? [{ type: "text", text }, ...images.flatMap((url,index) => [...(frameLabels[index] ? [{type:"text" as const,text:frameLabels[index]}] : []), { type: "image_url" as const, image_url: { url } }])] : text },
-    ], audio ? 9000 : outputLimit??(images.length ? visualOutputTokens : 9000), "medium", signal, modelOverride&&!audio?120_000:600_000, { idleTimeoutMs: modelOverride&&!audio?90_000:180_000, onPartial, allowShortCooldown:!audio });
+    ], audio ? 9000 : outputLimit??(images.length ? visualOutputTokens : 9000), documentaryReasoningEffort(modelOverride??settings.textModel,text,images.length>0), signal, modelOverride&&!audio?120_000:600_000, { idleTimeoutMs: modelOverride&&!audio?90_000:180_000, onPartial, allowShortCooldown:!audio });
   }
 
   /** A free catalogue read checks the configured transport, never a completion. */

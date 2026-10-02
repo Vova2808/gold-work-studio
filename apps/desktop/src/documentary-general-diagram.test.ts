@@ -48,6 +48,7 @@ test('general diagram scope comes only from a nearby explicit universal passage 
 test('diagram evidence cannot approve a photograph, invented quotation, missing part, or claimed model identity',()=>{
   const {project,scene}=fixture(),context=documentarySceneContext(project,scene),valid=evidence();
   assert.ok(documentaryGeneralDiagramVerified(valid,context,identities));
+  assert.ok(documentaryGeneralDiagramVerified({...valid,generalDiagram:{...valid.generalDiagram,scriptQuote:`  ${valid.generalDiagram.scriptQuote.replace(/ /g,'\n  ')} `}},context,identities),'A real response omits the script splitter trailing space; formatting must not reject correct evidence');
   for(const invalid of [
     {...valid,generalDiagram:{...valid.generalDiagram,isDiagram:false}},
     {...valid,generalDiagram:{...valid.generalDiagram,scriptQuote:'Every motorcycle has an engine.'}},

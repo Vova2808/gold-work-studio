@@ -27,8 +27,11 @@ export function documentaryGeneralDiagramVerified(value:Record<string,unknown>,c
   const scope=documentaryGeneralDiagramScope(context,identities);
   const diagram=value.generalDiagram as Record<string,unknown>|undefined;
   const narrative=value.narrativeEvidence as Record<string,unknown>|undefined;
+  // Scene splitting leaves trailing/inter-word whitespace in the original
+  // sentence. Its formatting is not a different quotation or visual verdict.
+  const quote=(text:string)=>text.normalize('NFC').replace(/\s+/gu,' ').trim();
   return Boolean(scope&&diagram?.isDiagram===true&&diagram.illustrationOnly===true
-    &&diagram.scriptQuote===scope.scriptQuote&&typeof diagram.detailEvidence==='string'&&diagram.detailEvidence.trim().length>=20
+    &&typeof diagram.scriptQuote==='string'&&quote(diagram.scriptQuote)===quote(scope.scriptQuote)&&typeof diagram.detailEvidence==='string'&&diagram.detailEvidence.trim().length>=20
     &&value.identityMatch===false&&!value.identifiedEntity
     &&narrative?.subjectMatch===true&&narrative.detailMatch===true&&narrative.eraMatch===true&&narrative.requiredEra==='none');
 }

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import {documentaryDatedSearchQueries} from './documentary-dated-search.js';
 import {documentarySavedContextIssue,revalidateDocumentaryContext} from './documentary-context-approval.js';
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
@@ -651,7 +652,10 @@ export class DocumentaryProjectService {
           let inspections = inspectionCounts.get(inspectionKey) ?? 0;
           if (inspections >= inspectionLimit) continue;
           const pool: DocumentaryCandidate[] = [];
-          const queries = documentarySearchQueries(requirement, kind, documentarySceneContext(project,scene));
+          const context=documentarySceneContext(project,scene);
+          const sourceQueries=documentarySearchQueries(requirement,kind,context);
+          const queries=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
+            :documentaryDatedSearchQueries(sourceQueries,documentaryNarrationContext(project,scene));
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>) => {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
