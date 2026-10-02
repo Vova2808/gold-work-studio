@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import {documentarySavedContextIssue,revalidateDocumentaryContext} from './documentary-context-approval.js';
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
@@ -536,7 +537,7 @@ export class DocumentaryProjectService {
     if (!project || waitForNarration && project.scenes.some(scene => scene.includeInAssembly !== false && scene.documentary?.requirement.plannedBy !== "semantic")) throw new Error("Сначала подготовьте поисковой план");
     const changeScene = (sceneId: string, change: (scene: Scene) => Scene) => this.changeScene(projectId, sceneId, change, Boolean(waitForNarration));
     project = await this.projects.mutate(projectId, current => ({ scenes: current.scenes.map(scene => {
-      const issue = documentarySavedQualityIssue(current,scene)||documentarySavedIdentityIssue(scene);
+      const issue = documentarySavedQualityIssue(current,scene)||documentarySavedIdentityIssue(scene)||documentarySavedContextIssue(current,scene);
       return issue && (!options.sceneIds || options.sceneIds.includes(scene.id))
         ? { ...scene, documentary: { ...scene.documentary!, verified: false, autoError: issue, reviewNote: issue } } : scene;
     }) }),{candidateSceneIds:[]});
@@ -573,6 +574,32 @@ export class DocumentaryProjectService {
       if (this.stopRequested.has(projectId)) return;
       let project = (await this.projects.get(projectId,{omitCandidates:true}))!;
       if (videoOnly && documentaryVideoCoverage(project.scenes).percent >= project.settings.stockVideoPercent) { skipped++; completed++; return; }
+      // An old approval needs current evidence, not another search/download.
+      // Replay a completed actual-frame check first, with POSTs disabled.
+      if(!scene.documentary?.verified&&!scene.documentary?.pinned&&scene.documentary?.visualReview?.status==='accepted'
+        &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force){
+        try{
+          this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,
+            message:`Кадр ${scene.order+1}: проверяю сохранённый анализ без нового платного запроса…`});
+          const {review}=await this.intelligence.inspectForSelection(project,scene,undefined,()=>Boolean(fatal)||this.stopRequested.has(projectId),true);
+          const restored={...scene,trimStartSeconds:review.trimStartSeconds??0,trimEndSeconds:review.trimEndSeconds,
+            documentary:{...scene.documentary,verified:review.status==='accepted',visualReview:review}};
+          if(restored.documentary.verified&&review.contextApproval&&!documentarySavedContextIssue(project,restored)
+            &&!documentaryVarietyIssue(project,restored)&&!documentaryReuseIssue(project,restored)){
+            const prepared=await prepareDocumentaryRangePoster(this.storage.projectDirectory(projectId),restored);
+            project=await changeScene(scene.id,latest=>{
+              if(latest.documentary?.checksum!==scene.documentary?.checksum||latest.narration!==scene.narration||latest.documentary?.pinned!==scene.documentary?.pinned)return latest;
+              const updated={...latest,imagePath:prepared.imagePath,trimStartSeconds:restored.trimStartSeconds,trimEndSeconds:restored.trimEndSeconds,
+                documentary:{...latest.documentary!,verified:true,visualReview:prepared.documentary!.visualReview,reviewNote:review.reason,autoError:undefined}};
+              return documentarySavedContextIssue(project,updated)?latest:updated;
+            });
+            scene=project.scenes.find(item=>item.id===scene.id)!;
+          }
+        }catch(error){
+          if(this.stopRequested.has(projectId))return;
+          recordDiagnosticEvent('info','documentary.analysis.saved-context-not-restored',{projectId,sceneId:scene.id,reason:error instanceof Error?error.name:'Error',paidRequests:0});
+        }
+      }
       const previousReady = Boolean(scene.documentary?.verified && scene.documentary.selected && await stat(scene.videoPath || scene.imagePath || "").then(() => true, () => false));
       // Ready photo fallbacks are useful. Upgrade them only in the measured
       // coverage pass, not on every resume merely because the planner wanted video.
@@ -927,6 +954,11 @@ export class DocumentaryProjectService {
 
   async refreshMontage(projectId: string): Promise<Project> {
     if(this.autoRuns.has(projectId))throw new Error('Дождитесь завершения подбора материалов');
+    await this.projects.mutate(projectId,current=>{
+      if(current.mediaMode!=='stock'||current.settings.assembly.documentary?.version!==2)throw new Error('Откройте Stock Documentary v2');
+      if(current.status==='generating'||current.status==='paused')throw new Error('Сначала завершите или остановите производство');
+      return {scenes:revalidateDocumentaryContext(current)};
+    },{candidateSceneIds:[]});
     const project=await this.projects.mutate(projectId,current=>{
       if(current.mediaMode!=='stock'||current.settings.assembly.documentary?.version!==2)throw new Error('Откройте Stock Documentary v2');
       if(current.status==='generating'||current.status==='paused')throw new Error('Сначала завершите или остановите производство');

@@ -6,8 +6,9 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
 import {documentarySceneContext} from './documentary-scene-context.js';
+import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
-import {DocumentaryIntelligence} from './documentary-intelligence.js';
+import {DocumentaryIntelligence,DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {effectFfmpeg} from './effect-media.js';
 import {documentarySearchQueries} from './documentary-project-service.js';
 
@@ -79,6 +80,13 @@ test('actual inspection accepts an evidenced general schematic only; old unknown
   const result=await intelligence.inspectForSelection(project,scene);
   assert.equal(result.review.status,'accepted');assert.equal(result.review.identifiedEntity,undefined);
   assert.match(result.review.reason,/Поясняющая схема/);
+  assert.ok(result.review.contextApproval,'Actual accepted evidence is persisted, not only its prose reason');
+  const approved={...scene,documentary:{...scene.documentary!,verified:true,visualReview:result.review}};
+  assert.equal(documentarySavedContextIssue(project,approved),undefined);
+  const cacheOnly=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>assert.fail('Cache-only replay must never POST')},()=>join(root,'first'));
+  assert.ok((await cacheOnly.inspectForSelection(project,scene,undefined,undefined,true)).review.contextApproval);
+  const missing=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>assert.fail('Cache miss must not create a paid request')},()=>join(root,'missing'));
+  await assert.rejects(missing.inspectForSelection(project,scene,undefined,undefined,true),DocumentaryCachedAnalysisMissing);
   await intelligence.inspectForSelection(project,scene);assert.equal(calls,2,'Completed overview and source-blind detail evidence are reused');
   asDiagram=false;
   assert.notEqual((await new DocumentaryIntelligence(client,()=>join(root,'photo')).inspectForSelection(project,scene)).review.status,'accepted','A real photograph cannot use the diagram exception');

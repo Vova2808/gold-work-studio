@@ -1,5 +1,6 @@
 import type { Project, QueueTask, Scene, TaskKind } from "@gold-work/shared";
 import { documentaryEditErrors } from "./documentary-validation.js";
+import {documentarySavedContextIssue} from './documentary-context-approval.js';
 
 /** Check available inputs and work that is actually scheduled; failed/cancelled jobs are not promises of media. */
 export function missingAssemblyInputs(
@@ -14,8 +15,9 @@ export function missingAssemblyInputs(
     && ["pending", "running", "retry_wait", "paused"].includes(task.status));
   return [...documentaryEditErrors(project), ...included.flatMap(scene => {
     const missing: string[] = [];
-    if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2 && !scene.documentary?.verified) {
-      missing.push(`сцена ${scene.order + 1}: подтвердите объект, эпоху и условия использования материала`);
+    if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
+      const issue=documentarySavedContextIssue(project,scene);
+      if(!scene.documentary?.verified||issue)missing.push(`сцена ${scene.order + 1}: ${issue??'подтвердите объект, эпоху и условия использования материала'}`);
     }
     const videoEnabled = (project.settings.video.enabled && !scene.videoFallback) || scene.stockSource?.mediaType === "video";
     const imageReady = Boolean(scene.imagePath && fileAvailable(scene.imagePath));

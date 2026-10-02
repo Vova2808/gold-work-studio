@@ -161,7 +161,10 @@ export interface DocumentaryScene {
   searchError?: string;
   checksum?: string;
   visualHash?: string;
-  visualReview?: { status: "accepted" | "rejected" | "uncertain"; confidence: number; reason: string; checkedAt: string; sampleSeconds: number[]; quality: string; identifiedEntity?: string; trimStartSeconds?: number; trimEndSeconds?: number; viewDescription?: string; frameHash?: string; actionMatch?: boolean; actionEvidence?: string; annotations?:DocumentaryAnnotation[] };
+  visualReview?: { status: "accepted" | "rejected" | "uncertain"; confidence: number; reason: string; checkedAt: string; sampleSeconds: number[]; quality: string; identifiedEntity?: string; trimStartSeconds?: number; trimEndSeconds?: number; viewDescription?: string; frameHash?: string; actionMatch?: boolean; actionEvidence?: string; annotations?:DocumentaryAnnotation[];
+    /** Automatic acceptance of these pixels/interval in this original script context. */
+    contextApproval?: { version: 1; fingerprint: string; evidence: { subjectMatch: true; eraMatch: true; detailMatch: true; requiredEra: string; observedEra: string; eraEvidenceQuote?: string; evidence: string } };
+  };
   autoError?: string;
   caption: { text: string; enabled: boolean; position: "top" | "bottom" | "center"; animation: "fade" | "slide" | "typing"; fontSize: number; color: string; backgroundColor: string; opacity: number };
   layout: "full" | "contain" | "compare";
