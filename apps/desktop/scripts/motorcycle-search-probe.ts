@@ -15,6 +15,24 @@ copyFileSync(join(profile,'Local State'),join(out,'profile/Local State'));
 app.setPath('userData',join(out,'profile'));app.on('window-all-closed',()=>undefined);
 app.whenReady().then(async()=>{
   const search=new DocumentarySearch(new StockClient(new StockStore(join(profile,'credentials/stock.json'))),globalThis.fetch,undefined,undefined,new DocumentaryYouTube(new YouTubeStore(join(profile,'credentials/youtube.json'))));
+  const query=process.argv.find(arg=>arg.startsWith('--query='))?.slice(8);
+  const kind=process.argv.includes('--image')?'image' as const:'video' as const;
+  const providers=['youtube','commons','internet-archive','pexels','pixabay'] as const;
+  if(query){
+    const selected=process.argv.includes('--youtube-only')?providers.filter(provider=>provider==='youtube'):
+      providers.filter(provider=>kind==='video'||provider!=='youtube');
+    const results=await Promise.all(selected.map(async provider=>{
+      const started=performance.now();
+      const result=await search.search({query,kind,providers:[provider]},true);
+      return {provider,seconds:(performance.now()-started)/1000,count:result.candidates.length,
+        examples:provider==='youtube'?result.candidates.slice(0,12).map(candidate=>({id:candidate.id,title:candidate.title,
+          durationSeconds:candidate.durationSeconds,width:candidate.width,height:candidate.height,rights:candidate.rights})):undefined,
+        error:result.sources[0]?.error?.replace(/https?:\/\/\S+/g,'[source]')};
+    }));
+    const result={at:new Date().toISOString(),query,kind,paidRequests:0,documentarySearchCache:false,results};
+    const file=join(out,`result-${Date.now()}.json`);
+    await writeFile(file,JSON.stringify(result,null,2));console.log(JSON.stringify({file,...result}));app.exit(0);return;
+  }
   const results=[];
   for(const input of [{query:'Valentino Rossi Honda 2003',kind:'video' as const,providers:['youtube' as const]}, {query:'Yamaha YZR-M1',kind:'image' as const,providers:['commons' as const,'pixabay' as const]}]){
     const start=performance.now(),result=await search.search(input);

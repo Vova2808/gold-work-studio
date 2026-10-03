@@ -512,7 +512,13 @@ export class DocumentaryProjectService {
       if (!result.failed || !this.intelligence?.refineQueries || this.stopRequested.has(projectId)) return result;
       const failed = result.project.scenes.filter(scene => scene.includeInAssembly !== false && (!options.sceneIds || options.sceneIds.includes(scene.id))
         && scene.documentary && !scene.documentary.verified && !scene.documentary.pinned && !scene.documentary.requirement.searchRefined
-        && !documentarySearchUnavailable(scene.documentary.searchError)
+        // A rate limit at one provider must not suppress query repair when
+        // other providers returned licensed candidates that failed relevance.
+        // With no candidates, wait for the unavailable source instead of
+        // spending a paid refinement on an outage.
+        && (!documentarySearchUnavailable(scene.documentary.searchError)
+          || scene.documentary.candidates.some(candidate => candidate.rights !== 'unknown')
+            && !documentarySearchUnavailable(scene.documentary.autoError))
         && (session.canAttempt(scene.id,'video')||session.canAttempt(scene.id,'image'))
         && !/pending|partial|неопредел|оплачен|ожидает ответа/i.test(scene.documentary.autoError ?? '')).slice(0, 24);
       if (!failed.length) return result;
@@ -643,7 +649,7 @@ export class DocumentaryProjectService {
       const varietyIssue = previousReady && (documentaryDistraction(scene, scene.documentary?.visualReview?.viewDescription ?? "") || documentaryVarietyIssue(project, scene));
       if (previousReady && (scene.documentary?.pinned || !options.force && !upgradePhoto && !varietyIssue)) { skipped++; completed++; return; }
       activeScenes.add(scene.id);
-      let accepted = false, youtubeTimedOut = false;
+      let accepted = false, youtubeTimedOut = false, foundThisRun = false;
       this.publish({ projectId, phase: "searching", completed, total: scenes.length, selected, skipped, failed: failures.length,
         currentSceneId: scene.id, currentSceneNumber: scene.order + 1, message: `Ищу точный материал: ${scene.stockQuery || scene.title}` });
       try {
@@ -706,6 +712,7 @@ export class DocumentaryProjectService {
             const current = (await this.projects.get(projectId,{omitCandidates:true}))!;
             pool.push(...current.scenes.flatMap(item => item.documentary?.selected?.kind === "video" && item.documentary.selected.localPath ? [item.documentary.selected] : []));
             for (const query of queries) pool.push(...(await this.localCandidates(query)).filter(item => item.kind === "video"));
+            if (pool.length) foundThisRun = true;
           }
           if (quick) {
             // These same queries/providers belong to the broad search below;
@@ -716,6 +723,7 @@ export class DocumentaryProjectService {
             for (const query of quickQueries) {
               if (fatal || this.stopRequested.has(projectId)) return;
               pool.push(...await discover(query, ["pexels", "pixabay"]));
+              if (pool.length) foundThisRun = true;
               if (documentaryMetadataShortlist(scene, pool).length) break;
             }
           }
@@ -745,6 +753,7 @@ export class DocumentaryProjectService {
           finally { session.accountSearch(scene.id,kind,Date.now()-waitingAt); }
           if(batch.done)break;
           pool.push(...batch.value);
+          if (batch.value.length) foundThisRun = true;
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
           const candidates = selectDocumentaryCandidates(pool.filter(candidate => !rejectedCandidates.has(rejectedCandidateFingerprint(candidate))
@@ -924,7 +933,9 @@ export class DocumentaryProjectService {
           failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: "no-results", message });
           // A failed scene has been processed, not queued. Persist the result
           // so gaps remain explainable after navigation or an app restart.
-          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: current.documentary?.autoError || message } }));
+          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
+            searchError: sourceErrors.join("\n") || undefined,
+            autoError: !foundThisRun && sourceErrors.length ? message : current.documentary?.autoError || message } }));
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

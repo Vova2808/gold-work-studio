@@ -298,13 +298,74 @@ test('failed search gets one persisted query revision while narration, identitie
   assert.equal(revisions, 1, 'Resume must not buy another revision');
 });
 
+test('one rate-limited source does not block query repair after other sources returned candidates', async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scene = project.scenes[0]!;
+  scene.documentary!.requirement = { ...scene.documentary!.requirement, entities: ['Tractor Alpha'],
+    identities: [{ name: 'Tractor Alpha', aliases: [] }], identityContextVersion: 3,
+    plannedBy: 'semantic', queries: ['Tractor Alpha rare archive'] };
+  await projects.update(project.id, project);
+  const searcher = new DocumentarySearch();
+  searcher.search = async input => ({
+    candidates: [{ id: `commons:${input.kind}`, provider: 'commons', kind: input.kind,
+      title: 'Tractor Alpha field', description: 'Tractor Alpha', downloadUrl: 'https://upload.wikimedia.org/tractor.jpg',
+      pageUrl: 'https://commons.wikimedia.org/wiki/File:tractor', author: 'Fixture', license: 'CC0', rights: 'public-domain',
+      attribution: 'Fixture', licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/', query: input.query,
+      retrievedAt: '2026-09-15', match: 'unverified', concerns: [], width: 1280, height: 720,
+      durationSeconds: input.kind === 'video' ? 10 : undefined }],
+    sources: [{ provider: 'commons', count: 1 }, { provider: 'pixabay', count: 0, error: 'HTTP 429' }]
+  });
+  let revisions = 0;
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, 'workspace')), searcher, join(root, 'Materials'),
+    { download: async () => { throw new Error('Unranked candidate must not download'); } }, () => {}, {
+      available: async () => true, plan: async () => new Map(), inspect: async () => { throw new Error('No inspection expected'); },
+      rankCandidates: async () => [],
+      refineQueries: async (_project, scenes) => { revisions++; return new Map(scenes.map(item => [item.id, ['Tractor Alpha repaired archive']])); }
+    });
+  await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  const saved = (await projects.get(project.id))!.scenes[0]!;
+  assert.match(saved.documentary!.searchError!, /429/);
+  assert.ok(saved.documentary!.candidates.length > 0);
+  assert.equal(revisions, 1);
+  assert.equal(saved.documentary!.requirement.searchRefined, true);
+  await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(revisions, 1, 'A persisted repair is never resubmitted on resume');
+});
+
+test('a complete source outage with no new candidates does not buy query repair from stale results', async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scene = project.scenes[0]!;
+  scene.documentary!.requirement = { ...scene.documentary!.requirement, plannedBy: 'semantic' };
+  scene.documentary!.candidates = [{ id: 'commons:stale', provider: 'commons', kind: 'image', title: 'Old candidate',
+    description: '', downloadUrl: 'https://upload.wikimedia.org/old.jpg', pageUrl: 'https://commons.wikimedia.org/wiki/File:old',
+    author: 'Fixture', license: 'CC0', rights: 'public-domain', attribution: 'Fixture',
+    licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/', query: 'old', retrievedAt: '2026-09-15',
+    match: 'unverified', concerns: [] }];
+  scene.documentary!.autoError = 'Old candidate did not match';
+  await projects.update(project.id, project);
+  const searcher = new DocumentarySearch();
+  searcher.search = async () => ({ candidates: [], sources: [{ provider: 'commons', count: 0, error: 'HTTP 429' }] });
+  let revisions = 0;
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, 'workspace')), searcher, join(root, 'Materials'),
+    { download: async () => { throw new Error('No candidate'); } }, () => {}, {
+      available: async () => true, plan: async () => new Map(), inspect: async () => { throw new Error('No inspection expected'); },
+      refineQueries: async () => { revisions++; return new Map(); }
+    });
+  await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(revisions, 0);
+  assert.match((await projects.get(project.id))!.scenes[0]!.documentary!.autoError!, /Недоступные источники/);
+});
+
 test('query refinement saves the paid response and reuses it without new submissions', async () => {
   const { root, project } = await setup();
   let requests = 0;
   const intelligence = new DocumentaryIntelligence({ configured: async () => true, documentaryCompletion: async (_system, input) => {
     requests++;
     const data = JSON.parse(input);
-    assert.equal(data.script, project.videoBrief!.readyScript);
+    assert.equal(data.script, undefined, 'A small repair does not resend the full script');
+    assert.match(data.scenes[0].narrativeContext.current.text, /red tractor/);
     return JSON.stringify({ scenes: data.scenes.map((scene: { id: string }) => ({ id: scene.id, queries: ['Tractor Alpha engine'] })) });
   } }, () => root);
   const first = await intelligence.refineQueries(project, project.scenes);
