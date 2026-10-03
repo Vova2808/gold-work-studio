@@ -64,6 +64,13 @@ test('Faster and long named compilations cannot bypass semantic source ranking',
   assert.equal(documentaryMetadataShortlist(generic,[{...bad[0]!,provider:'pexels',title:'engine piston detail',durationSeconds:12}]).length,1);
 });
 
+test('general stock race footage can enter the fast visual check despite race/racing wording',()=>{
+  const scene={documentary:{requirement:{identities:[],years:[],queries:['MotoGP motorcycle racing action shots']}}} as never;
+  const candidate={provider:'pexels',kind:'video',title:'exciting motorcycle race in urban circuit',durationSeconds:9} as DocumentaryCandidate;
+  assert.deepEqual(documentaryMetadataShortlist(scene,[candidate]),[candidate]);
+  assert.deepEqual(documentaryMetadataShortlist({documentary:{requirement:{identities:[],years:['2003'],queries:['MotoGP motorcycle racing action shots']}}} as never,[candidate]),[]);
+});
+
 test('timeline thumbnails are small, coalesced and cached without changing the source',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-thumbnail-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const source=join(root,'source.png');await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1920x1080','-frames:v','1',source]);

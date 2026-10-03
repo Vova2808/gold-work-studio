@@ -44,7 +44,10 @@ export function documentaryMetadataShortlist(scene: Scene, candidates: Documenta
   const requirement=scene.documentary?.requirement;
   if (!requirement || requirement.identities===undefined || requirement.years.length) return [];
   const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-  const words=(s:string)=>normalize(s).split(' ').filter(w=>w.length>3).map(w=>w.replace(/s$/,''));
+  const noise=new Set(['action','shot','shots','footage','video','photo','photos','image','images','stock','archive','archival','clip','clips']);
+  const words=(s:string)=>normalize(s).split(' ').filter(w=>w.length>3&&!noise.has(w)).map(w=>w.replace(/s$/,''));
+  const matches=(term:string,title:Set<string>)=>title.has(term)||term.endsWith('ing')&&
+    (title.has(term.slice(0,-3))||title.has(`${term.slice(0,-3)}e`));
   const queries=requirement.queries.map(words).filter(q=>q.length>=2);
   // A proper name alone says nothing about the requested view/action. In the
   // live run “Faster” matched Windows tutorials and Rossi matched any Yamaha
@@ -55,7 +58,7 @@ export function documentaryMetadataShortlist(scene: Scene, candidates: Documenta
     const title=` ${normalize(candidate.title)} `;
     if (candidate.kind === 'video' && !candidate.localPath && (candidate.durationSeconds ?? Infinity) > 45) return false;
     const titleWords=new Set(words(candidate.title));
-    return queries.some(q=>q.filter(w=>titleWords.has(w)).length>=Math.max(2,Math.ceil(q.length*.75)));
+    return queries.some(q=>q.filter(w=>matches(w,titleWords)).length>=Math.max(2,Math.ceil(q.length*.65)));
   });
   return obvious.slice(0,4);
 }
@@ -1184,6 +1187,22 @@ export class DocumentaryIntelligence {
       { system: reviewSystem + narrationContextInstruction, input: JSON.stringify({ ...previousOverviewInput, narrationContext }) },
       { system: reviewSystem, input: JSON.stringify(previousOverviewInput) }
     ];
+    const finish=(value:Record<string,unknown>,start:number,end:number,checked:number[]):Review=>{
+      const confidence=Math.max(0,Math.min(1,Number(value.confidence)||0));
+      const generalDiagram=selected.kind==='image'&&documentaryGeneralDiagramVerified(value,documentarySceneContext(project,scene),scene.documentary!.requirement.identities);
+      const identifiedEntity=!generalDiagram&&documentaryIdentityMatches(scene.documentary!.requirement,String(value.identifiedEntity))?String(value.identifiedEntity):undefined;
+      const identityIssue=(!generalDiagram&&documentaryIdentityReviewIssue(scene.documentary!.requirement,value))||documentaryActionReviewIssue(scene,value);
+      const editorialIssue=identityIssue||(selected.kind==='video'&&value.status==='accepted'&&value.isCameraFootage===true?documentaryRangeEditorialIssue(value):undefined);
+      const cameraConfirmed=selected.kind!=='video'||value.isCameraFootage===true&&!editorialIssue;
+      const accepted=value.status==='accepted'&&!identityIssue&&cameraConfirmed&&confidence>=minimumVisualConfidence&&(!subjects.length||identifiedEntity);
+      return {status:accepted?'accepted':value.status==='rejected'?'rejected':'uncertain',confidence,identifiedEntity,
+        contextApproval:accepted?documentaryContextApproval(project,selected.kind==='video'?{...scene,trimStartSeconds:start,trimEndSeconds:end}:scene,value):undefined,
+        annotations:readDocumentaryAnnotations(value,narrationContext,checked),
+        ...(documentaryGeneralActionIssue(scene)?{actionMatch:value.actionMatch===true,actionEvidence:String(value.actionEvidence??'').slice(0,1600)}:{}),
+        reason:`${generalDiagram?'Поясняющая схема общего принципа; не изображение конкретной модели. ':''}${editorialIssue?`${editorialIssue} `:cameraConfirmed?'':'Видеофрагмент не подтверждён как натурная съёмка. '}${value.status==='accepted'&&confidence<minimumVisualConfidence?`Недостаточная уверенность проверки (${Math.round(confidence*100)}%). `:''}${String(value.reason??'Недостаточно данных для подтверждения')}`.slice(0,1800),
+        quality:`${width}×${height}; ${String(value.quality??'').slice(0,500)}`,checkedAt:new Date().toISOString(),sampleSeconds:checked,
+        ...(selected.kind==='video'?{trimStartSeconds:start,trimEndSeconds:end}:{})};
+    };
     // Long clips use their reusable shot index. Extracting up to 16 overview
     // JPEGs first was discarded work on EVERY scene and every candidate.
     // Only legacy unresolved requests require recreating that exact old hash.
@@ -1205,6 +1224,29 @@ export class DocumentaryIntelligence {
         if (saved && saved.state !== "complete" && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")) throw new DocumentaryAnalysisError("Предыдущий анализ этого видео имеет неизвестный результат; каталог не запускает платный повтор. Проверьте журнал AnyModel.", "pending", "visual-overview");
       }
       return this.inspectCatalogRange(project, scene, desiredSeconds, progress);
+    }
+    // For a short, self-contained general stock clip, inspect the exact first
+    // spoken-length excerpt once. Three frames cover the interval that will be
+    // rendered, so a broad overview followed by another paid range review adds
+    // cost without checking any extra frames of the accepted excerpt. A saved
+    // or unknown old overview still takes its established path/checkpoint.
+    if(selected.kind==='video'&&duration<=12&&!usedRanges.length&&documentaryGeneralIllustration(scene)
+      &&!documentaryGeneralActionIssue(scene)){
+      let oldOverviewAvailable=true;
+      try{
+        await this.inspection.run({...this.inspection.getStore()!,cacheOnly:true},()=>this.complete(project.id,'visual-overview',
+          footageSystem+narrationContextInstruction,JSON.stringify({...overviewInput,narrationContext}),overviewImages,
+          [...previousOverviewRequests,{system:reviewSystem+narrationContextInstruction,input:JSON.stringify({...overviewInput,narrationContext})},
+            {system:reviewSystem,input:JSON.stringify(overviewInput)}],legacySampling?1:2));
+      }catch(error){if(error instanceof DocumentaryCachedAnalysisMissing)oldOverviewAvailable=false;else throw error;}
+      if(!oldOverviewAvailable){
+        const start=0,end=Math.min(duration,Math.max(1,desiredSeconds));
+        const checked=[start+.1,start+(end-start)/2,Math.max(start,end-.15)];
+        const rangeSystem=footageSystem+' This is the ONLY and FINAL check of this fixed short excerpt. All three actual frames must show a clean continuous real-camera view relevant to the general narration. Keep startSeconds and endSeconds unchanged. Reject if any sampled frame is a game, render, title card, unrelated object or unusable image; do not infer unsampled content.'+narrationContextInstruction;
+        const rangeInput={...contentRequest,startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext};
+        const value=await this.complete(project.id,'visual-range',rangeSystem,JSON.stringify(rangeInput),await sample(checked));
+        return finish(value,start,end,checked);
+      }
     }
     let value = await this.complete(project.id, "visual-overview", footageSystem + narrationContextInstruction, JSON.stringify({ ...overviewInput, narrationContext }), overviewImages, earlierRequests, legacySampling ? 1 : 2);
     let start = Math.max(0, Math.min(duration - 1, Number(value.startSeconds) || 0));
@@ -1236,19 +1278,7 @@ export class DocumentaryIntelligence {
           JSON.stringify({ ...visibleRangeInput, startSeconds: start, endSeconds: end, sampleSeconds: checked, narrationContext }), await sample(checked));
       }
     }
-    const confidence = Math.max(0, Math.min(1, Number(value.confidence) || 0));
-    const generalDiagram=selected.kind==='image'&&documentaryGeneralDiagramVerified(value,documentarySceneContext(project,scene),scene.documentary!.requirement.identities);
-    const identifiedEntity = !generalDiagram&&documentaryIdentityMatches(scene.documentary!.requirement, String(value.identifiedEntity)) ? String(value.identifiedEntity) : undefined;
-    const identityIssue = (!generalDiagram&&documentaryIdentityReviewIssue(scene.documentary!.requirement, value)) || documentaryActionReviewIssue(scene, value);
-    const editorialIssue = identityIssue || (selected.kind === "video" && value.status === "accepted" && value.isCameraFootage === true ? documentaryRangeEditorialIssue(value) : undefined);
-    const cameraConfirmed = selected.kind !== "video" || value.isCameraFootage === true && !editorialIssue;
-    const accepted=value.status === "accepted" && !identityIssue && cameraConfirmed && confidence >= minimumVisualConfidence && (!subjects.length || identifiedEntity);
-    return { status: accepted ? "accepted" : value.status === "rejected" ? "rejected" : "uncertain", confidence, identifiedEntity,
-      contextApproval:accepted?documentaryContextApproval(project,selected.kind==='video'?{...scene,trimStartSeconds:start,trimEndSeconds:end}:scene,value):undefined,
-      annotations:readDocumentaryAnnotations(value,narrationContext,checked),
-      ...(documentaryGeneralActionIssue(scene) ? { actionMatch: value.actionMatch === true, actionEvidence: String(value.actionEvidence ?? "").slice(0, 1600) } : {}),
-      reason: `${generalDiagram?'Поясняющая схема общего принципа; не изображение конкретной модели. ':''}${editorialIssue ? `${editorialIssue} ` : cameraConfirmed ? "" : "Видеофрагмент не подтверждён как натурная съёмка. "}${value.status === "accepted" && confidence < minimumVisualConfidence ? `Недостаточная уверенность проверки (${Math.round(confidence * 100)}%). ` : ""}${String(value.reason ?? "Недостаточно данных для подтверждения")}`.slice(0, 1800), quality: `${width}×${height}; ${String(value.quality ?? "").slice(0, 500)}`,
-      checkedAt: new Date().toISOString(), sampleSeconds: checked, ...(selected.kind === "video" ? { trimStartSeconds: start, trimEndSeconds: end } : {}) };
+    return finish(value,start,end,checked);
   }
 
   private async inspectCatalogRange(project: Project, scene: Scene, desired: number, progress: (message: string) => void): Promise<Review> {

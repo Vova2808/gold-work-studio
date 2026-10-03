@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readdir,rm,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -48,6 +48,42 @@ test('general-illustration policy does not resend an older uncertain paid frame 
     assert.fail('The older pending visual check must not be repaid');
   }},()=>join(root,'guarded'));
   await assert.rejects(restart.inspectForSelection(project,scene),/неизвестный результат/);
+});
+
+test('a short general video verifies its actual rendered range in one paid check',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-short-general-')),videoPath=join(root,'fixture.mp4');
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=10','-t','6','-c:v','mpeg4',videoPath]);
+  const scene={id:'general-video',order:1,narration:'motorcycle racing as cool as possible.',durationSeconds:2,videoPath,
+    documentary:{checksum:'short-video',requirement:{text:'motorcycle racing as cool as possible.',entities:['MotoGP'],
+      identities:[],identityContextVersion:3,queries:['motorcycle racing'],years:[]},
+      selected:{kind:'video',provider:'pexels',title:'motorcycle race',description:'Race track footage',durationSeconds:6,width:1280,height:720}}} as unknown as Scene;
+  const project={id:'p',aspectRatio:'16:9',scenes:[{id:'prior',order:0,narration:'The 2002 season.'} as Scene,scene]} as Project;
+  let calls=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input,images)=>{
+    calls++;
+    assert.match(system,/ONLY and FINAL check/);
+    assert.equal(JSON.parse(input).endSeconds,2);
+    assert.equal(images?.length,3);
+    return JSON.stringify({status:'accepted',confidence:.96,reason:'Three actual frames show motorcycles racing on a track.',
+      quality:'Clear camera footage',isCameraFootage:true,mediaType:'camera',presentation:'clean',physicalEvidence:'Track and riders visible',
+      technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Riders and track edges are clear'},
+      narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
+        evidence:'The sampled range shows motorcycle racing without a claimed historical event.'}});
+  }},()=>root);
+  const {review}=await intelligence.inspectForSelection(project,scene);
+  assert.equal(calls,1);
+  assert.equal(review.status,'accepted');
+  assert.ok(review.contextApproval);
+  assert.equal(review.sampleSeconds.length,3);
+  const analysis=join(root,'Documentary','Analysis');
+  const files=(await readdir(analysis)).filter(file=>file.endsWith('.json'));
+  assert.equal(files.length,1);
+  await writeFile(join(analysis,files[0]!),JSON.stringify({state:'partial',purpose:'visual-range',raw:'{"status":'}));
+  const restart=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    assert.fail('The uncertain paid range must not be resubmitted');
+  }},()=>root);
+  await assert.rejects(restart.inspectForSelection(project,scene),/незавершённый ответ анализа/);
 });
 
 test('a completed accepted review without current context approval cannot verify a scene',async()=>{
