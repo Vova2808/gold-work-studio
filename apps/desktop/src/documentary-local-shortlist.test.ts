@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {Scene,DocumentaryCandidate} from '@gold-work/shared';
 import {documentaryLocalShortlistCandidates} from './documentary-local-shortlist.js';
+import type {DocumentarySceneContext} from './documentary-scene-context.js';
+
+test('dated original context cannot bypass semantic metadata ranking when the planner omitted years',()=>{
+ const scene={documentary:{requirement:{identities:[{name:'Valentino Rossi',aliases:[]}],years:[]}}} as never;
+ const candidates=[{kind:'image',title:'Valentino Rossi',description:'2014 Silverstone Grand Prix',localPath:'fixture.jpg'}] as DocumentaryCandidate[];
+ const context:DocumentarySceneContext={current:{scene:227,text:'Rossi had eight wins at that point.'},
+   preceding:[{scene:223,text:'In October 2004 he won the title.'},{scene:226,text:'The first since 1992.'}],following:[],earlierTimeReferences:[]};
+ assert.deepEqual(documentaryLocalShortlistCandidates(scene,candidates,context),[]);
+ assert.deepEqual(documentaryLocalShortlistCandidates(scene,candidates,{...context,preceding:[]}),candidates,'Undated material retains the optional local shortcut');
+ assert.deepEqual(documentaryLocalShortlistCandidates(scene,candidates,{...context,earlierTimeReferences:context.preceding,preceding:[]}),[],'A long explanation can refer to an earlier dated event');
+});
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
 import {createHash} from 'node:crypto';
 

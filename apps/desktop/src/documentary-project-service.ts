@@ -19,7 +19,7 @@ import { downloadDocumentaryFile, withDocumentaryDownloadBudget, documentaryDown
 import { atomicWrite } from "./fs-utils.js";
 import { measureDocumentaryStage } from "./documentary-metrics.js";
 import {recordDiagnosticEvent} from './diagnostics.js';
-import {discoverDocumentarySources} from './documentary-discovery.js';
+import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import { documentaryVisualHash, visualHashDistance } from "./documentary-visual-hash.js";
 import type { DocumentaryIntelligence } from "./documentary-intelligence.js";
 import {documentaryNarrationContext,documentaryMetadataShortlist} from './documentary-intelligence.js';
@@ -633,15 +633,11 @@ export class DocumentaryProjectService {
         // It must not add another set of paid checks before the broad fallback.
         const inspectionCounts = new Map<string, number>();
         const attemptCounts = new Map<string, number>();
-        const phaseStarted = new Map<string, number>();
         // A successful photo search must not erase a video provider's outage.
         const sourceErrors: string[] = [];
         for (const { kind, localOnly, quick } of stages) {
           if (fatal || this.stopRequested.has(projectId)) return;
           if (accepted) break;
-          const phaseStart = phaseStarted.get(kind) ?? session.budget(scene.id,kind).started;
-          phaseStarted.set(kind, phaseStart);
-          const phaseBudgetMs = kind === 'video' ? 120_000 : 60_000;
           if (!session.canAttempt(scene.id,kind)) continue;
           // The metadata shortcut explicitly rejects named identities/dates.
           // Do not wait for a stock-only pass that cannot accept any result;
@@ -652,6 +648,7 @@ export class DocumentaryProjectService {
           let inspections = inspectionCounts.get(inspectionKey) ?? 0;
           if (inspections >= inspectionLimit) continue;
           const pool: DocumentaryCandidate[] = [];
+          const searchStarted=Date.now();
           const context=documentarySceneContext(project,scene);
           const sourceQueries=documentarySearchQueries(requirement,kind,context);
           const queries=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
@@ -683,19 +680,27 @@ export class DocumentaryProjectService {
               if (documentaryMetadataShortlist(scene, pool).length) break;
             }
           }
-          if(!localOnly && !quick){
-            // Shared discovery supplements the scene's precise query in ONE
-            // shortlist. A broad identity-only pool must not buy an additional
-            // ranking/download before the more relevant scene query is seen.
-            const [shared,specific]=await Promise.all([relatedSources(scene,kind),discoverDocumentarySources({queries,
-              stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
-              youtubeQueries:kind==='video'&&this.youtube?[...new Set([queries[0]!,searchSubjects[0]].filter((q):q is string=>Boolean(q)))]:[],
-              discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||Date.now()-phaseStart>=phaseBudgetMs})]);
-            pool.push(...specific,...shared.candidates);
-            for(const source of shared.sources.filter(source=>source.error)){
-              const message=`${source.provider}: ${source.error}`;if(!sourceErrors.includes(message))sourceErrors.push(message);
-            }
-          }
+          session.accountSearch(scene.id,kind,Date.now()-searchStarted);
+          let waitingAt=Date.now();
+          const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
+            stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
+            youtubeQueries:kind==='video'&&this.youtube?[...new Set([queries[0]!,searchSubjects[0]].filter((q):q is string=>Boolean(q)))]:[],
+            discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<=0,
+            supplement:async()=>{
+              const shared=await relatedSources(scene,kind);
+              for(const source of shared.sources.filter(source=>source.error)){
+                const message=`${source.provider}: ${source.error}`;if(!sourceErrors.includes(message))sourceErrors.push(message);
+              }
+              return shared.candidates;
+            }});
+          try {
+          while(!accepted&&session.canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
+          waitingAt=Date.now();
+          let batch:IteratorResult<DocumentaryCandidate[]>;
+          try { batch=await batches.next(); }
+          finally { session.accountSearch(scene.id,kind,Date.now()-waitingAt); }
+          if(batch.done)break;
+          pool.push(...batch.value);
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
           const candidates = selectDocumentaryCandidates(pool.filter(candidate => !recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
@@ -753,7 +758,7 @@ export class DocumentaryProjectService {
               // An already usable photo needs a quick improvement pass, not the
               // same exhaustive search as an empty scene. Keep its verified fallback.
               if (inspections >= inspectionLimit || (attemptCounts.get(inspectionKey) ?? 0) >= inspectionLimit
-                || Date.now() - phaseStarted.get(kind)! >= phaseBudgetMs) break;
+                || !session.canAttempt(scene.id,kind)) break;
               if(!session.takeAttempt(scene.id,kind))break;
               // Failed transfers and rejected technical quality also consume
               // the attempt budget; previously they bypassed every limit.
@@ -765,7 +770,7 @@ export class DocumentaryProjectService {
                   currentSceneId: scene.id, currentSceneNumber: scene.order + 1, message: `Кадр ${scene.order + 1}: загрузка YouTube · ${Math.floor(bytes / 1024 ** 2)} МБ` });
               }, seconds => this.publish({ projectId, phase: "downloading", completed, total: scenes.length, selected, skipped, failed: failures.length,
                 currentSceneId: scene.id, currentSceneNumber: scene.order + 1,
-                message: `Кадр ${scene.order + 1}: источник ограничил скачивание. Продолжу автоматически через ${seconds} с; ничего нажимать не нужно.` }), phaseStarted.get(kind)! + phaseBudgetMs,
+                message: `Кадр ${scene.order + 1}: источник ограничил скачивание. Продолжу автоматически через ${seconds} с; ничего нажимать не нужно.` }), Date.now()+session.remaining(scene.id,kind),
                 message=>this.publish({projectId,phase:'preparing',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,currentSceneNumber:scene.order+1,message:`Кадр ${scene.order+1}: ${message}`})); }
               catch (error) {
                 if (error instanceof DocumentaryStorageUnavailableError || (error as NodeJS.ErrnoException)?.code === "ENOSPC") throw error;
@@ -798,7 +803,6 @@ export class DocumentaryProjectService {
                 }
                 const narrationWaitStarted = Date.now();
                 try { await waitForNarration(scene.id); } catch (error) { fatal = error; throw error; }
-                phaseStarted.set(kind, phaseStarted.get(kind)! + Date.now() - narrationWaitStarted);
                 session.extend(scene.id,kind,Date.now()-narrationWaitStarted);
                 if (this.stopRequested.has(projectId)) return;
                 const voiced = (await this.projects.get(projectId,{omitCandidates:true}))!.scenes.find(item => item.id === scene.id)!;
@@ -859,6 +863,8 @@ export class DocumentaryProjectService {
               if (accepted) { selected++; break; }
               } finally { releaseSource(); }
           }
+          }
+          } finally { await batches.return(undefined); }
         }
         if (!accepted && upgradePhoto) skipped++;
         else if (!accepted) failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: "no-results", message: "Не найден материал с подтверждённым объектом, качеством и правами. Проверьте кандидатов или уточните запрос."
@@ -894,13 +900,8 @@ export class DocumentaryProjectService {
     // Drain in-flight work before reporting an outage; no orphan paid requests.
     let lastWorkers=0;
     await runDocumentarySelectionQueue(scenes,async scene=>{
-      // Metadata only, one scene ahead. No speculative downloads, decoding or
-      // paid analysis; provider cache and group single-flight share the result.
-      const next=scenes.slice(scenes.indexOf(scene)+1).find(item=>!item.documentary?.verified&&item.documentary?.requirement);
-      if(next&&!fatal&&!this.stopRequested.has(projectId)){
-        const kind=photoFirst.has(next.id)?'image':'video';
-        void relatedSources(next,kind).catch(()=>{});
-      }
+      // Broad shared discovery is lazy: speculative archive queries occupied
+      // the provider queue before a scene could try its precise first result.
       try { await measureDocumentaryStage('scene-selection',{projectId,sceneId:scene.id},()=>selectScene(scene)); } catch (error) { fatal ??= error; }
     },async()=>{
       const resources=await documentarySelectionResources();

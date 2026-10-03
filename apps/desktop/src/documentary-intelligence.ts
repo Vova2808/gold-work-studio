@@ -881,7 +881,7 @@ export class DocumentaryIntelligence {
     if(!this.inspection.getStore()?.cacheOnly){
       try{
         const local=await documentaryLocalShortlist(scene,candidates,join(this.rootFor(project.id),'Documentary','LocalVision'),
-          this.inspection.getStore()?.progress,this.inspection.getStore()?.shouldStop);
+          this.inspection.getStore()?.progress,this.inspection.getStore()?.shouldStop,this.inspection.getStore()?.narrativeContext);
         if(local?.length){recordDiagnosticEvent('info','documentary.ranking.local-vision',{projectId:project.id,sceneId:scene.id,candidates:local.length});return local;}
       }catch(error){recordDiagnosticEvent('warn','documentary.ranking.local-vision-fallback',{projectId:project.id,sceneId:scene.id,message:'Локальный предварительный отбор недоступен; использую обычную проверку метаданных.'});}
     }

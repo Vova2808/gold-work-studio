@@ -4,13 +4,20 @@ import {join} from 'node:path';
 import {freemem} from 'node:os';
 import type {DocumentaryCandidate,Scene} from '@gold-work/shared';
 import {rankDocumentaryLocalImages} from './documentary-local-vision.js';
+import type {DocumentarySceneContext} from './documentary-scene-context.js';
 
 const normalized=(text:string)=>text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 /** Exact source provenance only qualifies a download candidate. Neither this
  * check nor CLIP can approve the actual person/model/era or a video's range. */
-export function documentaryLocalShortlistCandidates(scene:Scene,candidates:DocumentaryCandidate[]):DocumentaryCandidate[]{
+export function documentaryLocalShortlistCandidates(scene:Scene,candidates:DocumentaryCandidate[],context?:DocumentarySceneContext):DocumentaryCandidate[]{
  const req=scene.documentary?.requirement;
  if(!req||req.identities?.length!==1)return [];
+ // The planner can omit years while the original surrounding script dates the
+ // event. CLIP sees the same rider/bike in 2004 and 2014 as similar. Keep these
+ // candidates for semantic metadata ranking; do not guess a year across a
+ // flashback, and do not buy full-frame reviews just to rediscover that mismatch.
+ if(context&&[context.current,...context.preceding,...context.following,...context.earlierTimeReferences]
+   .some(line=>/\b(?:1[0-9]|20)\d{2}\b/.test(line.text)))return [];
  const names=[req.identities[0]!.name,...req.identities[0]!.aliases].map(normalized)
    .filter(name=>name.split(' ').length>=2||name.length>=5&&/\d/.test(name));
  if(!names.length)return [];
@@ -23,9 +30,9 @@ export function documentaryLocalShortlistCandidates(scene:Scene,candidates:Docum
 
 /** Downloads only bounded preview images, never original videos. Unavailable
  * previews, low similarity or low RAM use the existing semantic API ranking. */
-export async function documentaryLocalShortlist(scene:Scene,candidates:DocumentaryCandidate[],root:string,notice:(s:string)=>void=()=>{},stopped:()=>boolean=()=>false):Promise<DocumentaryCandidate[]|undefined>{
+export async function documentaryLocalShortlist(scene:Scene,candidates:DocumentaryCandidate[],root:string,notice:(s:string)=>void=()=>{},stopped:()=>boolean=()=>false,context?:DocumentarySceneContext):Promise<DocumentaryCandidate[]|undefined>{
  if(freemem()<2.5*1024**3||stopped())return;
- const eligible=documentaryLocalShortlistCandidates(scene,candidates);
+ const eligible=documentaryLocalShortlistCandidates(scene,candidates,context);
  if(eligible.length<2)return;
  await mkdir(root,{recursive:true});
  const available:Array<{candidate:DocumentaryCandidate;path:string}>=[];
