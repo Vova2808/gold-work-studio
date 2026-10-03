@@ -22,6 +22,11 @@ export function documentarySourceQualityIssue(source:Pick<DocumentaryCandidate,'
 /** Only these adapters supply original/download dimensions, not preview sizes.
  * Unknown geometry still reaches download + ffprobe, never a metadata approval. */
 export function documentaryKnownQualityIssue(candidate:DocumentaryCandidate,project:Pick<Project,'aspectRatio'>,scene:Scene):string|undefined{
+  // The YouTube API already reports SD before a costly original download.
+  // Small subject cards may still use it; ffprobe decides their real quality.
+  if(candidate.provider==='youtube'&&candidate.kind==='video'&&candidate.videoDefinition==='sd'
+    &&documentaryQualityPresentation(scene)!=='subject-card')
+    return 'YouTube помечает видео как SD. Для полноэкранного кадра нужен HD-исходник.';
   // Do not download hundreds of MB for a source explicitly labelled gameplay.
   // A real-vs-game comparison can still contain camera footage worth inspecting.
   const metadata=`${candidate.title} ${candidate.description}`;

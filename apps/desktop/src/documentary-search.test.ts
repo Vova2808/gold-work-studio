@@ -63,6 +63,13 @@ test("YouTube discovery verifies public CC licenses and never turns upload dates
   assert.equal(calls.length, 2, "Photo searches do not consume YouTube quota");
 });
 
+test("YouTube retains its SD/HD hint so full-screen scenes can avoid unusable downloads", () => {
+  const base = { id: "abcdefghijk", snippet: { title: "Motorcycle archive" }, status: { license: "creativeCommon", privacyStatus: "public" }, contentDetails: { duration: "PT20S", definition: "sd" as const } };
+  const [sd, hd] = youtubeDocumentaryCandidates([base, { ...base, id: "lmnopqrstuv", contentDetails: { ...base.contentDetails, definition: "hd" as const } }], "motorcycle");
+  assert.equal(sd?.videoDefinition, "sd");
+  assert.equal(hd?.videoDefinition, "hd");
+});
+
 test("YouTube download rechecks licensing and blocks injected source URLs before launching a downloader", async () => {
   const candidate = youtubeDocumentaryCandidates([{ id: "abcdefghijk", snippet: { title: "Tractor" }, status: { license: "creativeCommon", privacyStatus: "public" }, contentDetails: { duration: "PT20S" } }], "tractor")[0]!;
   let launched = false, calls = 0;

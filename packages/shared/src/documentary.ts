@@ -86,6 +86,8 @@ export interface DocumentaryCandidate {
   width?: number;
   height?: number;
   durationSeconds?: number;
+  /** YouTube API definition; metadata hint, never the original's measured dimensions. */
+  videoDefinition?: "hd" | "sd";
   bytes?: number;
   localPath?: string;
   /** Retained raw excerpt, before templates/effects. Times refer to its downloaded source. */

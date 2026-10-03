@@ -10,7 +10,7 @@ import { createYouTubeDnsBridge } from "./documentary-dns.js";
 import ffmpegPath from 'ffmpeg-static';
 import {documentaryPreviewRanges,readDocumentaryPreview,saveDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 
-type Video = { id?: string; snippet?: { title?: string; description?: string; channelTitle?: string; liveBroadcastContent?: string; thumbnails?: Record<string, { url?: string }> }; status?: { license?: string; privacyStatus?: string; uploadStatus?: string }; contentDetails?: { duration?: string } };
+type Video = { id?: string; snippet?: { title?: string; description?: string; channelTitle?: string; liveBroadcastContent?: string; thumbnails?: Record<string, { url?: string }> }; status?: { license?: string; privacyStatus?: string; uploadStatus?: string }; contentDetails?: { duration?: string; definition?: "hd" | "sd" } };
 type Runner = (args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string) => Promise<void>;
 const maximumBytes = 750 * 1024 * 1024;
 const maximumDownloadMs = 15 * 60_000;
@@ -67,7 +67,7 @@ export function youtubeDocumentaryCandidates(videos: Video[], query: string): Do
     const author = video.snippet?.channelTitle ?? "";
     return [{ id: `youtube:${video.id}`, provider: "youtube", kind: "video", title: video.snippet?.title || video.id,
       description: video.snippet?.description || "", author, pageUrl, downloadUrl: pageUrl,
-      previewUrl: video.snippet?.thumbnails?.high?.url, durationSeconds: duration,
+      previewUrl: video.snippet?.thumbnails?.high?.url, durationSeconds: duration, videoDefinition: video.contentDetails?.definition,
       // The API identifies CC BY but does not expose the individual license version.
       license: "Creative Commons Attribution (YouTube)", licenseUrl: "https://support.google.com/youtube/answer/2797468", rights: "licensed",
       attribution: `${video.snippet?.title || video.id} · ${author} · ${pageUrl} · Creative Commons Attribution`, query, retrievedAt: new Date().toISOString(),

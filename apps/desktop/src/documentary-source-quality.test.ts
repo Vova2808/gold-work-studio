@@ -31,6 +31,14 @@ test('explicit game footage is skipped before download without rejecting real ra
   for(const description of ['MotoGP 2022 race footage','Real vs gameplay comparison','Interview about motorcycle engineering'])
     assert.equal(documentaryKnownQualityIssue({...source,description} as never,{aspectRatio:'16:9'},scene),undefined);
 });
+test('YouTube SD is skipped before a full-screen download but a small card still gets an original check',()=>{
+  const scene={durationSeconds:5} as Scene;
+  const source={provider:'youtube',kind:'video',title:'Motorcycle workshop',description:'Archive film',videoDefinition:'sd'} as const;
+  assert.match(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},scene)!,/SD/);
+  assert.equal(documentaryKnownQualityIssue({...source,videoDefinition:'hd'} as never,{aspectRatio:'16:9'},scene),undefined);
+  const card={...scene,documentary:{motionGraphic:{enabled:true,kind:'subject-card',startSeconds:0,durationSeconds:5}}} as Scene;
+  assert.equal(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},card),undefined);
+});
 test('pixelation, severe compression and unusable detail reject a semantic approval; bokeh and archive grain do not',()=>{
   for(const bad of [{pixelated:true},{compression:'severe'},{detail:'unusable'}])assert.equal(enforceDocumentaryTechnicalQuality({status:'accepted',technicalQuality:bad}).status,'rejected');
   assert.equal(enforceDocumentaryTechnicalQuality({status:'accepted',technicalQuality:{detail:'clear',compression:'visible',pixelated:false,evidence:'Sharp subject, blurred background and film grain'}}).status,'accepted');
