@@ -43,7 +43,7 @@ export function documentaryKnownQualityIssue(candidate:DocumentaryCandidate,proj
   // Do not download hundreds of MB for a source explicitly labelled gameplay.
   // A real-vs-game comparison can still contain camera footage worth inspecting.
   const metadata=`${candidate.title} ${candidate.description}`;
-  if(candidate.kind==='video'&&/\bgameplay\b|\bin[- ]game footage\b|геймплей|игровой процесс|#motogp\d{2}\b|\b(?:ps[1-5]|playstation\s*[1-5]?)\b.{0,80}\b(?:season mode|career mode|walkthrough|let'?s play)\b/iu.test(metadata)
+  if(candidate.kind==='video'&&/\bgameplay\b|\bin[- ]game footage\b|геймплей|игровой процесс|#motogp\d{2}\b|\bmotogp(?:1[5-9]|2[0-9])\b|\b(?:ps[1-5]|playstation\s*[1-5]?)\b.{0,80}\b(?:season mode|career mode|walkthrough|let'?s play)\b/iu.test(metadata)
     &&!/\breal\s*(?:vs\.?|versus)\b|\b(?:real life|real footage)\b.*\bcomparison\b|сравнен\S*\s+с\s+реальн/iu.test(metadata))
     return 'Источник помечен как запись видеоигры. Для документального кадра нужна натурная съёмка.';
   if(!candidate.width||!candidate.height||!(['commons','pexels','pixabay'].includes(candidate.provider)

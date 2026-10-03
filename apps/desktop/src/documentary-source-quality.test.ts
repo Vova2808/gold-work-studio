@@ -47,6 +47,8 @@ test('explicit game footage is skipped before download without rejecting real ra
   assert.match(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
   assert.ok(documentaryKnownQualityIssue({...source,title:'Aircraft simulator gameplay',description:''} as never,{aspectRatio:'16:9'},scene));
   assert.match(documentaryKnownQualityIssue({...source,title:'MotoGP 4 (PS2) - Eps #2 - Season Mode',description:''} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
+  assert.match(documentaryKnownQualityIssue({...source,title:'MotoGP Pov Shoulder Cam vs MotoGP21',
+    description:'Some comparison between real life footage and game footage'} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
   for(const description of ['MotoGP 2022 race footage','Real vs gameplay comparison','Interview about motorcycle engineering'])
     assert.equal(documentaryKnownQualityIssue({...source,description} as never,{aspectRatio:'16:9'},scene),undefined);
 });
