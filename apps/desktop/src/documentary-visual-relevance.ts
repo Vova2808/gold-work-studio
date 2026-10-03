@@ -160,6 +160,10 @@ export function documentaryDistraction(scene: Scene, description: string): strin
 /** A cheap shortlist, never an approval: five real frames still require vision. */
 export function directCatalogChoices(scene: Scene, ranges: VideoSegment[]): Array<{ id: number; startSeconds: number }> {
   const req = scene.documentary!.requirement;
+  // "Rider" and "corner" can match a racing scene even when the requested
+  // event is braking to a stop. A local shortcut needs evidence of that event;
+  // the actual frame check still decides whether it really happened.
+  const needsStoppingAction = /\b(?:brak\w*|stop\w*|stopp\w*|decelerat\w*)\b/i.test(req.detail ?? "");
   const ignored = new Set([...documentaryIdentityNames(req).flatMap(words), "video", "footage", "photo", "view", "archive", "archival", "the", "and", "with", "detail"]);
   // Repeating category words ("cruise ship", "car", "building") do not
   // establish the requested detail such as propulsion, brakes or an entrance.
@@ -169,7 +173,8 @@ export function directCatalogChoices(scene: Scene, ranges: VideoSegment[]): Arra
   const details = [...new Set(words(`${req.detail ?? ""} ${req.queries[0] ?? ""}`))].filter(word => !ignored.has(word));
   return ranges.map((range, id) => {
     const visible = new Set(words(range.description));
-    return { id, startSeconds: nearSample(scene,range), score: details.filter(word => visible.has(word)).length };
+    const actionVisible = !needsStoppingAction || /\b(?:brak\w*|stop\w*|stopp\w*|decelerat\w*|skid\w*|slid\w*|crash\w*|fall\w*|wheel lock\w*|loss of control)\b/i.test(range.description);
+    return { id, startSeconds: nearSample(scene,range), score: actionVisible ? details.filter(word => visible.has(word)).length : 0 };
   }).filter(choice => choice.score >= 2).sort((a, b) => b.score - a.score).slice(0, 3).map(({ id, startSeconds }) => ({ id, startSeconds }));
 }
 

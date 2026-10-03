@@ -94,6 +94,18 @@ test("known catalog without the requested detail is skipped, while unknown sourc
   const scene = { id: "detail", durationSeconds: 3, narration: "The transmission gears change the torque.", documentary: { requirement: { entities: ["Tractor Alpha"], queries: ["Tractor Alpha transmission gears"], detail: "gearbox mechanism" } } } as Scene;
   const project = { id: "new", scenes: [scene] } as never;
   assert.deepEqual((await intelligence.rankLocalCandidates(project, scene, [known, unknown])).map(item => item.id), [unknown.id]);
+  const shortChecksum = "c".repeat(64), partialChecksum = "d".repeat(64);
+  for (const [checksum, windows] of [[shortChecksum, segments.slice(0, 17)], [partialChecksum, segments.slice(0, 18)]] as const) {
+    const shortDirectory = join(root, "catalog", checksum);
+    await mkdir(shortDirectory, { recursive: true });
+    await writeFile(join(shortDirectory, "catalog-v1.json"), JSON.stringify({
+      version: 1, checksum, duration: 144, windows, segments: segments.slice(0, 17),
+    }));
+  }
+  const completeShort = { ...known, id: `local:${shortChecksum}` };
+  const partialShort = { ...known, id: `local:${partialChecksum}` };
+  assert.deepEqual((await intelligence.rankLocalCandidates(project, scene, [completeShort, partialShort, unknown])).map(item => item.id),
+    [partialShort.id, unknown.id], "A complete 17-window unrelated catalog should not enter the local shortcut; a partial one remains eligible");
   const statistics = { ...scene, narration: "The tractor weighs six tons.", documentary: { ...scene.documentary!, requirement: { ...scene.documentary!.requirement, detail: "weight and dimensions" } } };
   assert.equal((await intelligence.rankLocalCandidates(project, statistics, [known]))[0]?.id, known.id);
 });
@@ -182,6 +194,13 @@ test("catalog shortlist prefers visible detail and rejects incidental background
   assert.deepEqual(representativeCatalogChoices(comparison, [{ ...ranges[0]!, description: "Wide ship view", entities: ["Wrong Vessel"] }]), []);
   const engine={...scene,documentary:{...scene.documentary!,requirement:{...scene.documentary!.requirement,detail:"modern cruise ship propulsion system",queries:["Example Vessel exterior"]}}};
   assert.deepEqual(directCatalogChoices(engine,Array.from({length:20},(_,id)=>({...ranges[0]!,id,description:"Modern cruise ship exterior aerial view"}))),[],"Category words must not pretend that an exterior depicts the propulsion detail");
+  const stopping = { ...scene, narration: "The rider tried to stop the bike at the corner.", documentary: { ...scene.documentary!, requirement: {
+    ...scene.documentary!.requirement, detail: "the bike driving forward while the rider tried to stop", queries: ["motorcycle rider crash braking into corner"],
+  } } };
+  const cornering = { ...ranges[0]!, description: "Motorcycles leaning hard into a corner side by side, another rider trailing behind" };
+  assert.deepEqual(directCatalogChoices(stopping, [cornering]), [], "A corner and rider alone do not show the requested stopping action");
+  assert.equal(directCatalogChoices(stopping, [{ ...cornering, description: "Motorcycle rider braking hard into the corner" }]).length, 1,
+    "Visible braking remains eligible for the actual-frame check");
   const unnamed={...ranges[0]!,id:42,sample:264,entities:[]};
   const other={...ranges[0]!,id:43,sample:271,entities:["Different Vessel"]};
   assert.equal(documentaryCatalogIdentityConflict(scene,unnamed,[unnamed,other]),true,"A named different ship in the adjacent indexed shot must defeat a misleading source title");

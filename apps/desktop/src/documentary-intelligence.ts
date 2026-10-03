@@ -287,7 +287,12 @@ export class DocumentaryIntelligence {
       // to choose among the same unrelated wide views for every new scene.
       // Small/unknown catalogs remain eligible; this is not a visual approval.
       const exhausted = !ranges.length && catalog.segments.length === catalog.windows.length;
-      const noRelevantView = catalog.segments.length >= 24 && !direct && !representative;
+      // A fully indexed shorter source can also have enough evidence to avoid
+      // another paid scene check. The old 24-frame threshold overlooked a
+      // complete 17-window racing video with no relevant action or subject.
+      const noRelevantView = (catalog.segments.length >= 24
+        || catalog.segments.length >= 16 && catalog.segments.length === catalog.windows.length)
+        && !direct && !representative;
       // A distributed eight-frame catalogue already identified only gameplay,
       // slides or unusable frames. It is a poor reuse shortcut even though the
       // remaining video is unindexed; do not buy another title ranking per scene.
