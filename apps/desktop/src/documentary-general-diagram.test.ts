@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {mkdtemp,mkdir,writeFile,copyFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,copyFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -9,6 +9,7 @@ import {documentarySceneContext} from './documentary-scene-context.js';
 import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {DocumentaryIntelligence,DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
+import {documentaryRankingResponseInstruction} from './documentary-ranking-batch.js';
 import {effectFfmpeg} from './effect-media.js';
 import {documentarySearchQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
 
@@ -74,6 +75,35 @@ test('diagram evidence cannot approve a photograph, invented quotation, missing 
     {...valid,narrativeEvidence:{...valid.narrativeEvidence,detailMatch:false}},
     {...valid,identityMatch:true,identifiedEntity:'Yamaha YZR-M1'}
   ])assert.equal(documentaryGeneralDiagramVerified(invalid,context,identities),false);
+});
+
+test('video ranking requires the exposed mechanism and protects the previous paid ranking',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-mechanism-video-rank-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const {scene,project}=fixture();
+  const candidate={id:'youtube:race',provider:'youtube',kind:'video',title:'MotoGP first race with Yamaha YZR-M1',
+    description:'Historic motorcycle racing',pageUrl:'https://example.test/race',downloadUrl:'https://example.test/race',
+    rights:'licensed',match:'unverified',durationSeconds:240} as DocumentaryCandidate;
+  const still={...candidate,id:'commons:diagram',provider:'commons',kind:'image',title:'Crankshaft mechanism diagram',
+    description:'Piston and connecting rod cutaway'} as DocumentaryCandidate;
+  let stillSystem='',videoSystem='',videoInput='';
+  const client={configured:async()=>true,documentaryCompletion:async(system:string,input:string)=>{
+    if(JSON.parse(input).candidates[0]?.kind==='video'){videoSystem=system;videoInput=input;}
+    else stillSystem=system;
+    return JSON.stringify({ids:[],reason:'No visible mechanism in metadata'});
+  }};
+  await new DocumentaryIntelligence(client,()=>join(root,'still')).rankCandidates(project,scene,[still]);
+  await new DocumentaryIntelligence(client,()=>join(root,'video')).rankCandidates(project,scene,[candidate]);
+  assert.match(videoSystem,/These candidates are VIDEOS.*visibly exposed crankshaft/);
+  assert.doesNotMatch(videoSystem,/Shortlist a schematic or cutaway/,'Video policy must not ask for rendered diagrams');
+  assert.match(stillSystem,/Shortlist a schematic or cutaway/);
+  const pendingRoot=join(root,'pending'),analysis=join(pendingRoot,'Documentary','Analysis');
+  await mkdir(analysis,{recursive:true});
+  const oldSystem=stillSystem.slice(0,stillSystem.indexOf(documentaryRankingResponseInstruction));
+  const oldKey=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',oldSystem,videoInput,[]])).digest('hex');
+  await writeFile(join(analysis,`${oldKey}.json`),JSON.stringify({state:'pending',purpose:'candidate-relevance'}));
+  const guarded=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>assert.fail('Old unknown ranking must not be resent')},()=>pendingRoot);
+  await assert.rejects(guarded.rankCandidates(project,scene,[candidate]),/неизвестный результат/);
 });
 
 test('actual inspection accepts an evidenced general schematic only; old unknown visual and ranking requests stay protected',async()=>{

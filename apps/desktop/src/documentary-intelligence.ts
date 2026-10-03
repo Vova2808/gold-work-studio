@@ -985,12 +985,18 @@ export class DocumentaryIntelligence {
     const legacyContextSystem=rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction;
     const previousCurrentRankingSystem=legacyContextSystem+(generalDiagramScope?documentaryGeneralDiagramPolicy:'');
     const visiblePart=generalDiagramScope?documentaryRequiredVisiblePart(scene.narration):undefined;
-    const currentRankingSystem=previousCurrentRankingSystem+(visiblePart
+    const previousPartRankingSystem=previousCurrentRankingSystem+(visiblePart
       ?` The narration explicitly requires a visible ${visiblePart}. A whole-object exterior with no visible internal mechanism is not a plausible still for this passage, even when its model name matches. Shortlist a schematic or cutaway only when its metadata plausibly names the required part; otherwise return ids:[] and let discovery continue. This is candidate ranking only, not final visual approval.`:'');
+    const videoPart=visiblePart&&pool[0]?.candidate.kind==='video';
+    const currentRankingSystem=videoPart
+      ?previousCurrentRankingSystem+` These candidates are VIDEOS. This passage requires a visibly exposed ${visiblePart}. A race or vehicle exterior is not useful merely because it names the right model. Shortlist only real-camera footage whose metadata plausibly describes that exposed part or a physical test rig/cutaway showing it. Rendered diagrams, CGI and animation do not count as real video footage. If the metadata only describes racing or the whole vehicle, return ids:[] and continue discovery. Final actual-frame review remains mandatory.`
+      :previousPartRankingSystem;
     const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:candidatesForRanking.map(candidate=>
       ({...candidate,id:shortKeys.find(item=>item.shortKey===candidate.id)!.key}))});
     if(visiblePart)previousRankings.push({system:previousCurrentRankingSystem,input:rankingInput},
       {system:previousCurrentRankingSystem,input:longRankingInput});
+    if(videoPart)previousRankings.push({system:previousPartRankingSystem,input:rankingInput},
+      {system:previousPartRankingSystem,input:longRankingInput});
     if(generalDiagramScope){
       const {generalDiagramScope:_,...legacyLong}=JSON.parse(longRankingInput);
       previousRankings.push({system:legacyContextSystem,input:legacyContextInput},{system:legacyContextSystem,input:JSON.stringify(legacyLong)});

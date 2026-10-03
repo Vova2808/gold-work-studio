@@ -215,7 +215,12 @@ export function documentaryPhotoFirstScenes(project: Project): Set<string> {
 
 /** Cheap/exact clips can go straight to vision. A long new download also
  * needs view relevance: the right ship's dining tour is not its engine room. */
-export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandidate[], requirement?: DocumentaryRequirement): boolean {
+export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandidate[], requirement?: DocumentaryRequirement, requiredVisiblePart?:string): boolean {
+  // A model/race title can score highly from inherited search words while the
+  // narration actually needs an exposed internal part. Do not bypass the
+  // metadata shortlist for that case; the final original check still applies.
+  if(requiredVisiblePart&&candidates.some(candidate=>candidate.kind==='video'
+    &&!`${candidate.title} ${candidate.description}`.toLowerCase().includes(requiredVisiblePart.toLowerCase())))return false;
   return candidates.some(candidate => candidate.kind === "video" && candidate.match === "exact-metadata" && candidate.rights !== "unknown")
     && candidates.every(candidate => candidate.kind !== "video" || candidate.localPath || (candidate.durationSeconds ?? Infinity) <= 45
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
@@ -801,7 +806,9 @@ export class DocumentaryProjectService {
           // A local source's old exact-metadata flag belongs to its ORIGINAL
           // search. Screen its relevance to this scene before analysing more
           // ranges of a long, already-downloaded but unrelated source.
-          if (!quick && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement))) {
+          const requiredVideoPart=kind==='video'&&documentaryGeneralDiagramScope(context,requirement.identities)
+            ?documentaryRequiredVisiblePart(scene.narration):undefined;
+          if (!quick && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement, requiredVideoPart))) {
             if (fatal || this.stopRequested.has(projectId)) return;
             this.publish({ projectId, phase: "preparing", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id,
               message: `Кадр ${scene.order + 1}: отбираю подходящие источники по смыслу…` });

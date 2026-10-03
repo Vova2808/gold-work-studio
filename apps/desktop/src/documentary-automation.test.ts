@@ -209,6 +209,13 @@ test("exact video metadata skips a second metadata vote but still requires visua
   assert.equal(hasExactDocumentaryVideoCandidate([dining], engines), false, "An exact subject name does not justify a long irrelevant download");
   assert.equal(hasExactDocumentaryVideoCandidate([candidate, dining], engines), false, "One cheap exact clip must not bypass screening of a different long download");
   assert.equal(hasExactDocumentaryVideoCandidate([{ ...dining, title: "Example Vessel dual fuel engines and propulsion" }], engines), true);
+  const mechanism={...candidate,localPath:undefined,title:'MotoGP first race with Yamaha YZR-M1',
+    description:'My first MotoGP race app video',durationSeconds:240};
+  const technical={text:'Inertial torque from pistons and rods',entities:['Yamaha YZR-M1'],years:[],
+    queries:['MotoGP engine high rpm diagram','crossplane crankshaft diagram','motorcycle race engine inertial torque explanation diagram'],
+    detail:'inertial torque generated inside a high-revving MotoGP engine'};
+  assert.equal(hasExactDocumentaryVideoCandidate([mechanism],technical),true,'The old word score incorrectly made this long race clip look exact');
+  assert.equal(hasExactDocumentaryVideoCandidate([mechanism],technical,'crankshaft'),false,'An absent internal part must reach semantic ranking before download');
   const searcher = new DocumentarySearch();
   searcher.search = async () => ({ candidates: [candidate], sources: [] });
   let ranked = 0, inspected = 0;
