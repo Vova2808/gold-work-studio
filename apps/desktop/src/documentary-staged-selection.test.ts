@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
 import {createVoiceCalibration,type DocumentaryCandidate,type DocumentarySearchInput} from '@gold-work/shared';
-import {DocumentaryProjectService} from './documentary-project-service.js';
+import {DocumentaryProjectService,documentaryCacheableVisualRejection} from './documentary-project-service.js';
 import {DocumentarySearch} from './documentary-search.js';
 import {LocalProjectStorage} from './local-project-storage.js';
 import {prepareDocumentaryScript} from './documentary-plan.js';
@@ -111,4 +111,30 @@ test('weak first YouTube results receive one metadata vote after broad discovery
  assert.equal(ranked.length,1);
  assert.deepEqual(new Set(ranked[0]),new Set([weak.id,broad.id]));
  assert.equal(result.project.scenes[0]!.audioPath,scene.audioPath);
+});
+
+test('a completed visual rejection of the same still is not reinspected on resume',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'gws-rejected-still-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
+ let project=await projects.create({title:'Race',topic:'Motorcycle',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
+ project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:'The motorcycle raced.'};
+ const calibration=createVoiceCalibration({provider:'elevenlabs',voice:'fixture',language:'en',sampleText:project.videoBrief.readyScript!,audioDurationSeconds:4});
+ const scene=prepareDocumentaryScript(project,calibration)[0]!;
+ scene.documentary!.requirement={...scene.documentary!.requirement,entities:['motorcycle'],identities:[],years:[],queries:['red motorcycle race'],preferredKind:'image'};
+ project=await projects.update(project.id,{settings:{...project.settings,stockVideoPercent:0},scenes:[scene]});
+ const file=join(root,'source.png');await effectFfmpeg(['-y','-f','lavfi','-i','color=c=red:s=1280x720','-frames:v','1',file]);
+ const source:DocumentaryCandidate={id:'commons:red',provider:'commons',kind:'image',title:'Red motorcycle race',description:'Fixture',localPath:file,
+   width:1280,height:720,pageUrl:'https://example.test/red',downloadUrl:'',author:'Fixture',license:'Owned',licenseUrl:'',rights:'user-confirmed',
+   attribution:'Fixture',query:'red motorcycle race',retrievedAt:'now',match:'exact-metadata',concerns:[]};
+ let inspections=0;
+ const searcher=new DocumentarySearch();searcher.search=async()=>({candidates:[source],sources:[]});
+ const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'projects')),searcher,join(root,'Materials'),
+   {download:async()=>{throw Error('No remote download expected');}},()=>{},
+   {available:async()=>true,plan:async(_p,items)=>new Map(items.map(item=>[item.id,item.documentary!.requirement])),
+     rankCandidates:async(_p,_s,pool)=>pool,inspect:async()=>{inspections++;return {status:'rejected',confidence:.99,reason:'Wrong subject in actual frame',checkedAt:'now',sampleSeconds:[],quality:'clear'};}});
+ await service.autoSelect(project.id,{sceneIds:[scene.id]});
+ await service.autoSelect(project.id,{sceneIds:[scene.id]});
+ assert.equal(inspections,1,'The completed rejection must not consume the next bounded inspection slot');
+ assert.equal(documentaryCacheableVisualRejection({...source,kind:'video',durationSeconds:600}),false,'Long videos may have other ranges');
+ assert.equal(documentaryCacheableVisualRejection({...source,kind:'video',durationSeconds:9}),true);
 });

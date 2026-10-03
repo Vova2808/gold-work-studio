@@ -39,6 +39,28 @@ import { DocumentaryAnalysisError } from "./documentary-analysis-error.js";
 import { documentaryDistraction, documentarySavedIdentityIssue, applyDocumentaryRequirement, documentaryProjectionIssue,documentaryGeneralActionIssue } from "./documentary-visual-relevance.js";
 import { documentaryCandidateKey, documentaryReuseIssue, documentaryVarietyIssue, revalidateDocumentaryVariety } from "./documentary-reuse.js";
 
+const rejectedCandidateFingerprint=(candidate:DocumentaryCandidate)=>createHash('sha256').update(JSON.stringify([
+  candidate.provider,candidate.id,candidate.excerpt?.sourceChecksum,candidate.excerpt?.startSeconds,candidate.excerpt?.endSeconds
+])).digest('hex');
+
+/** A still has one view. For video only a short clip or an exact indexed
+ * excerpt is safe to skip after a completed visual rejection; a long source
+ * may contain another usable range. */
+export const documentaryCacheableVisualRejection=(candidate:DocumentaryCandidate)=>candidate.kind==='image'
+  ||candidate.kind==='video'&&(Boolean(candidate.excerpt)||(candidate.durationSeconds??Infinity)<=12);
+
+async function readDocumentaryRejections(path:string,scope:string):Promise<Set<string>>{
+  try{
+    const saved=JSON.parse(await readFile(path,'utf8'));
+    return saved?.version===1&&saved.scope===scope&&Array.isArray(saved.keys)
+      ?new Set(saved.keys.filter((key:unknown)=>typeof key==='string'&&/^[a-f0-9]{64}$/.test(key))):new Set();
+  }catch{return new Set();}
+}
+
+async function saveDocumentaryRejections(path:string,scope:string,keys:Set<string>){
+  await atomicWrite(path,JSON.stringify({version:1,scope,keys:[...keys].slice(-250)}));
+}
+
 function documentarySearchSubjects(requirement: DocumentaryRequirement): string[] {
   if (!requirement.identities?.length) return requirement.entities;
   return [...new Set(requirement.identities.flatMap(identity => {
@@ -639,6 +661,9 @@ export class DocumentaryProjectService {
         // pixels show. Carry attempts across passes of this run. A changed
         // narrative target gets a fresh set; later manual resumes remain allowed.
         const scope=JSON.stringify([documentaryNarrationContext(project,scene),requirement.entities,requirement.identities,requirement.years,requirement.detail,scene.documentary?.motionGraphic]);
+        const rejectionScope=createHash('sha256').update(JSON.stringify(['visual-rejection-v1',scope,project.aspectRatio,requirement.preferredKind,scene.documentary?.layout])).digest('hex');
+        const rejectionPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'rejected-candidates.json');
+        const rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
         const previousAttempts=attempts.get(scene.id);
         const tried=previousAttempts?.scope===scope?previousAttempts.keys:new Set<string>();
         attempts.set(scene.id,{scope,keys:tried});
@@ -674,7 +699,8 @@ export class DocumentaryProjectService {
               const message = `${source.provider}: ${source.error}`;
               if (!sourceErrors.includes(message)) sourceErrors.push(message);
             }
-            return result.candidates.filter(item => item.kind === kind && !tried.has(item.id));
+            return result.candidates.filter(item => item.kind === kind && !tried.has(item.id)
+              &&!rejectedCandidates.has(rejectedCandidateFingerprint(item)));
           };
           if (localOnly) {
             const current = (await this.projects.get(projectId,{omitCandidates:true}))!;
@@ -721,7 +747,8 @@ export class DocumentaryProjectService {
           pool.push(...batch.value);
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
-          const candidates = selectDocumentaryCandidates(pool.filter(candidate => !recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
+          const candidates = selectDocumentaryCandidates(pool.filter(candidate => !rejectedCandidates.has(rejectedCandidateFingerprint(candidate))
+            &&!recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
             && !tried.has(documentaryCandidateKey(candidate)) && !blockedCatalogs.has(documentaryCandidateKey(candidate)) && (candidate.localPath || candidate.provider !== "youtube" || this.youtube?.downloadAvailable?.() !== false)
             && (candidate.kind !== "image" || !documentaryReuseIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined } }))
@@ -878,6 +905,12 @@ export class DocumentaryProjectService {
                   documentary: { ...latest.documentary!, selected: current.documentary!.selected, checksum: current.documentary!.checksum, visualHash: current.documentary!.visualHash,
                     pinned: false, illustrative: false, verified: true, visualReview: review, reviewNote: review.reason, autoError: undefined } };
               });
+              if(!accepted&&inspection.review.status==='rejected'&&documentaryCacheableVisualRejection(candidate)){
+                rejectedCandidates.add(rejectedCandidateFingerprint(candidate));
+                await saveDocumentaryRejections(rejectionPath,rejectionScope,rejectedCandidates).catch(()=>{
+                  recordDiagnosticEvent('warn','documentary.search.rejection-cache-write-failed',{projectId,sceneId:scene.id});
+                });
+              }
               if (accepted) { selected++; break; }
               } finally { releaseSource(); }
           }
