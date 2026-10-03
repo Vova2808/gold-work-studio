@@ -27,7 +27,7 @@ import type { EffectLibrary } from "./effect-library.js";
 import { planDocumentaryEffects } from "./documentary-effects.js";
 import { groundDocumentaryScenes, planDocumentaryComparisons } from "./documentary-comparison.js";
 import {recoverDocumentaryPlanContext,readDocumentaryContextRecovery} from './documentary-plan-recovery.js';
-import {documentarySourceQualityIssue,documentaryQualityPresentation,documentarySavedQualityIssue,documentaryKnownQualityIssue} from './documentary-source-quality.js';
+import {documentarySourceQualityIssue,documentaryQualityPresentation,documentarySavedQualityIssue,documentaryKnownQualityIssue,documentaryAutoPortraitTemplate} from './documentary-source-quality.js';
 import { planDocumentaryMontage } from "./documentary-montage.js";
 import {prepareDocumentaryMaps} from './documentary-map.js';
 import { copyImmutableDocumentaryFile, documentaryAvailableBytes, ensureDocumentarySpace, DocumentaryStorageUnavailableError } from "./documentary-storage.js";
@@ -836,6 +836,10 @@ export class DocumentaryProjectService {
                 continue;
               }
               let current = project.scenes.find(item => item.id === scene.id)!;
+              // Judge a narrow photo at the size it will actually occupy in the
+              // automatic portrait composition, before paying for visual review.
+              const portraitTemplate=documentaryAutoPortraitTemplate(current,current.documentary?.selected,project.aspectRatio);
+              if(portraitTemplate)current={...current,documentary:{...current.documentary!,template:portraitTemplate,templateOrigin:'automatic'}};
               const qualityIssue=documentarySourceQualityIssue(current.documentary?.selected,project.aspectRatio,documentaryQualityPresentation(current));
               if(qualityIssue){await changeScene(scene.id,latest=>({...latest,documentary:{...latest.documentary!,autoError:qualityIssue}}));continue;}
               // A different URL/provider can still resolve to the old source.
@@ -912,6 +916,7 @@ export class DocumentaryProjectService {
                 return { ...latest, imagePath: prepared.imagePath, videoPath: current.videoPath, stockSource: current.stockSource, stockAlternates: [], sourceVolume: 0,
                   trimStartSeconds: review.trimStartSeconds ?? 0, trimEndSeconds: review.trimEndSeconds,
                   documentary: { ...latest.documentary!, selected: current.documentary!.selected, checksum: current.documentary!.checksum, visualHash: current.documentary!.visualHash,
+                    ...(portraitTemplate?{template:portraitTemplate,templateOrigin:'automatic' as const}:{}),
                     pinned: false, illustrative: false, verified: true, visualReview: review, reviewNote: review.reason, autoError: undefined } };
               });
               if(!accepted&&inspection.review.status==='rejected'&&documentaryCacheableVisualRejection(candidate)){

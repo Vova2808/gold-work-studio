@@ -22,11 +22,10 @@ test('rejection requests full discovery; an empty first source does not end the 
     const batches=discoverDocumentarySourceBatches({kind:'video',queries:['precise'],stockQueries:[],youtubeQueries:['precise'],stopped:()=>false,
       discover:async(_query,providers)=>{calls.push(providers.join(','));return providers.length===1&&providers[0]==='youtube'?(empty?[]:[{id:'first'}] as DocumentaryCandidate[]):[{id:'archive'}] as DocumentaryCandidate[];},
       supplement:async()=>[{id:'shared'}] as DocumentaryCandidate[]});
-    const first=await batches.next();
-    const fallback=empty?first:await batches.next();
-    assert.ok(fallback.value?.some(c=>c.id==='archive'));assert.ok(fallback.value?.some(c=>c.id==='shared'));
+    const found:DocumentaryCandidate[]=[];
+    for await(const batch of batches)found.push(...batch);
+    assert.ok(found.some(c=>c.id==='archive'));assert.ok(found.some(c=>c.id==='shared'));
     assert.ok(calls.some(c=>c.includes('internet-archive')));
-    await batches.return(undefined);
   }
 });
 
@@ -40,6 +39,25 @@ test('a weak precise video batch waits for broad results instead of requiring tw
   assert.ok(first.value?.some(candidate=>candidate.id==='broad'));
   assert.ok(calls.some(call=>call.includes('internet-archive')));
   assert.equal((await batches.next()).done,true);
+});
+
+test('fast licensed sources are inspectable before a slow archive finishes; accepting them starts no later wave',async()=>{
+  let release!:()=>void;const archive=new Promise<void>(resolve=>{release=resolve;});
+  const calls:string[]=[];
+  const batches=discoverDocumentarySourceBatches({kind:'image',queries:['precise','archive followup','never'],stockQueries:['stock first','stock later','never'],youtubeQueries:[],stopped:()=>false,
+    discover:async(query,providers)=>{
+      calls.push(query);
+      if(providers.includes('internet-archive')){await archive;return []}
+      if(query==='precise')return [];
+      return [{id:query}] as DocumentaryCandidate[];
+    }});
+  const first=await batches.next();
+  assert.ok(first.value?.some(candidate=>candidate.id==='stock first'));
+  assert.equal(calls.includes('never'),false);
+  await batches.return(undefined);
+  release();await tick();
+  assert.equal(calls.includes('stock later'),true,'first stock wave was already in flight');
+  assert.equal(calls.includes('never'),false,'no followup wave after acceptance');
 });
 
 test('stop between precise and broad waves dispatches no more network work',async()=>{

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {documentarySourceQualityIssue,enforceDocumentaryTechnicalQuality,documentarySavedQualityIssue,documentaryKnownQualityIssue} from './documentary-source-quality.js';
+import {documentarySourceQualityIssue,enforceDocumentaryTechnicalQuality,documentarySavedQualityIssue,documentaryKnownQualityIssue,documentaryAutoPortraitTemplate} from './documentary-source-quality.js';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
 import type {Project,Scene} from '@gold-work/shared';
 import {documentaryEditErrors} from './documentary-validation.js';
@@ -23,6 +23,22 @@ test('sharp portrait photographs remain usable and original dimensions reject wa
   assert.equal(documentaryKnownQualityIssue({provider:'local',kind:'video',localPath:'catalogued-original.mp4',width:1920,height:1080} as never,{aspectRatio:'16:9'},scene),undefined);
   assert.equal(documentaryKnownQualityIssue({...source,provider:'youtube'} as never,{aspectRatio:'16:9'},scene),undefined,'YouTube previews are not original dimensions');
   assert.equal(documentaryKnownQualityIssue({...source,width:undefined} as never,{aspectRatio:'16:9'},scene),undefined);
+});
+
+test('a narrow original may pass only when the automatic portrait panel can display it sharply',()=>{
+  const photo={provider:'commons',kind:'image',width:608,height:1080} as const;
+  const scene={order:154,durationSeconds:5,documentary:{layout:'full',caption:{enabled:false},verified:false,pinned:false}} as Scene;
+  const project={aspectRatio:'16:9'} as Project;
+  assert.match(documentarySourceQualityIssue(photo,'16:9')!,/менее половины кадра/);
+  assert.equal(documentarySourceQualityIssue(photo,'16:9','portrait-card'),undefined);
+  assert.equal(documentaryAutoPortraitTemplate(scene,photo,'16:9'),'portrait-stage');
+  assert.equal(documentaryKnownQualityIssue(photo as never,project,scene),undefined);
+  const accepted={...scene,documentary:{...scene.documentary!,verified:true,selected:photo,template:'portrait-stage',templateOrigin:'automatic'}} as Scene;
+  assert.equal(documentarySavedQualityIssue(project,accepted),undefined);
+  assert.ok(documentaryKnownQualityIssue({...photo,width:320,height:560} as never,project,scene));
+  const manual={...scene,documentary:{...scene.documentary!,template:'full',templateOrigin:'manual'}} as Scene;
+  assert.equal(documentaryAutoPortraitTemplate(manual,photo,'16:9'),undefined);
+  assert.ok(documentaryKnownQualityIssue(photo as never,project,manual));
 });
 
 test('explicit game footage is skipped before download without rejecting real racing years or mixed comparisons',()=>{

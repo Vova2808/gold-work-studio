@@ -16,17 +16,67 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   if(input.stopped())return;
   const youtube=input.kind==='video'&&input.youtubeQueries.length>0;
   const query=youtube?input.youtubeQueries[0]:input.queries[0];
+  let deferred:DocumentaryCandidate[]=[];
+  const yielded=new Set<string>();
+  const fresh=(candidates:DocumentaryCandidate[])=>{
+    const seen=new Set(yielded);
+    return candidates.filter(candidate=>!seen.has(candidate.id)&&(seen.add(candidate.id),true));
+  };
   if(query){
     const first=await input.discover(query,youtube?['youtube']:input.kind==='image'?['commons']:['pexels','pixabay']);
-    if(first.length&&input.firstBatchReady?.(first)!==false)yield first;
+    if(first.length){
+      if(input.firstBatchReady?.(first)===false)deferred=first;
+      else {const batch=fresh(first);batch.forEach(candidate=>yielded.add(candidate.id));if(batch.length)yield batch;}
+    }
   }
   if(input.stopped())return;
-  // Existing provider cache/single-flight reuses the first query. Archives,
-  // alternate queries and shared media remain available when they are needed.
-  const results=await Promise.allSettled([discoverDocumentarySources(input),input.supplement?.()??Promise.resolve([])]);
-  const found:DocumentaryCandidate[]=[];
-  for(const result of results){if(result.status==='rejected')throw result.reason;found.push(...result.value);}
-  if(found.length)yield found;
+  // Inspect each completed source wave while slower providers keep searching.
+  // A rejected first batch is held until another source adds a new candidate.
+  // Returning after acceptance prevents dispatch of further query waves.
+  const lanes=[
+    {queries:input.stockQueries,providers:['pexels','pixabay'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
+    {queries:input.queries,providers:['commons','internet-archive','local','pexels','pixabay'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
+    {queries:input.youtubeQueries,providers:['youtube'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
+  ];
+  type Batch={index:number;candidates:DocumentaryCandidate[];error?:unknown};
+  const pending=new Map<number,Promise<Batch>>();
+  let cancelled=false,supplementStarted=false;
+  const stopped=()=>cancelled||input.stopped();
+  const schedule=(index:number)=>{
+    if(stopped())return;
+    if(index===lanes.length){
+      if(supplementStarted||!input.supplement)return;
+      supplementStarted=true;
+      pending.set(index,input.supplement().then(candidates=>({index,candidates}),error=>({index,candidates:[],error})));
+      return;
+    }
+    const lane=lanes[index]!;
+    if(lane.offset>=lane.queries.length)return;
+    const queries=lane.queries.slice(lane.offset,lane.offset+2);lane.offset+=2;
+    pending.set(index,Promise.allSettled(queries.map(q=>input.discover(q,lane.providers))).then(results=>{
+      const candidates:DocumentaryCandidate[]=[];
+      for(const result of results){if(result.status==='rejected')return {index,candidates:[],error:result.reason};candidates.push(...result.value);}
+      return {index,candidates};
+    }));
+  };
+  for(let index=0;index<=lanes.length;index++)schedule(index);
+  try{
+    while(pending.size&&!stopped()){
+      const batch=await Promise.race(pending.values());pending.delete(batch.index);
+      if(batch.error)throw batch.error;
+      if(batch.candidates.length){
+        if(deferred.length){
+          const oldIds=new Set(deferred.map(candidate=>candidate.id));
+          if(batch.candidates.some(candidate=>!oldIds.has(candidate.id))){
+            const combined=fresh([...deferred,...batch.candidates]);deferred=[];
+            combined.forEach(candidate=>yielded.add(candidate.id));if(combined.length)yield combined;
+          }
+        }else {const novel=fresh(batch.candidates);novel.forEach(candidate=>yielded.add(candidate.id));if(novel.length)yield novel;}
+      }
+      schedule(batch.index);
+    }
+    if(deferred.length&&!stopped()){const batch=fresh(deferred);if(batch.length)yield batch;}
+  }finally{cancelled=true;}
 }
 
 /** Independent source families overlap instead of waiting for slow archives.

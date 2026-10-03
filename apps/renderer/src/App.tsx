@@ -2818,7 +2818,9 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
             {draft.scenes.length === 0
               ? "Перейти к сценарию"
               : selectedMediaMode === "stock" && autoStockRunning
-                ? `Подбираю stock: ${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length}`
+                ? isDocumentary
+                  ? `Подтверждено: ${confirmedStockScenes} из ${includedMaterialScenes.length}`
+                  : `Подбираю stock: ${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length}`
                 : selectedMediaMode === "stock" && autoStockFailed > 0
                   ? `Повторить для ${autoStockFailed} сцен`
                   : selectedMediaMode === "stock" && missingStockScenes > 0
