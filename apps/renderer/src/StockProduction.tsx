@@ -5,6 +5,12 @@ export function materialReady(scene: Scene): boolean {
   return Boolean(scene.documentary?.verified && scene.documentary.selected && (scene.documentary.selected.kind === "video" ? scene.videoPath : scene.imagePath));
 }
 
+export function stockMaterialApplied(scene: Scene): boolean {
+  return Boolean(scene.stockSource
+    && (!scene.documentary || materialReady(scene))
+    && (scene.stockSource.mediaType === "video" ? scene.videoPath : scene.imagePath));
+}
+
 export function stockProductionState(project: Project, tasks: QueueTask[], incoming: AutoStockProgress | null) {
   const progress = incoming?.projectId === project.id ? incoming : null;
   const scenes = project.scenes.filter(scene => scene.includeInAssembly !== false);
@@ -103,7 +109,7 @@ export function StockMaterialQueue({ project, progress }: { project: Project; pr
       const kind = ready ? scene.documentary?.selected?.kind : scene.documentary?.requirement.preferredKind;
       const status = active ? progress.message : ready ? "Подтверждено" : scene.documentary?.autoError || "Ожидает подбора";
       return <article key={scene.id} className={active ? "running" : ready ? "complete" : ""}>
-        <span>{scene.order + 1}</span><div><strong>{scene.title}</strong><small>{ready ? "Выбрано" : "План"}: {kind === "image" ? "фото" : "видео"} · {status}</small></div><em>{ready ? "100%" : active ? "В работе" : "Ожидает"}</em>
+        <span>{scene.order + 1}</span><div><strong>{scene.title}</strong><small>{ready ? "Выбрано" : "План"}: {kind === "image" ? "фото" : "видео"} · {status}</small></div><em>{ready ? "100%" : active ? "В работе" : scene.documentary?.autoError ? "Не подтверждено" : "Ожидает"}</em>
       </article>;
     })}
   </div>;

@@ -3,7 +3,7 @@ import {LocalMediaImage} from './LocalMediaImage';
 import {DocumentaryRecovery} from './DocumentaryRecovery';
 import {DocumentaryTemplateTrack} from './DocumentaryTemplateTrack';
 import { channelImageStyle, documentaryVideoCoverage } from "@gold-work/shared";
-import { materialReady, StockMaterialQueue, StockProductionOverview } from "./StockProduction";
+import { materialReady, stockMaterialApplied, StockMaterialQueue, StockProductionOverview } from "./StockProduction";
 import {DocumentaryTransitionPicker} from './DocumentaryTransitionPicker';
 import { storageSize } from "./StorageUsage";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
@@ -947,10 +947,10 @@ function AutoStockProgressToast({ progress, result, project, projectTitle, onOpe
   const complete = progress.phase === "complete" || stopped;
   const failed = result?.failed ?? progress.failed;
   const actualStockVideo = result?.project.scenes.filter((scene) => (
-    scene.includeInAssembly !== false && scene.stockSource?.mediaType === "video" && Boolean(scene.videoPath)
+    scene.includeInAssembly !== false && stockMaterialApplied(scene) && scene.stockSource?.mediaType === "video"
   )).length ?? 0;
   const actualStockImage = result?.project.scenes.filter((scene) => (
-    scene.includeInAssembly !== false && scene.stockSource?.mediaType === "image" && Boolean(scene.imagePath)
+    scene.includeInAssembly !== false && stockMaterialApplied(scene) && scene.stockSource?.mediaType === "image"
   )).length ?? 0;
   const coverage = result?.project.settings.assembly.documentary?.version === 2 ? documentaryVideoCoverage(result.project.scenes) : undefined;
   return (
@@ -964,6 +964,7 @@ function AutoStockProgressToast({ progress, result, project, projectTitle, onOpe
         <button className="auto-stock-toast-close" onClick={onClose} aria-label="Скрыть подбор материалов" title="Скрыть. Вернуть можно в боковой панели; подбор продолжится."><X size={15} /></button>
       </header>
       <p>{progress.message}</p>
+      {documentary && progress.currentSceneNumber && !complete && <small>Сейчас проверяется сцена №{progress.currentSceneNumber}; это не число готовых кадров.</small>}
       <div className="auto-stock-toast-counts">
         <span>{documentary?'Подтверждено: ':''}{ready} из {total}</span>
         <strong>{percent}%</strong>
@@ -973,9 +974,9 @@ function AutoStockProgressToast({ progress, result, project, projectTitle, onOpe
         <div className="auto-stock-toast-result">
           <span>Фактически: {actualStockVideo} видео · {actualStockImage} фото</span>
           {coverage && <span>Видео: {coverage.percent}% длительности · цель {result.project.settings.stockVideoPercent}%</span>}
-          <span>Подобрано сейчас: {result.selected}</span>
+          <span>Подтверждено в этом запуске: {result.selected}</span>
           {result.skipped > 0 && <span>Уже было: {result.skipped}</span>}
-          {failed > 0 && <span>Не найдено: {failed}</span>}
+          {failed > 0 && <span>Не подтверждено: {failed}</span>}
           {result.failures.slice(0, 3).map((failure) => (
             <small key={failure.sceneId} title={failure.message}>
               Сцена {failure.sceneNumber}: {stockFailureLabel(failure.category)} — {failure.message}
@@ -1084,7 +1085,7 @@ function computeStepHint(
     }
     if (project.mediaMode === "stock") {
       const included = project.scenes.filter((scene) => scene.includeInAssembly !== false);
-      const selected = included.filter((scene) => scene.stockSource && (scene.stockSource.mediaType === "video" ? scene.videoPath : scene.imagePath)).length;
+      const selected = included.filter(stockMaterialApplied).length;
       return {
         now: `режим Stock: готово материалов ${selected} из ${included.length}`,
         next: selected === included.length
@@ -1184,9 +1185,8 @@ function ProjectWorkflowBar({
   );
   const materialsComplete = scenarioComplete
     && includedScenes.every((scene) => {
-      const selectedStockPath = scene.stockSource?.mediaType === "video" ? scene.videoPath : scene.imagePath;
-      if (project.mediaMode === "stock") return Boolean(scene.stockSource && selectedStockPath);
-      if (project.mediaMode === "mixed" && scene.stockSource) return Boolean(selectedStockPath);
+      if (project.mediaMode === "stock") return stockMaterialApplied(scene);
+      if (project.mediaMode === "mixed" && scene.stockSource) return stockMaterialApplied(scene);
       return Boolean(scene.imagePrompt.trim());
     });
   const mediaStarted = includedScenes.some((scene) => Boolean(scene.imagePath || scene.videoPath || scene.audioPath));
@@ -1891,17 +1891,13 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
   const renderedVisualBeatCount = draft.lastRender?.visualBeatCount;
   const renderedMontageTemplates = draft.lastRender?.templates ?? [];
   const includedMaterialScenes = draft.scenes.filter((scene) => scene.includeInAssembly !== false);
-  const hasAppliedStock = (scene: Scene) => Boolean(
-    scene.stockSource
-    && (!scene.documentary || scene.documentary.verified)
-    && (scene.stockSource.mediaType === "video" ? scene.videoPath : scene.imagePath),
-  );
+  const hasAppliedStock = stockMaterialApplied;
   const selectedStockScenes = includedMaterialScenes.filter(hasAppliedStock).length;
   const actualStockVideoScenes = includedMaterialScenes.filter((scene) => (
-    scene.stockSource?.mediaType === "video" && Boolean(scene.videoPath)
+    hasAppliedStock(scene) && scene.stockSource?.mediaType === "video"
   )).length;
   const actualStockImageScenes = includedMaterialScenes.filter((scene) => (
-    scene.stockSource?.mediaType === "image" && Boolean(scene.imagePath)
+    hasAppliedStock(scene) && scene.stockSource?.mediaType === "image"
   )).length;
   const alternateStockAssets = includedMaterialScenes.reduce(
     (sum, scene) => sum + (scene.stockAlternates ?? []).filter((variant) => Boolean(variant.videoPath ?? variant.imagePath)).length,
@@ -2185,7 +2181,7 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
               <div className="project-stock-progress">
                 <div>
                   <span>{autoStockRunning ? currentAutoStockProgress?.message ?? "Ищу материалы…" : "Готовые сцены"}</span>
-                  <strong>{autoStockRunning ? `${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length}` : `${selectedStockScenes} из ${includedMaterialScenes.length}`}</strong>
+                  <strong>{autoStockRunning ? `Проверено ${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length} · подтверждено ${selectedStockScenes}` : `${selectedStockScenes} из ${includedMaterialScenes.length}`}</strong>
                 </div>
                 <i><em style={{ width: `${autoStockRunning ? autoStockPercent : stockProgressPercent}%` }} /></i>
               </div>
@@ -3051,6 +3047,9 @@ function ScenarioMaterials({ project, hasQueueTasks, onBack, onSave, onRegenerat
   const hero = project.characterReference;
   const stockMode = (project.mediaMode ?? "stock") === "stock";
   const generationBusy = project.status === "generating" || project.status === "paused";
+  const includedDocumentaryScenes = project.scenes.filter(scene => scene.includeInAssembly !== false);
+  const confirmedDocumentaryScenes = includedDocumentaryScenes.filter(materialReady);
+  const confirmedDocumentaryVideos = confirmedDocumentaryScenes.filter(scene => scene.documentary?.selected?.kind === "video").length;
   const stockScene = project.scenes.find((scene) => scene.id === stockSceneId);
   const veoCandidates = stockMode
     ? []
@@ -3119,7 +3118,7 @@ function ScenarioMaterials({ project, hasQueueTasks, onBack, onSave, onRegenerat
       <PageHeading
         icon={<button className="back-icon" onClick={onBack}><ChevronLeft size={22} /></button>}
         title={stockMode ? "Проверка stock" : "Материалы сценария"}
-        subtitle={project.settings.assembly.documentary?.version === 2 ? `${project.title} · проверено ${project.scenes.filter(scene => scene.documentary?.verified).length} из ${project.scenes.length} · видео: ${project.scenes.filter(scene => scene.documentary?.selected?.kind === "video").length} · фото: ${project.scenes.filter(scene => scene.documentary?.selected?.kind === "image").length}` : stockMode ? `${project.title} · ручная замена не обязательна` : `${project.title} · ${project.scenes.length} сцен`}
+        subtitle={project.settings.assembly.documentary?.version === 2 ? `${project.title} · подтверждено ${confirmedDocumentaryScenes.length} из ${includedDocumentaryScenes.length} · видео: ${confirmedDocumentaryVideos} · фото: ${confirmedDocumentaryScenes.length - confirmedDocumentaryVideos}` : stockMode ? `${project.title} · ручная замена не обязательна` : `${project.title} · ${project.scenes.length} сцен`}
         actions={
           <button className="ghost-button" onClick={() => void api.openProjectFolder(project.id)}>
             <FolderOpen size={15} />
@@ -5810,8 +5809,8 @@ function ProjectPreviewModal({ project, mode, onModeChange, hasQueueTasks, onClo
   const totalDuration = Math.round(project.scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0));
   const includedScenes = project.scenes.filter((scene) => scene.includeInAssembly !== false);
   const allStockAssets = includedScenes.flatMap((scene) => [
-    ...(scene.stockSource ? [{ stockSource: scene.stockSource, imagePath: scene.imagePath, videoPath: scene.videoPath }] : []),
-    ...(scene.stockAlternates ?? [])
+    ...(stockMaterialApplied(scene) ? [{ stockSource: scene.stockSource!, imagePath: scene.imagePath, videoPath: scene.videoPath }] : []),
+    ...(!scene.documentary || materialReady(scene) ? scene.stockAlternates ?? [] : [])
   ]);
   const availableStockVideos = allStockAssets.filter((variant) => variant.stockSource.mediaType === "video" && Boolean(variant.videoPath)).length;
   const availableStockImages = allStockAssets.filter((variant) => variant.stockSource.mediaType === "image" && Boolean(variant.imagePath)).length;
