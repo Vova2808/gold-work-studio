@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Project } from "@gold-work/shared";
@@ -26,6 +26,63 @@ test("cached project reads stay isolated and notice atomic external updates", as
   await repository.mutate("one", current => ({ ...current, title: "Changed" }));
   assert.equal((await repository.get("one"))!.title, "Changed");
   await repository.delete("one"); assert.equal(await repository.get("one"), undefined);
+});
+
+test('cold indexed reads and a one-project save preserve large UTF-8 evidence and untouched JSON bytes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'gws-registry-index-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const path = join(root, 'projects.json');
+  const projects = [0, 1, 2].map(i => ({id: `p${i}`, title: `Мотоцикл 🏍 ${i}`, updatedAt: `2026-10-0${i + 1}`,
+    scenes: [{id: `s${i}`, narration: 'Exact words', audioPath: `paid-${i}.wav`, documentary: {verified: true,
+      candidates: [{id: `candidate-${i}`, description: 'x'.repeat(256 * 1024 - 211 + i) + 'Ж🏍 \\" } ], { \n',
+        analysis: {status: 'pending', requestId: 'do-not-resend'}, selected: {ranges: [[1, 3]]}}]}}]})) as unknown as Project[];
+  const raw = projects.map(project => JSON.stringify(project, null, 2));
+  await writeFile(path, '[\n' + raw.join(',\n') + '\n]');
+  const repository = new FileProjectRepository(path);
+  const displays = await Promise.all(Array.from({length: 4}, () => repository.list({omitCandidates: true})));
+  assert.ok(displays.every(items => items.length === 3 && items.every(p => p.scenes[0]!.documentary!.candidates.length === 0)));
+  assert.equal(displays[0]![0]!.scenes[0]!.documentary!.candidateCount, 1);
+  displays[0]![0]!.title = 'Only caller changed';
+  assert.deepEqual(await repository.get('p2'), projects[2]);
+  const changed = await repository.mutate('p1', p => ({...p, title: 'Новое имя'}), {candidateSceneIds: []});
+  const disk = await readFile(path, 'utf8');
+  assert.ok(disk.includes(raw[0]!) && disk.includes(raw[2]!), 'Untouched projects are copied byte for byte');
+  const reopened = new FileProjectRepository(path);
+  assert.deepEqual(await reopened.list(), [projects[2], changed, projects[0]]);
+  assert.deepEqual(changed.scenes, projects[1]!.scenes, 'Voices and unknown paid evidence survive unchanged');
+  assert.deepEqual(await readdir(root), ['projects.json'], 'No format migration or candidate sidecars');
+});
+
+test('a truncated registry stays in place and cannot be overwritten as an empty project list', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'gws-registry-truncated-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const path = join(root, 'projects.json'), repository = new FileProjectRepository(path);
+  const broken = '[{"id":"paid-project","scenes":[{"audioPath":"paid.wav"}]},';
+  await writeFile(path, broken);
+  await assert.rejects(repository.listForDisplay(), /Реестр проектов повреждён/);
+  await assert.rejects(repository.save({id: 'new', scenes: []} as unknown as Project), /Реестр проектов повреждён/);
+  assert.equal(await readFile(path, 'utf8'), broken);
+  assert.deepEqual(await readdir(root), ['projects.json']);
+  const recovered = {id: 'paid-project', scenes: [{id: 'scene', audioPath: 'paid.wav'}]} as Project;
+  await writeFile(path, JSON.stringify([recovered]));
+  assert.deepEqual(await repository.get(recovered.id), recovered);
+});
+
+test('an external registry change during serialization is preserved instead of being lost', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'gws-registry-conflict-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const path = join(root, 'projects.json'), repository = new FileProjectRepository(path);
+  await repository.save({id: 'one', scenes: [], title: 'Initial'} as unknown as Project);
+  const external = JSON.stringify([{id: 'one', scenes: [], title: 'Externally saved'}]);
+  let externalWrite: Promise<void> | undefined;
+  await assert.rejects(repository.mutate('one', current => {
+    externalWrite = writeFile(path, external);
+    return {...current, scenes: Array.from({length: 20}, (_, i) => ({id: `s${i}`, narration: 'text'.repeat(128 * 1024)}))} as Project;
+  }), /Проекты изменены другим процессом/);
+  await externalWrite;
+  assert.equal(await readFile(path, 'utf8'), external);
+  assert.equal((await repository.get('one'))!.title, 'Externally saved');
+  assert.deepEqual(await readdir(root), ['projects.json']);
 });
 
 test('one-scene mutations retain deferred evidence, voices and isolated snapshots', async t => {

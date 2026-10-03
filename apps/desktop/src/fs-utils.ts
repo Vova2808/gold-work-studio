@@ -15,7 +15,7 @@ function sleep(ms: number): Promise<void> {
  */
 let temporaryCounter = 0;
 
-export async function atomicWrite(filePath: string, data: string | Buffer | AsyncIterable<string>): Promise<void> {
+export async function atomicWrite(filePath: string, data: string | Buffer | AsyncIterable<string | Uint8Array>, options?: {allowCopyFallback?: boolean}): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   // Счётчик обязателен: параллельные записи одного файла в одну миллисекунду делили tmp-имя (ENOENT на rename).
   const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${temporaryCounter++}.tmp`;
@@ -35,6 +35,10 @@ export async function atomicWrite(filePath: string, data: string | Buffer | Asyn
       if (!RETRIABLE_CODES.has(code)) break;
       await sleep(RETRY_DELAY_MS * (attempt + 1));
     }
+  }
+  if (options?.allowCopyFallback === false) {
+    await rm(temporaryPath, {force: true}).catch(() => undefined);
+    throw lastError;
   }
   // Fallback: прямое копирование (не атомарно, но надёжно при залоченном rename).
   try {
