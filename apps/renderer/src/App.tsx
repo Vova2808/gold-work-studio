@@ -964,7 +964,7 @@ function AutoStockProgressToast({ progress, result, project, projectTitle, onOpe
         <button className="auto-stock-toast-close" onClick={onClose} aria-label="Скрыть подбор материалов" title="Скрыть. Вернуть можно в боковой панели; подбор продолжится."><X size={15} /></button>
       </header>
       <p>{progress.message}</p>
-      {documentary && progress.currentSceneNumber && !complete && <small>Сейчас проверяется сцена №{progress.currentSceneNumber}; это не число готовых кадров.</small>}
+      {documentary && !complete && <small>Обработано {progress.completed} из {total}; подтверждено {ready}. {progress.currentSceneNumber ? `Сцена №${progress.currentSceneNumber} — её номер, а не число готовых кадров.` : 'Номер сцены не равен числу готовых кадров.'}</small>}
       <div className="auto-stock-toast-counts">
         <span>{documentary?'Подтверждено: ':''}{ready} из {total}</span>
         <strong>{percent}%</strong>
