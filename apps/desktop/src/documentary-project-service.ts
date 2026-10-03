@@ -230,6 +230,20 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
 }
 
+/** For an establishing view of one named subject, the second YouTube query
+ * should retrieve that subject rather than repeat another long description.
+ * Literal part/recognized-operation/year scenes retain both precise queries. This only changes
+ * discovery; ranking, rights and actual-frame approval remain mandatory. */
+export function documentaryYouTubeQueries(requirement:DocumentaryRequirement,queries:string[],narration:string):string[] {
+  const planned=queries.slice(0,2),identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
+  if(!identity||!planned.length||requirement.years.length||documentaryRequiredVisiblePart(narration)
+    ||documentaryGeneralActionIssue({narration}))return planned;
+  const qualified=identity.aliases.find(alias=>alias.toLowerCase().startsWith(identity.name.toLowerCase()+' (')&&/\([^)]{3,}\)/.test(alias));
+  const name=(qualified??identity.name).trim();
+  if(!/\s/.test(name)||name.length>100||planned[0]!.trim().toLowerCase()===name.toLowerCase())return planned;
+  return [planned[0]!,name];
+}
+
 /** A broad wave may contain the named part even when the first exact search
  * returned only surrounding vehicles. The iterator yields the first batch at
  * the end if nothing better appears, so no source is silently discarded. */
@@ -763,9 +777,10 @@ export class DocumentaryProjectService {
             ?documentaryRequiredVisiblePart(scene.narration):undefined;
           const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
-            // Keep the second planned scene query, including its event/detail.
-            // A bare inherited name often targets a different participant/era.
-            youtubeQueries:kind==='video'&&this.youtube?queries.slice(0,2):[],
+            // Preserve two precise searches for part/action/date scenes. A
+            // single named establishing view may use its exact subject as the
+            // second query before stale or weak captions dominate the pool.
+            youtubeQueries:kind==='video'&&this.youtube?documentaryYouTubeQueries(requirement,queries,scene.narration):[],
             discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<=0,
             firstBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
               ?first=>documentaryFirstImageBatchWorthInspecting(first,requiredImagePart)

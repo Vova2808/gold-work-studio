@@ -138,20 +138,32 @@ export class DocumentarySearch {
     const existing = this.inFlight.get(key); if (existing) return existing;
     const work = (async () => {
       const file = this.cachePath ? join(this.cachePath, `${key}.json`) : undefined;
+      let staleYouTube:DocumentaryCandidate[]|undefined;
       if (file) {
         try {
           const data = JSON.parse(await readFile(file, "utf8"));
           if (data.expiresAt > Date.now() && Array.isArray(data.candidates)) return (data.candidates as DocumentaryCandidate[]).map(commonsAttributionLicense);
+          // Search quota can expire hours after an otherwise valid result.
+          // These are discovery hints only: preview/download recheck YouTube's
+          // current public Creative Commons status before using any original.
+          if(provider==='youtube'&&Number.isFinite(data.expiresAt)&&data.expiresAt>Date.now()-7*24*3600_000&&Array.isArray(data.candidates))
+            staleYouTube=(data.candidates as DocumentaryCandidate[]).filter(candidate=>candidate.provider==='youtube'&&candidate.kind==='video'&&candidate.rights==='licensed'
+              &&/^youtube:[a-zA-Z0-9_-]{11}$/.test(candidate.id)&&candidate.pageUrl===`https://www.youtube.com/watch?v=${candidate.id.slice(8)}`);
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
       }
-      if ((this.quotaBlocked.get(provider)??0)>Date.now()) throw new Error("Источник исчерпал суточную квоту поиска. Проверка доступности — через час; сохранённые результаты доступны.");
-      if ((this.cooldown.get(provider) ?? 0) > Date.now()) throw new Error("Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.");
+      const useStale=(reason:string)=>{
+        if(!staleYouTube?.length)return undefined;
+        recordDiagnosticEvent('warn','documentary.search.stale-cache',{provider,kind,candidates:staleYouTube.length,reason});
+        return staleYouTube;
+      };
+      if ((this.quotaBlocked.get(provider)??0)>Date.now()) {const fallback=useStale('quota');if(fallback)return fallback;throw new Error("Источник исчерпал суточную квоту поиска. Проверка доступности — через час; сохранённые результаты доступны.");}
+      if ((this.cooldown.get(provider) ?? 0) > Date.now()) {const fallback=useStale('cooldown');if(fallback)return fallback;throw new Error("Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.");}
       const active=this.providerWork.get(provider)??new Set<Promise<DocumentaryCandidate[]>>();this.providerWork.set(provider,active);
       // Four scene workers share this cap. Parallel discovery must not multiply
       // requests to the same provider or bypass the existing cache/cooldown.
       while(active.size>=4)await Promise.race([...active].map(job=>job.catch(()=>[])));
-      if ((this.quotaBlocked.get(provider)??0)>Date.now()) throw new Error("Источник исчерпал суточную квоту поиска. Проверка доступности — через час; сохранённые результаты доступны.");
-      if ((this.cooldown.get(provider) ?? 0) > Date.now()) throw new Error("Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.");
+      if ((this.quotaBlocked.get(provider)??0)>Date.now()) {const fallback=useStale('quota');if(fallback)return fallback;throw new Error("Источник исчерпал суточную квоту поиска. Проверка доступности — через час; сохранённые результаты доступны.");}
+      if ((this.cooldown.get(provider) ?? 0) > Date.now()) {const fallback=useStale('cooldown');if(fallback)return fallback;throw new Error("Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.");}
       const job=this.providerSearch(provider,query,kind,licensedOnly);active.add(job);
       let result:DocumentaryCandidate[];
       try { result=await job; }
@@ -162,6 +174,8 @@ export class DocumentarySearch {
         if (/quotaExceeded|dailyLimitExceeded|quota.*(?:per day|daily)|суточн.*квот/iu.test(message)) this.quotaBlocked.set(provider,Date.now()+3600000);
         else if (error instanceof StockApiRateLimitError) this.cooldown.set(provider,Math.max(this.cooldown.get(provider)??0,Date.now()+error.retryAfterMs));
         else if (/\b429\b|исчерпан.*лимит/iu.test(message)) this.cooldown.set(provider,Date.now()+120000);
+        const fallback=useStale('provider-error');
+        if(fallback)return fallback;
         throw error;
       } finally { active.delete(job); }
       if (file) await atomicWrite(file, JSON.stringify({ expiresAt: Date.now() + 24 * 3600_000, candidates: result }));

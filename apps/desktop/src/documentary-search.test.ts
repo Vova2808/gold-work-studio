@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {DocumentaryCandidate} from '@gold-work/shared';
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
 import {StockApiRateLimitError} from "./stock-client.js";
@@ -16,6 +17,36 @@ test('a daily YouTube quota refusal stops fresh queries but preserves other sour
     assert.ok(result.sources.find(s=>s.provider==='youtube')?.error);
   }
   assert.equal(calls,1);assert.equal(local,3);
+});
+
+test('an expired exact-query YouTube cache remains a bounded discovery fallback during quota outage',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-youtube-stale-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const candidate:DocumentaryCandidate={id:'youtube:abcdefghijk',provider:'youtube',kind:'video',title:'Honda RC211V',description:'Motorcycle',
+    pageUrl:'https://www.youtube.com/watch?v=abcdefghijk',downloadUrl:'https://www.youtube.com/watch?v=abcdefghijk',
+    rights:'licensed',license:'Creative Commons Attribution (YouTube)',licenseUrl:'https://support.google.com/youtube/answer/2797468',
+    attribution:'fixture · Honda RC211V',durationSeconds:60,author:'fixture',query:'Honda RC211V',
+    retrievedAt:new Date().toISOString(),match:'unverified',concerns:[]};
+  let calls=0;
+  const search=new DocumentarySearch(undefined,globalThis.fetch,root,undefined,{search:async()=>{
+    if(++calls===1)return [candidate];
+    throw Error('YouTube 429: Quota exceeded for Search Queries per day');
+  }});
+  const input={query:'Honda RC211V',kind:'video' as const,providers:['youtube' as const]};
+  assert.equal((await search.search(input,true)).candidates.length,1);
+  const file=join(root,(await readdir(root))[0]!);
+  const saved=JSON.parse(await readFile(file,'utf8'));saved.expiresAt=Date.now()-1000;
+  saved.candidates.push({...candidate,id:'youtube:badbadbadba',pageUrl:'https://www.youtube.com/watch?v=badbadbadba',rights:'unknown'});
+  await writeFile(file,JSON.stringify(saved));
+  const fallback=await search.search(input,true);
+  assert.equal(fallback.candidates.length,1,'expired search data cannot reintroduce unknown-rights sources');
+  assert.equal(fallback.candidates[0]?.id,candidate.id);
+  assert.equal(fallback.sources[0]?.error,undefined);
+  assert.equal((await search.search(input,true)).candidates[0]?.id,candidate.id);
+  assert.equal(calls,2,'a quota pause must not issue another search for the same saved query');
+  saved.expiresAt=Date.now()-8*24*3600_000;await writeFile(file,JSON.stringify(saved));
+  const tooOld=await search.search(input,true);
+  assert.equal(tooOld.candidates.length,0);
+  assert.match(tooOld.sources[0]?.error??'',/квоту/);
 });
 
 test('stock adapter 429 establishes the same shared cooldown as archive HTTP errors',async()=>{
