@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import {documentaryContextApproval} from './documentary-context-approval.js';
+import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
+import {documentaryReviewContract} from './documentary-review-contract.js';
+import {withDocumentaryFrameSlot} from './documentary-resources.js';
+import {documentaryLocalShortlist} from './documentary-local-shortlist.js';
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
@@ -433,7 +437,7 @@ export class DocumentaryIntelligence {
         previousRequests.push({ system: system + independentSystem, input: JSON.stringify(visibleRequest) });
         // Resolve old uncertain final checks BEFORE spending on the new stage.
         for (const previous of previousRequests) {
-          const priorKey = createHash("sha256").update(JSON.stringify([2, purpose, previous.system, previous.input, images])).digest("hex");
+          const priorKey = documentaryCheckpointKey(purpose,previous.system,previous.input,images);
           const prior = await readAnalysisCheckpoint(join(this.rootFor(projectId), "Documentary", "Analysis", `${priorKey}.json`));
           if (prior && prior.state !== "failed" && !(prior.state === "rejected" && prior.rejection === "model-unavailable") && (prior.state !== "complete" || !prior.result)) throw new DocumentaryAnalysisError("Предыдущая проверка источника имеет неизвестный результат; дополнительное распознавание не оплачивается повторно.", "pending", purpose);
         }
@@ -540,7 +544,9 @@ export class DocumentaryIntelligence {
       system+=' Map geography evidence: first read the ACTUAL visible labels and coastlines, then compare them to every geographical constraint in narrationContext/narration, even if requiredIdentities is empty. Return mapGeographyMatch:boolean and mapGeographyEvidence:string naming the visible region and the narrated region/route. A decorative map of the Mediterranean does not illustrate a route across America. A shared travel/shipping concept is not enough. Do not call a cropped regional map a world map or infer invisible continents. When the narration names no geography, a generic map is allowed. If the requested geography cannot be seen or contradicts the map, use false and reject/uncertain; do not invent an identity to fit the narration. Use this same image request, no additional analysis.';
     }
     const narrativeContext=visualReview?this.inspection.getStore()?.narrativeContext:undefined;
-    const sourceEra=words.source??this.inspection.getStore()?.sourceEra;
+    // Catalog range requests deliberately carry only a short source header.
+    // That header must not discard the original description's event/year.
+    const sourceEra={...this.inspection.getStore()?.sourceEra,...words.source};
     if(narrativeContext){
       // A new context/policy cannot evade an old accepted-but-unknown charge.
       previousRequests.push({system,input});
@@ -549,6 +555,8 @@ export class DocumentaryIntelligence {
       previousRequests.push({system,input});
       previousRequests.push({system:system+documentaryLegacyEraProvenanceInstruction,
         input:JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra,true)})});
+      previousRequests.push({system:system+documentaryEraProvenanceInstruction,
+        input:JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(words.source??this.inspection.getStore()?.sourceEra)})});
       input=JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra)});
       system+=documentaryEraProvenanceInstruction;
     }
@@ -558,6 +566,10 @@ export class DocumentaryIntelligence {
       previousRequests.push({system,input});
       input=JSON.stringify({...JSON.parse(input),generalDiagramScope});
       system+=documentaryGeneralDiagramPolicy;
+    }
+    if(visualReview&&narrativeContext){
+      previousRequests.push({system,input});
+      system+=documentaryReviewContract;
     }
     const enforceVisualEvidence=(value:Record<string,unknown>):Record<string,unknown>=>{
       value=enforceDocumentaryTechnicalQuality(value);
@@ -584,11 +596,11 @@ export class DocumentaryIntelligence {
         previousRequests.push({system:request.system,input:JSON.stringify({...data,narrativeContext:legacyContext})});
       }catch{/* Non-JSON legacy requests retain their original key above. */}
     }
-    const key = createHash("sha256").update(JSON.stringify([2, purpose, system, input, images])).digest("hex");
+    const key = documentaryCheckpointKey(purpose,system,input,images);
     const root = join(this.rootFor(projectId), "Documentary", "Analysis"); await mkdir(root, { recursive: true });
     const legacyImages=images.length?this.inspection.getStore()?.legacyImageSamples:undefined;
     if(legacyImages)for(const previous of [{system,input},...previousRequests]){
-      const oldKey=createHash('sha256').update(JSON.stringify([2,purpose,previous.system,previous.input,legacyImages])).digest('hex');
+      const oldKey=documentaryCheckpointKey(purpose,previous.system,previous.input,legacyImages);
       const old=await readAnalysisCheckpoint(join(root,`${oldKey}.json`));
       if(old&&old.state!=='failed'&&!(old.state==='rejected'&&old.rejection==='model-unavailable')&&(old.state!=='complete'||!old.result))
         throw new DocumentaryAnalysisError('Проверка прежнего изображения имеет неизвестный результат. Новая подложка схемы не разрешает повторную оплату.','pending',purpose);
@@ -601,7 +613,7 @@ export class DocumentaryIntelligence {
     if (saved && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")) throw new DocumentaryAnalysisError("Предыдущий запрос анализа Stock уже отправлялся, но результат не сохранён. Автоповтор отключён; проверьте журнал AnyModel.", "pending", purpose);
     // Adding sentence context must not disguise an uncertain paid request as a new retry.
     for (const previous of previousRequests) {
-      const previousKey = createHash("sha256").update(JSON.stringify([2, purpose, previous.system, previous.input, images])).digest("hex");
+      const previousKey = documentaryCheckpointKey(purpose,previous.system,previous.input,images);
       const previousState = await readAnalysisCheckpoint(join(root, `${previousKey}.json`));
       if (previousState && previousState.state !== "failed" && !(previousState.state === "rejected" && previousState.rejection === "model-unavailable") && (previousState.state !== "complete" || !previousState.result)) throw new DocumentaryAnalysisError("Предыдущая проверка этого материала имеет неизвестный результат. Новый контекст не запускает платный повтор; проверьте журнал AnyModel.", "pending", purpose);
       // A stricter visual policy does not need to pay again to reject the exact
@@ -866,6 +878,13 @@ export class DocumentaryIntelligence {
       recordDiagnosticEvent('info','documentary.ranking.local',{projectId:project.id,sceneId:scene.id,candidates:obvious.length});
       return obvious;
     }
+    if(!this.inspection.getStore()?.cacheOnly){
+      try{
+        const local=await documentaryLocalShortlist(scene,candidates,join(this.rootFor(project.id),'Documentary','LocalVision'),
+          this.inspection.getStore()?.progress,this.inspection.getStore()?.shouldStop);
+        if(local?.length){recordDiagnosticEvent('info','documentary.ranking.local-vision',{projectId:project.id,sceneId:scene.id,candidates:local.length});return local;}
+      }catch(error){recordDiagnosticEvent('warn','documentary.ranking.local-vision-fallback',{projectId:project.id,sceneId:scene.id,message:'Локальный предварительный отбор недоступен; использую обычную проверку метаданных.'});}
+    }
     const pool = documentaryRankingPool(candidates).map(candidate => ({ candidate,
       key: createHash("sha256").update(documentaryCandidateKey(candidate)).digest("hex") }));
     const ordered = [...project.scenes].sort((a, b) => a.order - b.order);
@@ -1043,8 +1062,14 @@ export class DocumentaryIntelligence {
       const images: string[] = [];
       for (const time of times) {
         const path = join(root, `${time.toFixed(3)}.jpg`);
-        try { await readFile(path); } catch { await effectFfmpeg(["-y", ...(scene.videoPath ? ["-ss", String(time)] : []), "-i", scene.videoPath || scene.imagePath!, "-frames:v", "1", "-vf", "scale=768:768:force_original_aspect_ratio=decrease", "-q:v", "4", path]); }
-        images.push(`data:image/jpeg;base64,${(await readFile(path)).toString("base64")}`);
+        let frame:Buffer;
+        try { frame=await readFile(path); }
+        catch(error) {
+          if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+          await withDocumentaryFrameSlot(()=>effectFfmpeg(["-y", "-threads", "2", "-i", scene.imagePath!, "-frames:v", "1", "-vf", "scale=768:768:force_original_aspect_ratio=decrease", "-q:v", "4", path]));
+          frame=await readFile(path);
+        }
+        images.push(`data:image/jpeg;base64,${frame.toString("base64")}`);
       }
       return images;
     };
@@ -1089,7 +1114,7 @@ export class DocumentaryIntelligence {
       // Changing the inspection strategy must not conceal a pending paid overview.
       const previous = [{ system: footageSystem + narrationContextInstruction, input: JSON.stringify({ ...overviewInput, narrationContext }) }, ...earlierRequests];
       for (const request of [...previous, ...previous.map(request => ({ ...request, system: request.system + documentarySubjectPolicy }))]) {
-        const key = createHash("sha256").update(JSON.stringify([2, "visual-overview", request.system, request.input, overviewImages])).digest("hex");
+        const key = documentaryCheckpointKey('visual-overview',request.system,request.input,overviewImages);
         const saved = await readAnalysisCheckpoint(join(this.rootFor(project.id), "Documentary", "Analysis", `${key}.json`));
         if (saved && saved.state !== "complete" && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")) throw new DocumentaryAnalysisError("Предыдущий анализ этого видео имеет неизвестный результат; каталог не запускает платный повтор. Проверьте журнал AnyModel.", "pending", "visual-overview");
       }

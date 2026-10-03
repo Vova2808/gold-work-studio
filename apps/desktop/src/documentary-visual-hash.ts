@@ -1,13 +1,23 @@
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 import { effectFfmpeg } from "./effect-media.js";
+import {withDocumentaryFrameSlot} from './documentary-resources.js';
+const hashes=new Map<string,Promise<string>>();
 
 /** Perceptual dHash flags recrops/resizes for review; it is not object recognition. */
 export async function documentaryVisualHash(poster: string): Promise<string> {
+  const info=await stat(poster),key=JSON.stringify([poster,info.size,info.mtimeMs]);
+  const saved=hashes.get(key);if(saved)return saved;
+  const pending=calculateVisualHash(poster);
+  hashes.set(key,pending);
+  if(hashes.size>256)hashes.delete(hashes.keys().next().value!);
+  try{return await pending;}catch(error){hashes.delete(key);throw error;}
+}
+async function calculateVisualHash(poster:string):Promise<string>{
   const target = join(dirname(poster), `${randomUUID()}.gray`);
   try {
-    await effectFfmpeg(["-y", "-i", poster, "-vf", "scale=9:8,format=gray", "-frames:v", "1", "-f", "rawvideo", target]);
+    await withDocumentaryFrameSlot(()=>effectFfmpeg(["-y", "-i", poster, "-vf", "scale=9:8,format=gray", "-frames:v", "1", "-f", "rawvideo", target]));
     const pixels = await readFile(target);
     if (pixels.length !== 72) throw new Error("Не удалось проверить сходство кадра");
     let value = 0n;

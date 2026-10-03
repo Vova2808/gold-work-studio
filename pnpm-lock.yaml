@@ -23,6 +23,9 @@ importers:
       '@gold-work/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@huggingface/tokenizers':
+        specifier: 0.2.0
+        version: 0.2.0
       '@remotion/bundler':
         specifier: 4.0.520
         version: 4.0.520(postcss@8.5.21)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -611,6 +614,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@huggingface/tokenizers@0.2.0':
+    resolution: {integrity: sha512-LidMHe1FpcSYH4vcSjXooda34pC0M8m1gmDOv7SQi6Iv+ib1zX7J3sHBCC9/3FPCkn2k1b55FneVqMRxrr99pg==}
 
   '@isaacs/fs-minipass@4.0.1':
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
@@ -3140,6 +3146,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@huggingface/tokenizers@0.2.0': {}
 
   '@isaacs/fs-minipass@4.0.1':
     dependencies:
