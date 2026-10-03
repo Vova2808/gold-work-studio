@@ -80,6 +80,10 @@ function documentaryQueryForKind(query: string, requirement: DocumentaryRequirem
   // mechanism itself. Retain animation when it IS the named subject.
   let result = /\banimat\w*\b|анимац\p{L}*|мультфильм\p{L}*/iu.test(subjects)
     ? query : query.replace(/\b(?:3d\s+)?(?:animations?|animated)\b/gi, " ");
+  // A still or muted stock clip cannot verify what a mechanism sounds like.
+  // Keeping "sound" in a physical-detail query flooded live results with
+  // mixers, records and music rather than the narrated engine part.
+  if(documentaryRequiredVisiblePart(requirement.text))result=result.replace(/\b(?:sound|audio|noise)\b/gi," ");
   if (kind === "image") result = result.replace(/\b(?:video|footage|clips?|4k|hd)\b/gi, " ").replace(/\b([a-z]+ing) operations?\b/gi, "$1");
   return result.replace(/\s+/g, " ").trim();
 }
@@ -1160,7 +1164,12 @@ export class DocumentaryProjectService {
             // A long original can exceed the scene budget after an unavailable
             // preview. Try another source rather than spending that budget on
             // hundreds of megabytes without any view-level evidence.
-            if(!commit&&candidate.provider==='youtube'&&(candidate.durationSeconds??0)>=600){
+            // A four-minute source whose three seek samples have already hit
+            // the network timeout is unlikely to finish a full original in
+            // the remaining scene budget. Keep the full-download fallback for
+            // short sources and for fast preview failures (unsupported seek).
+            if(!commit&&candidate.provider==='youtube'&&((candidate.durationSeconds??0)>=600
+              ||(candidate.durationSeconds??0)>=180&&error instanceof Error&&error.name==='TimeoutError')){
               recordDiagnosticEvent('info','documentary.preview.long-original-deferred',{projectId,sceneId,provider:candidate.provider,durationSeconds:candidate.durationSeconds});
               throw new Error('Пробные участки долгого YouTube-видео недоступны; пропускаю автоматическую загрузку оригинала и проверяю другой источник.');
             }
