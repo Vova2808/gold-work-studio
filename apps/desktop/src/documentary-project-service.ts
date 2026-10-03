@@ -31,7 +31,7 @@ import {documentarySourceQualityIssue,documentaryQualityPresentation,documentary
 import { planDocumentaryMontage } from "./documentary-montage.js";
 import {prepareDocumentaryMaps} from './documentary-map.js';
 import { copyImmutableDocumentaryFile, documentaryAvailableBytes, ensureDocumentarySpace, DocumentaryStorageUnavailableError } from "./documentary-storage.js";
-import type { DocumentaryYouTube } from "./documentary-youtube.js";
+import { DocumentaryYouTubeDefinitionError, type DocumentaryYouTube } from "./documentary-youtube.js";
 import { DocumentaryMemoryUnavailableError } from "./documentary-resources.js";
 import {documentarySelectionResources,runDocumentarySelectionQueue} from './documentary-resources.js';
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
@@ -1012,6 +1012,7 @@ export class DocumentaryProjectService {
       const signal = commit ? undefined : this.downloadControllers.get(projectId)?.signal;
       signal?.throwIfAborted();
       const { project, scene } = await this.editable(projectId, sceneId, !commit && this.narrationWaits.has(projectId), !commit);
+      const requireHd = !commit && documentaryQualityPresentation(scene) !== 'subject-card';
       // Staged inspections need selected sources/timing, not all historical
       // search results. Never persist this light view as the recovery manifest.
       if(commit)await this.storage.ensureProject(project);
@@ -1040,11 +1041,11 @@ export class DocumentaryProjectService {
           try {
             const previewSignal=AbortSignal.any([AbortSignal.timeout(Math.max(1,Math.min(45000,remaining))),...(signal?[signal]:[])]);
             preview=await measureDocumentaryStage('download-preview',{projectId,sceneId,provider:candidate.provider},()=>candidate.provider==='youtube'
-              ?this.youtube!.preview!(candidate,previewRoot,previewSignal)
+              ?this.youtube!.preview!(candidate,previewRoot,previewSignal,requireHd)
               :downloadDirectDocumentaryPreview(candidate,previewRoot,previewSignal));
           } catch(error){
             signal?.throwIfAborted();
-            if(error instanceof DocumentaryStorageUnavailableError||(error as NodeJS.ErrnoException)?.code==='ENOSPC')throw error;
+            if(error instanceof DocumentaryStorageUnavailableError||error instanceof DocumentaryYouTubeDefinitionError||(error as NodeJS.ErrnoException)?.code==='ENOSPC')throw error;
             // An unavailable seek/preview is not evidence against the footage.
             // Original download retains the same total scene budget and guards.
             recordDiagnosticEvent('warn','documentary.preview.unavailable',{projectId,sceneId,provider:candidate.provider,message:String(error).replace(/https?:\/\/\S+/g,'[source]').slice(0,250)});
@@ -1075,7 +1076,7 @@ export class DocumentaryProjectService {
           const downloads = join(this.materialRoot, "Downloads");
           await mkdir(downloads, { recursive: true });
           temporary = join(downloads, `youtube-${createHash("sha256").update(candidate.id).digest("hex")}.download`);
-          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, onDownloadProgress));
+          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, onDownloadProgress, requireHd));
           extension = ".mp4";
         } else if (candidate.provider === "pexels" || candidate.provider === "pixabay") {
           const asset = { provider: candidate.provider, id: candidate.id.replace(/^[^:]+:/, ""), mediaType: candidate.kind, query: candidate.query,

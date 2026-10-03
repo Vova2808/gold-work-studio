@@ -15,6 +15,13 @@ type Runner = (args: string[], destination: string, signal?: AbortSignal, onProg
 const maximumBytes = 750 * 1024 * 1024;
 const maximumDownloadMs = 15 * 60_000;
 
+export class DocumentaryYouTubeDefinitionError extends Error {}
+
+function requireHighDefinition(videos: Video[], id: string, required: boolean): void {
+  if (required && videos.find(video => video.id === id)?.contentDetails?.definition === "sd")
+    throw new DocumentaryYouTubeDefinitionError("YouTube помечает видео как SD. Для полноэкранного кадра нужен HD-исходник.");
+}
+
 async function downloadManifest(directory: string, name: string): Promise<string> {
   const lines = (await readFile(join(directory, name), "utf8")).trim().split(/\r?\n/);
   const file: unknown = JSON.parse(lines.at(-1)!);
@@ -99,13 +106,14 @@ export class DocumentaryYouTube {
     return ids.length ? youtubeDocumentaryCandidates(await this.api("videos", { part: "snippet,status,contentDetails", id: ids.join(",") }), query) : [];
   }
 
-  async download(candidate: DocumentaryCandidate, destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void): Promise<void> {
+  async download(candidate: DocumentaryCandidate, destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, requireHd = false): Promise<void> {
     signal?.throwIfAborted();
     const id = candidate.id.replace(/^youtube:/, "");
     if (candidate.provider !== "youtube" || !validId(id) || candidate.pageUrl !== `https://www.youtube.com/watch?v=${id}`) throw new Error("Некорректный источник YouTube");
     if (Date.now() < this.downloadBlockedUntil) throw new Error("Загрузка YouTube временно недоступна в этой сети. Сохранённые оригиналы можно использовать; следующая проверка соединения — через несколько минут.");
     const videos = await this.api("videos", { part: "snippet,status,contentDetails", id }, signal);
     if (!youtubeDocumentaryCandidates(videos, candidate.query).some(video => video.id === candidate.id)) throw new Error("YouTube больше не подтверждает публичное видео с лицензией Creative Commons; загрузка отменена");
+    requireHighDefinition(videos, id, requireHd);
     await ensureDocumentarySpace(dirname(destination), maximumBytes);
     const cookies = await this.store.resolveValidatedCookies();
     const proxyUrl = await this.store.proxyUrl?.();
@@ -138,15 +146,18 @@ export class DocumentaryYouTube {
 
   /** Low-resolution disjoint samples are kept outside the original/resume paths.
    * A successful preview is NOT a selected source or a semantic approval. */
-  async preview(candidate:DocumentaryCandidate,directory:string,signal?:AbortSignal):Promise<DocumentaryPreview> {
+  async preview(candidate:DocumentaryCandidate,directory:string,signal?:AbortSignal,requireHd=false):Promise<DocumentaryPreview> {
     signal?.throwIfAborted();
     const id=candidate.id.replace(/^youtube:/,'');
     if(candidate.provider!=='youtube'||!validId(id)||candidate.pageUrl!==`https://www.youtube.com/watch?v=${id}`)throw Error('Некорректный источник YouTube');
     const ranges=documentaryPreviewRanges(candidate.durationSeconds??0);
     if(!ranges.length)throw Error('Для пробной загрузки нужна длительность источника');
-    const cached=await readDocumentaryPreview(directory);if(cached)return cached;
+    const cached=await readDocumentaryPreview(directory);
+    if(cached&&(!requireHd||candidate.videoDefinition==='hd'))return cached;
     const videos=await this.api('videos',{part:'snippet,status,contentDetails',id},signal);
     if(!youtubeDocumentaryCandidates(videos,candidate.query).some(video=>video.id===candidate.id))throw Error('YouTube больше не подтверждает публичное видео с лицензией Creative Commons');
+    requireHighDefinition(videos,id,requireHd);
+    if(cached)return cached;
     await mkdir(directory,{recursive:true});
     await ensureDocumentarySpace(directory,32*1024*1024);
     const cookies=await this.store.resolveValidatedCookies(),proxyUrl=await this.store.proxyUrl?.();

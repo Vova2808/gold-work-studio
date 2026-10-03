@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
-import { DocumentaryDownloadWatchdog, DocumentaryYouTube, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
+import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
 
 test('a daily YouTube quota refusal stops fresh queries but preserves other sources',async()=>{
   let calls=0,local=0;
@@ -78,6 +78,20 @@ test("YouTube download rechecks licensing and blocks injected source URLs before
   assert.equal(calls, 0);
   await assert.rejects(youtube.download(candidate, "unused.mp4"), /больше не подтверждает/);
   assert.equal(calls, 1); assert.equal(launched, false);
+});
+
+test("a legacy cached YouTube candidate is rejected as SD before preview analysis or original download", async () => {
+  const source = { id: "abcdefghijk", snippet: { title: "Motorcycle archive" }, status: { license: "creativeCommon", privacyStatus: "public" }, contentDetails: { duration: "PT20S", definition: "sd" as const } };
+  const candidate = youtubeDocumentaryCandidates([{ ...source, contentDetails: { duration: "PT20S" } }], "motorcycle")[0]!;
+  let metadataCalls = 0, launched = false;
+  const youtube = new DocumentaryYouTube({ apiKey: async () => "test-key", resolveValidatedCookies: async () => undefined }, async () => {
+    metadataCalls++;
+    return Response.json({ items: [source] });
+  }, async () => { launched = true; });
+  await assert.rejects(youtube.preview(candidate, "unused-preview-directory", undefined, true), DocumentaryYouTubeDefinitionError);
+  await assert.rejects(youtube.download(candidate, "unused.mp4", undefined, undefined, true), DocumentaryYouTubeDefinitionError);
+  assert.equal(metadataCalls, 2);
+  assert.equal(launched, false);
 });
 
 test("legacy Creative Commons HTTP licenses remain recognizable; lookalikes and restrictive licenses are not approved", () => {
