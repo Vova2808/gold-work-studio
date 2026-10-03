@@ -40,6 +40,24 @@ async function setup(text = "The red tractor works in a field. Its wheels grip t
   return { root, projects, project };
 }
 
+test("a searched scene with no verified material keeps a visible failure after restart", async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scene = project.scenes[0]!;
+  const searcher = new DocumentarySearch();
+  searcher.search = async () => ({ candidates: [], sources: [] });
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, "workspace")), searcher, join(root, "Materials"),
+    { download: async () => { throw new Error("No download expected"); } }, () => {}, {
+      available: async () => true,
+      plan: async (_project, scenes) => new Map(scenes.map(item => [item.id, { ...item.documentary!.requirement, plannedBy: "semantic" as const }])),
+      inspect: async () => { throw new Error("No inspection expected"); },
+    });
+  const result = await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(result.failed, 1);
+  assert.equal(result.project.scenes[0]!.documentary!.verified, false);
+  assert.match((await projects.get(project.id))!.scenes[0]!.documentary!.autoError!, /Не найден материал с подтверждённым объектом/);
+});
+
 test("active list imagery requires direct item evidence and preserves the previous pending check", async () => {
   const {root,project}=await setup('Дождь пополняет запас воды.');
   const file=join(root,'rain-item.png');

@@ -885,8 +885,14 @@ export class DocumentaryProjectService {
           } finally { await batches.return(undefined); }
         }
         if (!accepted && upgradePhoto) skipped++;
-        else if (!accepted) failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: "no-results", message: "Не найден материал с подтверждённым объектом, качеством и правами. Проверьте кандидатов или уточните запрос."
-          + (sourceErrors.length ? ` Недоступные источники: ${sourceErrors.join("; ")}` : "") });
+        else if (!accepted) {
+          const message = "Не найден материал с подтверждённым объектом, качеством и правами. Проверьте кандидатов или уточните запрос."
+            + (sourceErrors.length ? ` Недоступные источники: ${sourceErrors.join("; ")}` : "");
+          failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: "no-results", message });
+          // A failed scene has been processed, not queued. Persist the result
+          // so gaps remain explainable after navigation or an app restart.
+          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: current.documentary?.autoError || message } }));
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const stopsRun = error instanceof DocumentaryMemoryUnavailableError || error instanceof DocumentaryStorageUnavailableError || (error as NodeJS.ErrnoException)?.code === "ENOSPC" || error instanceof AnyModelModelUnavailableError || error instanceof DocumentaryAnalysisError && error.kind === "unavailable";
