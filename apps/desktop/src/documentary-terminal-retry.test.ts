@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, mkdir, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -174,6 +174,24 @@ test('parallel terminal refusals share one pause; new submissions wait for a sin
   assert.equal(calls,3,'Only one request probes completion recovery');assert.equal(waits,32,'Other refusals join the same 8-second pause');
   releaseRecovery();assert.deepEqual(await Promise.all([first,second,third]),[{ok:true},{ok:true},{ok:true}]);
   assert.equal(calls,5);assert.ok(recoveryMaximum<=2,'Restore two concurrent calls instead of a new burst');
+});
+
+test('successful completions restore analysis throughput after a confirmed 503',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-503-ramp-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  let calls=0;
+  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    if(++calls===1)throw new AnyModelProviderResponseError('Service unavailable',503);
+    return '{"ok":true}';
+  }},()=>root,async()=>{},undefined,async()=>{});
+  const invoke=(id:number)=>Reflect.get(service,'complete').call(service,'project','throughput-check','Adaptive recovery',JSON.stringify({id}),[]);
+  assert.equal(Reflect.get(service,'analysisLimit'),4,'Start with a bounded cold burst');
+  assert.deepEqual(await invoke(1),{ok:true});
+  assert.equal(Reflect.get(service,'analysisLimit'),2,'A single recovery response opens only a small lane');
+  assert.equal((await Promise.all([invoke(2),invoke(3)])).length,2);
+  assert.equal(Reflect.get(service,'analysisLimit'),4);
+  assert.equal((await Promise.all([invoke(4),invoke(5),invoke(6),invoke(7)])).length,4);
+  assert.equal(Reflect.get(service,'analysisLimit'),8,'Healthy traffic regains normal throughput');
+  assert.equal(calls,8,'Only the documented 503 is retried');
 });
 
 test('a healthy catalogue cannot cause endless paid attempts when completions stay disconnected',async()=>{

@@ -340,7 +340,7 @@ export class DocumentaryProjectService {
   constructor(private readonly projects: Pick<ProjectService, "get" | "mutate"> & Partial<Pick<ProjectService, "list">>, private readonly storage: LocalProjectStorage,
     private readonly searcher: DocumentarySearch, private readonly materialRoot: string, private readonly stock: Pick<StockClient, "download"> & Partial<Pick<StockClient, "downloadToFile">>,
     private readonly publish: (progress: AutoStockProgress) => void = () => {},
-    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "resolveIdentities" | "prepareSource" | "refineQueries">>,
+    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "inspectPreviewForScene" | "resolveIdentities" | "prepareSource" | "refineQueries">>,
     private readonly library?: EffectLibrary,
     private readonly youtube?: Pick<DocumentaryYouTube, "download"> & Partial<Pick<DocumentaryYouTube, "downloadAvailable"|"preview">>) {}
 
@@ -1079,6 +1079,15 @@ export class DocumentaryProjectService {
             const screening=await this.intelligence.inspectPreview(projectId,documentaryPreviewKey(candidate),preview);
             recordDiagnosticEvent('info','documentary.preview.checked',{projectId,sceneId,provider:candidate.provider,rejected:screening.rejected,bytes:preview.bytes,downloadedBytes:preview.downloadedBytes});
             if(screening.rejected)throw new Error(screening.reason);
+            if(!commit&&candidate.provider==='youtube'&&(candidate.durationSeconds??0)>=600
+              &&(scene.documentary?.requirement.identities?.length||scene.documentary?.requirement.years.length)
+              &&this.intelligence.inspectPreviewForScene){
+              onPreview?.('Сверяю пробные кадры длинного видео с этой сценой до загрузки оригинала…');
+              const match=await this.intelligence.inspectPreviewForScene(project,scene,candidate,preview);
+              recordDiagnosticEvent('info','documentary.preview.scene-checked',{projectId,sceneId,provider:candidate.provider,
+                selectedIndex:match.selectedIndex,sourceDurationSeconds:candidate.durationSeconds});
+              if(match.selectedIndex<0)throw new Error(`В пробных кадрах длинного источника не подтверждён нужный предмет; проверяю другой источник. ${match.reason}`);
+            }
           }
         }
       }

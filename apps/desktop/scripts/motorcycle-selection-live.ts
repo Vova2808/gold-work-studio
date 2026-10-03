@@ -115,7 +115,7 @@ app.whenReady().then(async()=>{
     if(submissions>=maxSubmissions||Date.now()>deadline)throw new DocumentaryAnalysisError('Лимит небольшого живого теста достигнут; готовые ответы сохранены','unavailable');
   },join(workspace,'Materials/VideoCatalog'));
   // Attribute normal product analysis/usage to the scene without modifying requests.
-  for(const name of ['rankCandidates','inspectForSelection','inspect','prepareSource'] as const){
+  for(const name of ['rankCandidates','inspectForSelection','inspect','inspectPreviewForScene','prepareSource'] as const){
     const original=intelligence[name].bind(intelligence);
     (intelligence as any)[name]=(p:Project,s:Scene,...args:unknown[])=>context.run(s.id,()=> (original as any)(p,s,...args));
   }

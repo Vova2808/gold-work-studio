@@ -1911,8 +1911,9 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
     : 0;
   const currentAutoStockProgress = autoStockProgress?.projectId === draft.id ? autoStockProgress : null;
   const currentAutoStockResult = autoStockResult?.project.id === draft.id ? autoStockResult : null;
+  const confirmedStockScenes = isDocumentary ? includedMaterialScenes.filter(materialReady).length : selectedStockScenes;
   const autoStockPercent = currentAutoStockProgress && currentAutoStockProgress.total > 0
-    ? Math.round((currentAutoStockProgress.completed / currentAutoStockProgress.total) * 100)
+    ? Math.round((isDocumentary ? confirmedStockScenes : currentAutoStockProgress.completed) / currentAutoStockProgress.total * 100)
     : 0;
   const autoStockRunning = Boolean(currentAutoStockProgress && !["complete", "failed", "stopped"].includes(currentAutoStockProgress.phase) && busy);
   const autoStockFailed = currentAutoStockResult?.failed ?? 0;
@@ -2181,7 +2182,10 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
               <div className="project-stock-progress">
                 <div>
                   <span>{autoStockRunning ? currentAutoStockProgress?.message ?? "Ищу материалы…" : "Готовые сцены"}</span>
-                  <strong>{autoStockRunning ? `Проверено ${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length} · подтверждено ${selectedStockScenes}` : `${selectedStockScenes} из ${includedMaterialScenes.length}`}</strong>
+                  <strong>{autoStockRunning ? isDocumentary
+                    ? `Подтверждено ${confirmedStockScenes} из ${includedMaterialScenes.length} · обработано ${currentAutoStockProgress?.completed ?? 0}`
+                    : `Проверено ${currentAutoStockProgress?.completed ?? 0} из ${currentAutoStockProgress?.total ?? includedMaterialScenes.length} · подтверждено ${selectedStockScenes}`
+                    : `${confirmedStockScenes} из ${includedMaterialScenes.length}`}</strong>
                 </div>
                 <i><em style={{ width: `${autoStockRunning ? autoStockPercent : stockProgressPercent}%` }} /></i>
               </div>
