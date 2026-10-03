@@ -2,7 +2,7 @@ import type {DocumentaryRequirement} from '@gold-work/shared';
 import type {DocumentarySceneContext} from './documentary-scene-context.js';
 
 const normalized=(text:string)=>` ${text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
-const universal=/\b(?:inside|within|in) (?:every|any) [\p{L}]+|(?:внутри каждого|в каждом|в любом) [\p{L}]+/iu;
+const universal=/\b(?:inside|within|in) (?:every|any) [\p{L}]+|\b(?:inside|within|in) an? (?:[\p{L}-]+\s+){0,5}(?:engine|motor|mechanism|machine|turbine|vehicle|aircraft|ship)\b|(?:внутри каждого|в каждом|в любом) [\p{L}]+/iu;
 
 /** A short, explicit general explanation may use a schematic. This is only
  * permission to inspect a diagram, never permission to relabel real footage.

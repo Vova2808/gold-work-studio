@@ -4,6 +4,7 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext} from './docum
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
+import {documentaryRequiredVisiblePart} from './documentary-detail-evidence.js';
 import {documentarySceneContext,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -85,10 +86,22 @@ function documentaryQueryForKind(query: string, requirement: DocumentaryRequirem
 
 export function documentarySearchQueries(requirement: DocumentaryRequirement, kind?: "video" | "image", context?:DocumentarySceneContext): string[] {
   if(kind==='image'&&context&&documentaryGeneralDiagramScope(context,requirement.identities)){
-    // Keep the exact planner's detail queries first for a script-grounded
-    // schematic; adding the model prefix to all of them finds whole vehicles.
-    return [...new Set([...requirement.queries,...documentarySearchQueries(requirement,kind)]
-      .map(query=>documentaryQueryForKind(query,requirement,kind)).filter(Boolean))].slice(0,4);
+    // The original script explicitly explains a general mechanism. A full
+    // inherited model name plus several explanatory words often has no hits
+    // in archive search. Try one exact query, then a concise mechanism query;
+    // neither query approves a generic photo as the named model.
+    const names=(requirement.identities??[]).flatMap(identity=>[identity.name,...identity.aliases])
+      .filter(name=>name.trim().length>=3).sort((a,b)=>b.length-a.length);
+    const concise=requirement.queries.flatMap(query=>{
+      let general=query;
+      for(const name of names)general=general.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'giu'),' ');
+      general=general.replace(/\b(?:diagram|schematic|illustration|explanation)\b/giu,' ').replace(/\s+/g,' ').trim();
+      return general.split(' ').length>=2&&general!==query?[general]:[];
+    }).sort((a,b)=>a.split(' ').length-b.split(' ').length);
+    const part=documentaryRequiredVisiblePart(context.current.text);
+    const partQuery=part&&part!=='exposed-engine'?`${part.replace(/-/g,' ')} diagram`:undefined;
+    return [...new Set([requirement.queries[0],partQuery,...concise,...requirement.queries,...documentarySearchQueries(requirement,kind)]
+      .filter((query):query is string=>Boolean(query)).map(query=>documentaryQueryForKind(query,requirement,kind)).filter(Boolean))].slice(0,4);
   }
   if (kind) {
     // Video-only vocabulary needlessly excludes still evidence in full-text
@@ -761,7 +774,8 @@ export class DocumentaryProjectService {
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
             && !tried.has(documentaryCandidateKey(candidate)) && !blockedCatalogs.has(documentaryCandidateKey(candidate)) && (candidate.localPath || candidate.provider !== "youtube" || this.youtube?.downloadAvailable?.() !== false)
             && (candidate.kind !== "image" || !documentaryReuseIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined } }))
-            && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates), requirement.queries, requirement);
+            && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates),
+            kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries:requirement.queries, requirement);
           const earlyCandidates = quick ? documentaryMetadataShortlist(scene, candidates).slice(0, 1) : [];
           if (quick && !earlyCandidates.length) continue;
           await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, candidates, searchError: sourceErrors.join("\n") || undefined } }));

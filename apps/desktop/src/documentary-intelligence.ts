@@ -983,9 +983,14 @@ export class DocumentaryIntelligence {
     const activeItemPolicy=layout&&graphic.kind==='feature-list'&&graphic.activeIndex!==undefined
       ?' The active list item is a literal visual target: metadata must plausibly describe that phenomenon/object itself, not just its associated system or consequence. For rain, a generic canal, tugboat, dam or technical drawing without rain is not a promising source. Do not fill the ranking with broadly related candidates when none plausibly depicts the active item; return ids:[] so other search sources can be tried.':'';
     const legacyContextSystem=rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction;
-    const currentRankingSystem=legacyContextSystem+(generalDiagramScope?documentaryGeneralDiagramPolicy:'');
+    const previousCurrentRankingSystem=legacyContextSystem+(generalDiagramScope?documentaryGeneralDiagramPolicy:'');
+    const visiblePart=generalDiagramScope?documentaryRequiredVisiblePart(scene.narration):undefined;
+    const currentRankingSystem=previousCurrentRankingSystem+(visiblePart
+      ?` The narration explicitly requires a visible ${visiblePart}. A whole-object exterior with no visible internal mechanism is not a plausible still for this passage, even when its model name matches. Shortlist a schematic or cutaway only when its metadata plausibly names the required part; otherwise return ids:[] and let discovery continue. This is candidate ranking only, not final visual approval.`:'');
     const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:candidatesForRanking.map(candidate=>
       ({...candidate,id:shortKeys.find(item=>item.shortKey===candidate.id)!.key}))});
+    if(visiblePart)previousRankings.push({system:previousCurrentRankingSystem,input:rankingInput},
+      {system:previousCurrentRankingSystem,input:longRankingInput});
     if(generalDiagramScope){
       const {generalDiagramScope:_,...legacyLong}=JSON.parse(longRankingInput);
       previousRankings.push({system:legacyContextSystem,input:legacyContextInput},{system:legacyContextSystem,input:JSON.stringify(legacyLong)});

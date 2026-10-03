@@ -10,7 +10,7 @@ import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {DocumentaryIntelligence,DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {effectFfmpeg} from './effect-media.js';
-import {documentarySearchQueries} from './documentary-project-service.js';
+import {documentarySearchQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
 
 const identities=[{name:'Yamaha YZR-M1',aliases:['YZR-M1','Yamaha M1']}];
 const quote='Inside every engine, pistons and connecting rods are flying up and down thousands of times a minute. ';
@@ -45,6 +45,25 @@ test('general diagram scope comes only from a nearby explicit universal passage 
   assert.equal(documentaryGeneralDiagramScope(documentarySceneContext(project,scene),identities),undefined,'A Russian personal reference also ends the general passage');
 });
 
+test('an indefinite technical explanation can discover a concise licensed schematic without treating it as the named model',()=>{
+  const {project,scene}=fixture();
+  project.scenes[1]!.narration='Yamaha engineers described the torque effect. ';
+  scene.narration='Because in a high- revving Moto GP engine, the inertial torque from pistons and rods can be high. ';
+  const context=documentarySceneContext(project,scene);
+  assert.equal(documentaryGeneralDiagramScope(context,identities)?.scriptQuote,scene.narration);
+  scene.documentary!.requirement.queries=['Yamaha YZR-M1 engine high rpm diagram','Yamaha YZR-M1 crossplane crankshaft diagram'];
+  const queries=documentarySearchQueries(scene.documentary!.requirement,'image',context);
+  assert.deepEqual(queries.slice(0,3),['Yamaha YZR-M1 engine high rpm diagram','piston diagram','crossplane crankshaft']);
+  const schematic={id:'diagram',provider:'commons',kind:'image',title:'Crossplane.png',description:'3D model of a cross-plane crankshaft',
+    query:queries[2]!,rights:'licensed',match:'unverified',pageUrl:'https://commons.wikimedia.org/wiki/File:Crossplane.png',
+    downloadUrl:'https://upload.wikimedia.org/wikipedia/commons/example.png',concerns:[],author:'Example',license:'CC BY 4.0',
+    licenseUrl:'https://creativecommons.org/licenses/by/4.0/',attribution:'Example',retrievedAt:'2026-10-03T00:00:00Z'} as DocumentaryCandidate;
+  assert.deepEqual(selectDocumentaryCandidates([schematic],scene.documentary!.requirement.entities,new Set(),[],true,queries,scene.documentary!.requirement),[schematic]);
+  scene.narration='In a 2004 Yamaha YZR-M1 engine the crankshaft was different.';
+  assert.equal(documentaryGeneralDiagramScope(documentarySceneContext(project,scene),identities),undefined);
+  assert.ok(!documentarySearchQueries(scene.documentary!.requirement,'image',documentarySceneContext(project,scene)).includes('crossplane crankshaft'));
+});
+
 test('diagram evidence cannot approve a photograph, invented quotation, missing part, or claimed model identity',()=>{
   const {project,scene}=fixture(),context=documentarySceneContext(project,scene),valid=evidence();
   assert.ok(documentaryGeneralDiagramVerified(valid,context,identities));
@@ -72,7 +91,10 @@ test('actual inspection accepts an evidenced general schematic only; old unknown
     // Optional response hints follow checkpoint hashing; retain only the old
     // policy prefix, not those transport-only additions.
     const key=createHash('sha256').update(JSON.stringify([2,purpose,system.slice(0,system.indexOf(documentaryGeneralDiagramPolicy)),JSON.stringify(before),images])).digest('hex');
-    if(!images.length){legacyRanking=key;return JSON.stringify({ids:[before.candidates[0].id],reason:'Inspect the schematic, not an exact named model'});}
+    if(!images.length){
+      assert.match(system,/visible crankshaft/,'Ranking must prefer the narrated internal part before buying a full image review');
+      legacyRanking=key;return JSON.stringify({ids:[before.candidates[0].id],reason:'Inspect the schematic, not an exact named model'});
+    }
     legacyVisual=key;
     const result=evidence();result.generalDiagram.isDiagram=asDiagram;
     return JSON.stringify(result);
