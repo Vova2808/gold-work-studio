@@ -25,6 +25,14 @@ export interface DownloadedStockAsset {
   contentType: string;
 }
 
+/** The provider supplied a definite retry time for an API search. */
+export class StockApiRateLimitError extends Error {
+  constructor(message: string, readonly retryAfterMs: number) {
+    super(message);
+    this.name = "StockApiRateLimitError";
+  }
+}
+
 type StockFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type StockSleep = (milliseconds: number) => Promise<void>;
 
@@ -493,7 +501,7 @@ export class StockClient {
     const run = (async () => {
       await previous?.catch(() => {});
       const remaining = (this.apiCooldown.get(provider) ?? 0) - this.now();
-      if (remaining > 0) throw new Error(`${providerLabel(provider)}: исчерпан лимит запросов, повторите через ${Math.ceil(remaining / 1000)} сек.`);
+      if (remaining > 0) throw new StockApiRateLimitError(`${providerLabel(provider)}: исчерпан лимит запросов, повторите через ${Math.ceil(remaining / 1000)} сек.`, remaining);
       return this.requestJson(url, provider, headers);
     })();
     this.apiQueues.set(provider, run);
@@ -522,9 +530,10 @@ export class StockClient {
       if (response.status === 429) {
         const retryAfter = response.headers.get("retry-after");
         const requested = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - this.now();
-        this.apiCooldown.set(provider, this.now() + Math.max(1000, Number.isFinite(requested) ? requested : 60000));
+        const waitMs = Math.max(1000, Number.isFinite(requested) ? requested : 60000);
+        this.apiCooldown.set(provider, this.now() + waitMs);
         await response.body?.cancel();
-        throw this.httpError(provider, 429, retryAfter, "api", url);
+        throw new StockApiRateLimitError(this.httpError(provider, 429, retryAfter, "api", url).message, waitMs);
       }
       if (isRetryableStatus(response.status) && attempt < NETWORK_ATTEMPTS) {
         await this.sleep(retryDelay(attempt, response.headers.get("retry-after")));

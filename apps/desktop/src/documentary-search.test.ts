@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
+import {StockApiRateLimitError} from "./stock-client.js";
 import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
 
 test('a daily YouTube quota refusal stops fresh queries but preserves other sources',async()=>{
@@ -23,6 +24,22 @@ test('stock adapter 429 establishes the same shared cooldown as archive HTTP err
   await search.search({query:'motorcycle race',kind:'video',providers:['pixabay']});
   await search.search({query:'motorcycle engine',kind:'image',providers:['pixabay']});
   assert.equal(calls,1);
+});
+
+test('stock search resumes after the provider retry time instead of a fixed two-minute block',async()=>{
+  let calls=0;
+  const search=new DocumentarySearch({search:async()=>{
+    calls++;
+    if(calls===1)throw new StockApiRateLimitError('Pixabay: исчерпан лимит запросов, повторите через 0,1 сек.',100);
+    return {items:[]};
+  }} as never);
+  await search.search({query:'motorcycle race',kind:'video',providers:['pixabay']});
+  await search.search({query:'motorcycle engine',kind:'video',providers:['pixabay']});
+  assert.equal(calls,1,'scene searches during the stated cooldown do not hit Pixabay again');
+  await new Promise(resolve=>setTimeout(resolve,120));
+  const recovered=await search.search({query:'motorcycle track',kind:'video',providers:['pixabay']});
+  assert.equal(calls,2);
+  assert.equal(recovered.sources[0]?.error,undefined);
 });
 
 test("a growing documentary original survives three minutes, but a stalled transfer stops", () => {

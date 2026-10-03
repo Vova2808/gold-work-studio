@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DocumentaryCandidate, DocumentarySearchInput, DocumentarySearchResult } from "@gold-work/shared";
-import type { StockClient } from "./stock-client.js";
+import { StockApiRateLimitError, type StockClient } from "./stock-client.js";
 import { atomicWrite } from "./fs-utils.js";
 import type { DocumentaryYouTube } from "./documentary-youtube.js";
 import { documentaryCandidateKey } from "./documentary-reuse.js";
@@ -160,6 +160,7 @@ export class DocumentarySearch {
         // Adapters (YouTube/stock) do not go through json(). Respect their
         // refusals too, instead of retrying the same depleted service per scene.
         if (/quotaExceeded|dailyLimitExceeded|quota.*(?:per day|daily)|суточн.*квот/iu.test(message)) this.quotaBlocked.set(provider,Date.now()+3600000);
+        else if (error instanceof StockApiRateLimitError) this.cooldown.set(provider,Math.max(this.cooldown.get(provider)??0,Date.now()+error.retryAfterMs));
         else if (/\b429\b|исчерпан.*лимит/iu.test(message)) this.cooldown.set(provider,Date.now()+120000);
         throw error;
       } finally { active.delete(job); }

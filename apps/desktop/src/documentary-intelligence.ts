@@ -1004,6 +1004,11 @@ export class DocumentaryIntelligence {
     const source=scene.documentary?.selected;
     return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
       let review=await this.inspect(project,scene,progress);
+      // An older or inconsistent completed review can say "accepted" without
+      // current narrative evidence. Reusing its paid checkpoint is allowed;
+      // promoting it to a verified scene is not.
+      if(review.status==='accepted'&&!review.contextApproval)review={...review,status:'uncertain',annotations:[],
+        reason:'В сохранённом анализе не подтверждено соответствие предмета, эпохи и детали текущей сцене. Исходник сохранён; автоматическое одобрение не выдано.'};
       const part=documentaryRequiredVisiblePart(scene.narration);
       if(review.status==='accepted'&&part){
         progress('Проверяю видимые детали механизма без подсказки источника…');

@@ -9,6 +9,22 @@ import {DocumentaryIntelligence} from './documentary-intelligence.js';
 import {documentarySceneContext,documentaryContinuityInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
 import {effectFfmpeg} from './effect-media.js';
 
+test('a completed accepted review without current context approval cannot verify a scene',async()=>{
+  const scene={id:'s',order:0,narration:'The motorcycle feels smooth and stable.',
+    documentary:{requirement:{text:'The motorcycle feels smooth and stable.',entities:[],identities:[],queries:[],years:[]}}} as unknown as Scene;
+  const project={id:'p',scenes:[scene]} as Project;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    assert.fail('A saved review must not trigger a paid request');
+  }},()=>'.');
+  Object.assign(intelligence,{inspect:async()=>({status:'accepted',confidence:.92,reason:'Old result says accepted',
+    checkedAt:'now',sampleSeconds:[0],quality:'clear'})});
+  const result=await intelligence.inspectForSelection(project,scene);
+  assert.equal(result.review.status,'uncertain');
+  assert.equal(result.review.contextApproval,undefined);
+  assert.match(result.review.reason,/не подтверждено соответствие/);
+  assert.equal(result.usedNewAnalysis,false);
+});
+
 test('actual inspection retains original context, refuses a contradictory era and protects pre-context unknown payments',async()=>{
   const root=await mkdtemp(join(tmpdir(),'gws-continuity-')),imagePath=join(root,'fixture.png');
   await effectFfmpeg(['-y','-f','lavfi','-i','color=c=red:s=1280x720','-frames:v','1',imagePath]);

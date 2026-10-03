@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { StockAsset, StockProvider } from "@gold-work/shared";
-import { normalizeStockSearchInput, StockClient, type StockKeyStore } from "./stock-client.js";
+import { normalizeStockSearchInput, StockApiRateLimitError, StockClient, type StockKeyStore } from "./stock-client.js";
 import { StockStore, type StockSecretCodec } from "./stock-store.js";
 
 class StubKeys implements StockKeyStore {
@@ -315,7 +315,8 @@ test("stock errors do not expose API keys and explain rate limits", async () => 
   );
   await assert.rejects(
     client.search({ provider: "pexels", mediaType: "image", query: "nature" }),
-    (error: Error) => /лимит запросов.*60/.test(error.message) && !error.message.includes("do-not-leak")
+    (error: Error) => error instanceof StockApiRateLimitError && error.retryAfterMs === 60_000
+      && /лимит запросов.*60/.test(error.message) && !error.message.includes("do-not-leak")
   );
   assert.equal(calls, 1, "429 sets one shared cooldown rather than retrying every query");
   await assert.rejects(client.search({ provider: "pexels", mediaType: "video", query: "canal" }), /лимит запросов/);

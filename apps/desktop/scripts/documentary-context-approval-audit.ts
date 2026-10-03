@@ -28,9 +28,11 @@ for(const [index,scene] of migrated.entries()){
   if(original.documentary?.pinned)assert.equal(scene.documentary?.verified,original.documentary.verified);
 }
 const preservedVoices=(await Promise.all(project.scenes.filter(s=>s.audioPath).map(async s=>({number:s.order+1,exists:await stat(s.audioPath!).then(x=>x.size>0).catch(()=>false)}))));
-// Known legacy wrong-era approval and the last accepted general diagram.
+// Known legacy wrong-era approval and the last accepted general diagram by default.
 const samples=[];
-for(const number of [227,139]){
+const sampleNumbers=process.argv[4]?.split(',').map(Number)??[227,139];
+assert.ok(sampleNumbers.length>0&&sampleNumbers.length<=10&&sampleNumbers.every(n=>Number.isInteger(n)&&n>0&&n<=project.scenes.length));
+for(const number of sampleNumbers){
   const scene=project.scenes.find(s=>s.order+1===number);if(!scene)continue;
   let replay:Record<string,unknown>;
   try{
