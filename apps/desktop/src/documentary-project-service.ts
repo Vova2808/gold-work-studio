@@ -583,7 +583,7 @@ export class DocumentaryProjectService {
     const relatedSources=(scene:Scene,kind:'image'|'video')=>session.related(scene.documentary!.requirement,kind,query=>
       measureDocumentaryStage('search-related',{projectId,sceneId:scene.id},()=>this.searcher.search({query,kind,
         entities:documentarySearchSubjects(scene.documentary!.requirement),years:scene.documentary!.requirement.years,
-        providers:['commons','internet-archive','local','pexels','pixabay',...(kind==='video'&&this.youtube?['youtube' as const]:[])]})));
+        providers:['commons','internet-archive','local','pexels','pixabay',...(kind==='video'&&this.youtube?['youtube' as const]:[])]},true)));
     const selectScene = async (scene: Scene) => {
       if (this.stopRequested.has(projectId)) return;
       let project = (await this.projects.get(projectId,{omitCandidates:true}))!;
@@ -669,7 +669,7 @@ export class DocumentaryProjectService {
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>) => {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
-            const result = await measureDocumentaryStage("search", { projectId, sceneId: scene.id, providers }, () => this.searcher.search({ query, kind, providers, entities: searchSubjects, years: requirement.years }));
+            const result = await measureDocumentaryStage("search", { projectId, sceneId: scene.id, providers }, () => this.searcher.search({ query, kind, providers, entities: searchSubjects, years: requirement.years },true));
             for (const source of result.sources.filter(source => source.error)) {
               const message = `${source.provider}: ${source.error}`;
               if (!sourceErrors.includes(message)) sourceErrors.push(message);

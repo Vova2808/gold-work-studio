@@ -45,7 +45,10 @@ test("a searched scene with no verified material keeps a visible failure after r
   t.after(() => rm(root, { recursive: true, force: true }));
   const scene = project.scenes[0]!;
   const searcher = new DocumentarySearch();
-  searcher.search = async () => ({ candidates: [], sources: [] });
+  searcher.search = async (_input, licensedOnly) => {
+    assert.equal(licensedOnly, true, "Automatic selection must not fetch candidates with unverified rights");
+    return { candidates: [], sources: [] };
+  };
   const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, "workspace")), searcher, join(root, "Materials"),
     { download: async () => { throw new Error("No download expected"); } }, () => {}, {
       available: async () => true,

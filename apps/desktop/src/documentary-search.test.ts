@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
 import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
@@ -155,6 +158,42 @@ test("empty reusable archive search falls back to discovery without approving un
   assert.equal(queries.length, 2);
   assert.ok(!queries[1]!.includes("licenseurl:"));
   assert.equal(result.candidates[0]!.rights, "unknown");
+});
+
+test("automatic stock skips unlicensed archive fallback and LOC while manual search keeps both", async t => {
+  const cache = await mkdtemp(join(tmpdir(), "gws-licensed-search-"));
+  t.after(() => rm(cache, { recursive: true, force: true }));
+  let archiveSearches = 0, metadata = 0, loc = 0;
+  const search = new DocumentarySearch(undefined, async input => {
+    const url = new URL(String(input));
+    if (url.pathname.includes("advancedsearch")) {
+      archiveSearches++;
+      const licensed = url.searchParams.get("q")!.includes("licenseurl:");
+      const known = url.searchParams.get("q")!.includes("licensed-tractor");
+      return Response.json({ response: { docs: known && licensed
+        ? [{ identifier: "licensed-film", title: "Licensed tractor", licenseurl: "https://creativecommons.org/licenses/by/4.0/" }]
+        : licensed ? [] : [{ identifier: "unknown-film", title: "Unlicensed tractor" }] } });
+    }
+    if (url.pathname.includes("/metadata/")) {
+      metadata++;
+      return Response.json({ metadata: {}, files: [{ name: "tractor.mp4", size: 50000 }] });
+    }
+    loc++;
+    return Response.json({ results: [] });
+  }, cache);
+  const input = { query: "tractor", kind: "video" as const, providers: ["internet-archive" as const] };
+  assert.equal((await search.search(input)).candidates[0]!.rights, "unknown");
+  assert.equal(archiveSearches, 2);
+  assert.equal(metadata, 1);
+  assert.deepEqual((await search.search({ ...input, providers: ["internet-archive", "loc"] }, true)).candidates, []);
+  assert.equal(archiveSearches, 3, "Auto must use a separate rights-only cache key and skip the unlicensed second page");
+  assert.equal(metadata, 1, "Auto must not inspect unusable unknown-rights files");
+  assert.equal(loc, 0, "LOC currently returns only unknown-rights records in this adapter");
+  await search.search(input, true);
+  assert.equal(archiveSearches, 3, "The rights-only empty result is cached");
+  const approved = await search.search({ ...input, query: "licensed-tractor" }, true);
+  assert.equal(approved.candidates.length, 1);
+  assert.equal(approved.candidates[0]!.rights, "licensed");
 });
 
 const payload = { query: { pages: [{ pageid: 1, title: "File:SS United States 1952.jpg", imageinfo: [{ url: "https://upload.wikimedia.org/wikipedia/commons/a/ab/example.jpg",

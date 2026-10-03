@@ -111,7 +111,7 @@ export class DocumentarySearch {
     private readonly cachePath?: string, private readonly local: (query: string) => Promise<DocumentaryCandidate[]> = async () => [],
     private readonly youtube?: Pick<DocumentaryYouTube, "search">) {}
 
-  async search(input: DocumentarySearchInput): Promise<DocumentarySearchResult> {
+  async search(input: DocumentarySearchInput, licensedOnly = false): Promise<DocumentarySearchResult> {
     if (!input || typeof input.query !== "string" || input.query.trim().length < 2 || input.query.length > 240) throw new Error("Введите запрос от 2 до 240 символов");
     if (input.kind !== "image" && input.kind !== "video") throw new Error("Некорректный тип медиа");
     const providers = [...new Set<DocumentaryCandidate["provider"]>(input.providers ?? ["commons", "internet-archive", "loc", "local"])];
@@ -120,7 +120,7 @@ export class DocumentarySearch {
     // Independent adapters fail independently. At most one request per provider/key is in flight.
     await Promise.all(providers.map(async provider => {
       try {
-        const found = await this.cached(provider, provider === "commons" || provider === "internet-archive" || provider === "loc" ? documentaryExactQuery(input) : input.query.replace(/["“”]/g, "").trim(), input.kind);
+        const found = await this.cached(provider, provider === "commons" || provider === "internet-archive" || provider === "loc" ? documentaryExactQuery(input) : input.query.replace(/["“”]/g, "").trim(), input.kind, licensedOnly);
         const matching = found.filter(candidate => candidate.kind === input.kind);
         candidates.push(...matching); sources.push({ provider, count: matching.length });
       } catch (error) { sources.push({ provider, count: 0, error: error instanceof Error ? error.message : String(error) }); }
@@ -128,9 +128,13 @@ export class DocumentarySearch {
     return { candidates: rankDocumentaryCandidates(candidates, input), sources };
   }
 
-  private async cached(provider: string, query: string, kind: string): Promise<DocumentaryCandidate[]> {
+  private async cached(provider: string, query: string, kind: string, licensedOnly: boolean): Promise<DocumentaryCandidate[]> {
     if (provider === "local") return this.local(query);
-    const key = createHash("sha256").update(JSON.stringify([provider === "internet-archive" ? 5 : provider==='commons'?4:["pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, query, kind])).digest("hex");
+    // LOC currently exposes only unknown-rights candidates. Automatic
+    // selection cannot use them, but manual discovery still can.
+    if (licensedOnly && provider === "loc") return [];
+    const key = createHash("sha256").update(JSON.stringify([provider === "internet-archive" ? 5 : provider==='commons'?4:["pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, query, kind,
+      ...(licensedOnly && provider === "internet-archive" ? ["licensed-only"] : [])])).digest("hex");
     const existing = this.inFlight.get(key); if (existing) return existing;
     const work = (async () => {
       const file = this.cachePath ? join(this.cachePath, `${key}.json`) : undefined;
@@ -148,7 +152,7 @@ export class DocumentarySearch {
       while(active.size>=4)await Promise.race([...active].map(job=>job.catch(()=>[])));
       if ((this.quotaBlocked.get(provider)??0)>Date.now()) throw new Error("Источник исчерпал суточную квоту поиска. Проверка доступности — через час; сохранённые результаты доступны.");
       if ((this.cooldown.get(provider) ?? 0) > Date.now()) throw new Error("Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.");
-      const job=this.providerSearch(provider,query,kind);active.add(job);
+      const job=this.providerSearch(provider,query,kind,licensedOnly);active.add(job);
       let result:DocumentaryCandidate[];
       try { result=await job; }
       catch (error) {
@@ -178,7 +182,7 @@ export class DocumentarySearch {
     return payload;
   }
 
-  private async providerSearch(provider: string, query: string, kind: string): Promise<DocumentaryCandidate[]> {
+  private async providerSearch(provider: string, query: string, kind: string, licensedOnly: boolean): Promise<DocumentaryCandidate[]> {
     if (provider === "youtube") {
       if (kind !== "video") return [];
       if (!this.youtube) throw new Error("Источник YouTube недоступен");
@@ -250,7 +254,7 @@ export class DocumentarySearch {
       for (const field of ["identifier", "title", "description", "creator", "licenseurl"]) url.searchParams.append("fl[]", field);
       url.searchParams.set("rows", "6"); url.searchParams.set("output", "json");
       let payload = record(await this.json(url, provider));
-      if (!list(record(payload.response).docs).length) {
+      if (!licensedOnly && !list(record(payload.response).docs).length) {
         // Keep manual discovery available when the index has no rights declaration.
         // Individual metadata is still checked below; unknown rights stay unknown.
         url.searchParams.set("q", topicQuery);
@@ -283,7 +287,7 @@ export class DocumentarySearch {
         errors.push(...results.flatMap(result => result.status === "rejected" ? [result.reason] : []));
       }
       if (!candidates.length && errors.length) throw errors[0];
-      return candidates;
+      return licensedOnly ? candidates.filter(candidate => candidate.rights !== "unknown") : candidates;
     }
     return [];
   }
