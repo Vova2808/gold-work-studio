@@ -4,12 +4,18 @@ directories:
   output: ../../release
 files:
   - dist/**/*
+  - '!dist/qa/**'
   - package.json
 asar: true
+asarUnpack:
+  - node_modules/ffmpeg-static/**
+  - node_modules/onnxruntime-node/**
+  # Remotion bundler и compositor запускают дочерние процессы и читают entry с диска.
+  - node_modules/@remotion/**
+  - node_modules/@gold-work/remotion-video/**
 win:
   target:
     - target: portable
       arch:
         - x64
 artifactName: Gold-Work-Studio-${version}-portable.${ext}
-

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import type {Project} from '@gold-work/shared';
+import {planDocumentaryMontage} from '../src/documentary-montage.js';
+import {planDocumentaryComparisons} from '../src/documentary-comparison.js';
+const registry='C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json',raw=await readFile(registry,'utf8');
+const p=(JSON.parse(raw) as Project[]).find(p=>p.id==='project_mukba0q1_0cubga6')!;
+const scenes=planDocumentaryMontage({...p,scenes:planDocumentaryComparisons(p)},false,true);
+const media=(p:Project)=>p.scenes.map(s=>[s.id,s.narration,s.audioPath,s.imagePath,s.videoPath,s.documentary?.verified,s.documentary?.selected,s.documentary?.requirement,s.documentary?.timing]);
+assert.deepEqual(media({...p,scenes}),media(p));
+for(const scene of p.scenes)if(scene.documentary?.pinned)assert.deepEqual(scenes.find(s=>s.id===scene.id),scene);
+assert.equal(await readFile(registry,'utf8'),raw);
+const count=(scenes:Project['scenes'])=>scenes.reduce((counts,s)=>{const k=s.documentary?.motionGraphic?.enabled?s.documentary.motionGraphic.kind:s.documentary?.template??'full';counts[k]=(counts[k]??0)+1;return counts;},{} as Record<string,number>);
+const changed=scenes.flatMap((s,i)=>JSON.stringify(s.documentary)===JSON.stringify(p.scenes[i]!.documentary)?[]:[{number:s.order+1,before:p.scenes[i]!.documentary?.template,after:s.documentary?.template,graphic:s.documentary?.motionGraphic?.kind}]);
+const report={before:count(p.scenes),after:count(scenes),changed:changed.length,examples:changed,mediaAndVoicesPreserved:true,paidRequests:0};
+const out=resolve('captures/montage-speed-20260927/new-production');await writeFile(join(out,'refresh-plan-check.json'),JSON.stringify(report,null,2));
+console.log(JSON.stringify({...report,examples:changed.slice(0,8)}));

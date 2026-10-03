@@ -1,0 +1,21 @@
+import assert from "node:assert/strict";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { Project } from "@gold-work/shared";
+import { buildDocumentaryTimeline } from "@gold-work/remotion-video";
+import { effectFfmpeg, probeEffectMedia } from "../src/effect-media.js";
+
+const id = process.argv[2]; assert.ok(id?.startsWith("project_"));
+const project: Project = JSON.parse(await readFile("C:/Users/rosup/AppData/Roaming/@gold-work/desktop/projects.json", "utf8")).find((p: Project) => p.id === id);
+assert.ok(project.outputPath && project.status === "complete");
+const out = resolve(`captures/review-${id}/final`); await mkdir(out, { recursive: true });
+const timeline = buildDocumentaryTimeline(project), expected = timeline.durationInFrames / timeline.fps;
+const media = await probeEffectMedia(project.outputPath);
+assert.ok(media.hasAudio && Math.abs(media.durationSeconds - expected) < .08);
+const report = await effectFfmpeg(["-xerror", "-i", project.outputPath, "-vf", "scale=320:-2,blackdetect=d=0.8:pix_th=0.02", "-af", "volumedetect,silencedetect=noise=-50dB:d=2", "-f", "null", "-"], undefined, false, 100000);
+const black = [...report.matchAll(/black_start:([\d.]+) black_end:([\d.]+) black_duration:([\d.]+)/g)].map(match => ({ start: Number(match[1]), end: Number(match[2]), seconds: Number(match[3]) }));
+const silenceEnds = [...report.matchAll(/silence_end:\s*([\d.]+)\s*\| silence_duration:\s*([\d.]+)/g)].map(match => ({ end: Number(match[1]), seconds: Number(match[2]) }));
+const peakDb = Number(/max_volume:\s*(-?[\d.]+) dB/.exec(report)?.[1]), meanDb = Number(/mean_volume:\s*(-?[\d.]+) dB/.exec(report)?.[1]);
+assert.ok(Number.isFinite(peakDb) && peakDb > -35, "Final must contain an audible soundtrack");
+const result = { at: new Date().toISOString(), outputPath: project.outputPath, bytes: (await stat(project.outputPath)).size, expected, media, decodedEntireFile: true, peakDb, meanDb, black, silenceEnds, narrationMatchesReadyScript: project.scenes.map(scene => scene.narration).join("").trim() === project.videoBrief?.readyScript?.trim() };
+await writeFile(join(out, "media-audit.json"), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

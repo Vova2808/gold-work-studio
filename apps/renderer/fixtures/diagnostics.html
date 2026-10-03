@@ -1,0 +1,22 @@
+<!doctype html><html lang="ru"><head><meta charset="UTF-8"><title>Diagnostics UI fixture — mock providers</title></head><body><div id="root"></div>
+<script type="module">
+// Dev-only fixture; production build has index.html as its only HTML entry.
+import { fallbackApi as api } from '/src/fallback-api.ts';
+if(window.goldWork) throw new Error('Real providers forbidden in fixture');
+window.healthCalls=[]; window.qaApi=api;
+const listeners=new Set(); let seq=0;
+api.onLogEntry=fn=>{listeners.add(fn);return()=>listeners.delete(fn)};
+api.writeLog=async(level,message,details)=>{const e={id:'qa-log-'+seq++,timestamp:new Date().toISOString(),level,message,details};listeners.forEach(fn=>fn(e))};
+api.getAnyModelSettings=async()=>({configured:true});
+api.testAnyModelConnection=()=>{healthCalls.push('anymodel');return new Promise(resolve=>window.resolveHealth=resolve)};
+api.getVoicerSettings=async()=>({configured:true});
+api.testVoicerConnection=async()=>({ok:false,message:'fetch failed · ECONNRESET · проверьте маршрут VPN'});
+api.getGoogleSettings=async()=>({configured:false});
+api.getYouTubeSettings=async()=>({configured:false});
+api.getStockSettings=async()=>({pexelsConfigured:true,pixabayConfigured:true,providers:{}});
+api.testStockConnection=async p=>({ok:p==='pixabay',message:p==='pixabay'?'API доступен':'HTTP 429 · лимит запросов'});
+api.listFlowAccounts=async()=>[{id:'qa',enabled:true,status:'ready'}];
+api.refreshAllFlowAccounts=async()=>[{id:'qa',enabled:true,status:'ready'}];
+window.goldWork=api;
+await import('/src/main.tsx');
+</script></body></html>

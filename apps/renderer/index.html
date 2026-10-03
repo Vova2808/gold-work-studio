@@ -7,8 +7,15 @@
     <title>Gold Work Studio</title>
   </head>
   <body>
-    <div id="root"></div>
+    <style>
+      body { margin: 0; background: #0b0c09; }
+      .boot-placeholder { position: fixed; inset: 0; display: grid; place-content: center; gap: 22px; color: #dbc477; font: 12px system-ui; text-align: center; }
+      .boot-placeholder b { font-size: 32px; letter-spacing: 4px; }
+      .boot-placeholder span { animation: boot-breathe 1.5s ease-in-out infinite alternate; }
+      @keyframes boot-breathe { to { opacity: .4; } }
+      @media (prefers-reduced-motion: reduce) { .boot-placeholder span { animation: none; } }
+    </style>
+    <div id="root"><div class="boot-placeholder" role="status"><b>GW</b><span>Открываем Gold Work Studio…</span></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

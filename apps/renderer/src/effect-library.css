@@ -1,0 +1,30 @@
+.effect-library { padding: 24px; min-width: 0; }
+.effect-library-header { display: flex; align-items: center; gap: 12px; }
+.effect-library-header > div { flex: 1; min-width: 0; }
+.effect-library h1 { margin: 0; }
+.effect-library p, .effect-library small { overflow-wrap: anywhere; color: var(--text-muted, #abb0bc); }
+.effect-library-header p { margin: 8px 0; font-size: 12px; }
+.effect-library button, .effect-library select, .effect-library input:not([type=checkbox]):not([type=range]) { border: 1px solid #383b42; border-radius: 7px; background: #202229; color: #eee; padding: 9px 12px; }
+.effect-library button { cursor: pointer; }
+.effect-library button:disabled { opacity: .5; cursor: default; }
+.effect-library button.primary-button { background: #b58c42; color: #111; }
+.effect-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0; }
+.effect-filters input { flex: 1; min-width: 170px; }
+.effect-library-body { display: flex; align-items: flex-start; gap: 20px; }
+.effect-grid { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 12px; align-content: start; }
+.effect-library .effect-card { text-align: left; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.effect-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.effect-card img, .effect-placeholder { width: 100%; height: 105px; object-fit: contain; background: #121418; border-radius: 4px; }
+.effect-placeholder { display: grid; place-items: center; font-size: 28px; color: #81b5c9; }
+.effect-library .effect-card.selected { border: 2px solid #d9ae58; padding: 7px; background: #342c1e; }
+.effect-inspector { width: 325px; flex: 0 0 325px; background: #191b21; border: 1px solid #393b44; border-radius: 10px; padding: 16px; position: sticky; top: 0; max-height: calc(100vh - 100px); overflow-y: auto; }
+.effect-inspector h2 { font-size: 17px; overflow-wrap: anywhere; }
+.effect-inspector label { display: block; margin: 12px 0; font-size: 13px; }
+.effect-inspector label input:not([type=checkbox]), .effect-inspector select { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; }
+.effect-inspector video, .effect-inspector > img, .effect-inspector audio { width: 100%; max-height: 220px; object-fit: contain; background: #0d0f12; }
+.effect-inspector > button { width: 100%; margin-top: 12px; }
+.effect-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.effect-library .effect-error { color: #f39791; }
+.effect-import { border: 1px solid #45424c; border-radius: 8px; padding: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.effect-import small, .effect-import details { width: 100%; }
+@media (max-width: 1050px) { .effect-library-body { flex-direction: column-reverse; } .effect-inspector { width: 100%; flex-basis: auto; box-sizing: border-box; position: static; } .effect-grid { width: 100%; } }

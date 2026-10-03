@@ -1,0 +1,41 @@
+.startup-health-toast {
+  width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 56px); overflow: auto;
+  padding: 28px; color: #eeeadd; background: radial-gradient(ellipse at 50% 0, #272317, #10110f 65%);
+  border: 1px solid #51472c; border-radius: 20px; box-shadow: 0 30px 120px #000a;
+}
+.startup-health-toast[open] { animation: studio-appear 240ms ease-out; }
+.startup-health-toast::backdrop { background: #050605bd; backdrop-filter: blur(9px); }
+.startup-health-toast > header { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.startup-health-toast h2 { font-size: 25px; margin: 8px 0; letter-spacing: -.6px; }
+.startup-health-toast header small { color: #c5aa61; font-size: 9px; letter-spacing: 1.6px; }
+.startup-health-toast header p { font-size: 12px; color: #b8b6ab; margin: 0 0 18px; }
+.startup-brand { position: relative; width: 76px; height: 76px; margin: 0 auto 24px; display: grid; place-items: center; }
+.startup-brand span { display: grid; place-items: center; width: 48px; height: 48px; background: linear-gradient(135deg,#ffe89e,#cda73e); color: #171305; font-size: 20px; font-weight: 900; border-radius: 14px; box-shadow: 0 0 34px #d0ad3533; }
+.startup-brand i { position: absolute; inset: 0; border: 1px solid #b49a424d; border-top-color: #edd585; border-radius: 25px; animation: studio-orbit 6s linear infinite; pointer-events: none; }
+.startup-brand i:last-child { inset: -7px; border-top-color: transparent; border-bottom-color: #a6cdb277; animation-direction: reverse; animation-duration: 10s; }
+.startup-health-toast:not(.startup-launch) .startup-brand { display: none; }
+.startup-progress { height: 4px; overflow: hidden; border-radius: 5px; background: #2d2e25; }
+.startup-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#a48a36,#f4d773); transition: width 350ms ease; }
+.startup-progress-caption { text-align: right; font-size: 10px; color: #a9a18a; margin: 8px 0 14px; }
+.startup-health-list { display: grid; gap: 5px; }
+.startup-health-row { display: grid; grid-template-columns: 18px 126px minmax(0,1fr); gap: 10px; align-items: center; padding: 9px 10px; border: 1px solid #ffffff08; border-radius: 8px; background: #ffffff03; transition: background 200ms; }
+.startup-health-row > span { font-size: 11px; font-weight: 600; }
+.startup-health-row > small { font-size: 10px; color: #aeafa5; overflow-wrap: anywhere; line-height: 1.5; }
+.startup-health-row i { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: #3b3e34; color: #bfc0b5; font-size: 10px; font-style: normal; }
+.startup-health-row.ok i { background: #28593d; color: #9de3b5; }
+.startup-health-row.error i { background: #633534; color: #ffc2b8; }
+.startup-health-row.error { background: #842c1b12; }
+.startup-health-row.warning i { background: #856528; }
+.startup-health-row.checking i { background: transparent; border: 2px solid #a9954933; border-top-color: #e5c666; animation: studio-orbit 1s linear infinite; }
+.startup-health-toast .startup-note { font-size: 10px; line-height: 1.6; color: #929689; margin: 15px 0; }
+.startup-health-toast footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.startup-health-toast footer button { min-height: 36px; font-size: 11px; }
+.startup-health-toast .secondary-button { padding: 8px 12px; border: 1px solid #544c36; border-radius: 8px; background: #25241c; color: #e1d6b5; cursor: pointer; }
+.startup-health-toast .secondary-button:hover:not(:disabled) { border-color: #b09a55; background: #343023; }
+.startup-health-toast .secondary-button:disabled { opacity: .45; cursor: default; }
+.startup-restore-hint { display: block; text-align: center; font-size: 10px; margin-top: 14px; color: #929689; }
+@keyframes studio-orbit { to { transform: rotate(360deg); } }
+@keyframes studio-appear { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+@media (max-height: 780px) { .startup-brand { width: 52px; height: 52px; margin-bottom: 15px; } .startup-health-toast { padding: 20px; } .startup-health-row { padding: 6px 9px; } }
+@media (max-width: 520px) { .startup-health-row { grid-template-columns: 18px minmax(0,1fr); } .startup-health-row small { grid-column: 2; } .startup-health-toast h2 { font-size: 21px; } }
+@media (prefers-reduced-motion: reduce) { .startup-health-toast[open], .startup-brand i, .startup-health-row.checking i { animation: none; } .startup-progress span, .startup-health-row { transition: none; } }

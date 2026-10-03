@@ -15,6 +15,8 @@ workspace/
 *.p12
 *.pfx
 captures/
+apps/desktop/tools/yt-dlp-*/
+/workspace-data/
 uploads/
 *.sqlite
 *.sqlite3
@@ -24,3 +26,12 @@ Thumbs.db
 .idea/
 .vscode/
 
+
+# Локальные референсные проекты — не для git
+2 софта*/
+
+# Локальные настройки агента и побочные результаты компиляции TypeScript.
+.codex/
+*.tsbuildinfo
+/apps/renderer/src/*.js
+/apps/renderer/vite.config.js

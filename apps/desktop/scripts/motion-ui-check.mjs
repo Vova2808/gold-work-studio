@@ -1,0 +1,107 @@
+import assert from 'node:assert/strict';
+import {app,BrowserWindow} from 'electron';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+app.whenReady().then(async()=>{
+  const win=new BrowserWindow({width:1600,height:1050,show:false,webPreferences:{contextIsolation:true,sandbox:true,offscreen:true,backgroundThrottling:false,partition:'motion-check-'+Date.now()}});
+  const errors=[];win.webContents.on('console-message',(_e,level,message)=>{if(level>=3)errors.push(message);});
+  const evaluate=s=>win.webContents.executeJavaScript(`(async()=>{try{${s}}catch(e){throw new Error(${JSON.stringify('UI check: ')}+e.message)}})()`,true).catch(e=>{throw new Error(`${s.slice(0,160)}\n${errors.slice(-4).join('\n')}\n${e.message}`);});
+  const pause=()=>new Promise(r=>setTimeout(r,150));
+  const until=async s=>{for(let i=0;i<100;i++){if(await evaluate(`return Boolean(${s})`))return;await pause();}throw Error('UI timeout: '+s);};
+  const click=async text=>{await evaluate(`const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e)throw Error('No button '+${JSON.stringify(text)});e.click();`);await pause();};
+  const set=async(selector,value)=>{await evaluate(`const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw Error('Missing input');const proto=e.tagName==='SELECT'?HTMLSelectElement.prototype:e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));`);await pause();};
+  await win.loadURL('http://127.0.0.1:5174/fixtures/documentary-editing.html');
+  await until('typeof qaProject==="function"&&document.querySelector("[data-nav-key=projects]")');
+  await evaluate('document.querySelectorAll("dialog").forEach(e=>e.close());document.querySelector("[data-nav-key=projects]").click();');
+  await until('document.querySelector(".projects-table-row")');await evaluate('document.querySelector(".projects-table-row").click();');
+  await click('Таймлайн');await until('document.querySelector(".motion-inspector select")');
+  if(process.argv.includes('--editorial')){
+    const root=resolve('captures/vidrush-reference-20260928/ui');await mkdir(root,{recursive:true});
+    await set('[aria-label="Motion-графика"]','subject-card');await set('[aria-label="Текст motion-графики"]','MASAO FURUSAWA');
+    await set('[aria-label="Фон композиции"]','spotlight');await set('[aria-label="Стиль композиции"]','collage');await click('Применить');
+    let saved=await evaluate('return (await qaProject()).scenes[0].documentary.motionGraphic');
+    assert.equal(saved.kind,'subject-card');assert.equal(saved.variant,'collage');assert.equal(saved.isolateSubject,true);
+    await writeFile(join(root,'subject-editor.png'),(await win.webContents.capturePage()).toPNG());
+    await set('[aria-label="Motion-графика"]','quote');await set('[aria-label="Режим выделения"]','phrase');await set('[aria-label="Текст motion-графики"]','Это реальная цитата из сценария.');await set('[aria-label="Выделяемая фраза"]','реальная цитата');await click('Применить');
+    saved=await evaluate('return (await qaProject()).scenes[0].documentary.motionGraphic');assert.equal(saved.highlight,'реальная цитата');
+    await set('[aria-label="Режим выделения"]','speech');await set('[aria-label="Цвет акцента"]','#9a9cff');await click('Применить');
+    saved=await evaluate('return (await qaProject()).scenes[0].documentary.motionGraphic');assert.equal(saved.quoteMode,'speech');assert.equal(saved.accentColor,'#9a9cff');
+    await set('[aria-label="Motion-графика"]','bar-chart');await set('[aria-label="Текст карточки 1"]','Yamaha');await set('[aria-label="Текст карточки 2"]','Honda');await set('[aria-label="Значение карточки 1"]','226.7 hp');await set('[aria-label="Значение карточки 2"]','238.6 hp');await click('Применить');
+    await evaluate('document.querySelector("[data-nav-key=projects]").click();');await pause();await evaluate('document.querySelector(".projects-table-row").click();');await pause();
+    if(await evaluate('return [...document.querySelectorAll("button")].some(e=>e.textContent.trim()==="Таймлайн")'))await click('Таймлайн');
+    await until('document.querySelector(".motion-inspector select")');assert.equal(await evaluate('return document.querySelector(\'[aria-label="Текст карточки 2"]\').value'),'Honda');
+    assert.equal(await evaluate('return document.querySelector(\'[aria-label="Значение карточки 2"]\').value'),'238.6 hp');
+    await writeFile(join(root,'chart-editor.png'),(await win.webContents.capturePage()).toPNG());
+    assert.equal(errors.filter(e=>/Uncaught|Maximum update|Too many re-renders/.test(e)).length,0,errors.join('\n'));
+    await writeFile(join(root,'result.json'),JSON.stringify({checks:['subject variant and cutout','quote highlight','chart labels','save/reopen','no render crash'],errors},null,2));
+    win.destroy();console.log('PASS editorial controls/save/reopen');return;
+  }
+  if(process.argv.includes('--rich')){
+    await set('[aria-label="Motion-графика"]','explainer');
+    await until('document.querySelector(\'[aria-label="Текст карточки 1"]\')');
+    await set('[aria-label="Текст карточки 1"]','Двигатель');await set('[aria-label="Текст карточки 2"]','Колёса');
+    await click('Добавить карточку');await set('[aria-label="Текст карточки 3"]','Кузов');
+    await set('[aria-label="Схема разбора"]','steps');await click('Применить');
+    let saved=await evaluate('return (await qaProject()).scenes[0].documentary.motionGraphic');
+    assert.equal(saved.kind,'explainer');assert.equal(saved.boardLayout,'steps');assert.deepEqual(saved.cards.map(c=>c.label),['Двигатель','Колёса','Кузов']);
+    await evaluate('document.querySelector("[data-nav-key=projects]").click();');await pause();
+    await evaluate('document.querySelector(".projects-table-row").click();');await pause();
+    if(await evaluate('return [...document.querySelectorAll("button")].some(e=>e.textContent.trim()==="Таймлайн")'))await click('Таймлайн');
+    await until('document.querySelector(".motion-inspector select")');
+    assert.equal(await evaluate('return document.querySelector(\'[aria-label="Текст карточки 2"]\').value'),'Колёса');
+    const root=resolve('captures/montage-rich-20260928/ui');await mkdir(root,{recursive:true});
+    await writeFile(join(root,'explainer-editor.png'),(await win.webContents.capturePage()).toPNG());
+    await set('[aria-label="Motion-графика"]','annotations');await set('[aria-label="Подпись детали 1"]','Колесо');
+    await set('[aria-label="Выноска 1 точка 1 x"]','33');await click('Добавить положение');await set('[aria-label="Выноска 1 точка 2 x"]','44');
+    await click('Применить');saved=await evaluate('return (await qaProject()).scenes[0].documentary.motionGraphic');
+    assert.equal(saved.annotations[0].points.length,2);assert.equal(saved.annotations[0].points[1].x,44);assert.equal(saved.origin,'manual');
+    await writeFile(join(root,'annotations-editor.png'),(await win.webContents.capturePage()).toPNG());
+    assert.equal(errors.filter(e=>/Uncaught|Maximum update|Too many re-renders/.test(e)).length,0,errors.join('\n'));
+    await writeFile(join(root,'result.json'),JSON.stringify({checks:['edit cards','choose composition','save/reopen','edit annotation trajectory','save points','no render crash'],saved,errors},null,2));
+    win.destroy();console.log('PASS explainer and annotations editor');return;
+  }
+  if(process.argv.includes('--panels')){
+    await set('[aria-label="Motion-графика"]','feature-list');
+    // Exercise the real editor controls and persistence without provider calls.
+    await set('[aria-label="Композиция списка"]','panels');
+    for(let i=1;i<=3;i++)await set(`[aria-label="Подпись панели ${i}"]`,['Ворота','Вода','Суда'][i-1]);
+    await set('[aria-label="Композиция списка"]','list');
+    await set('[aria-label="Выделенный пункт"]','1');
+    await set('[aria-label="Композиция списка"]','panels');
+    assert.equal(await evaluate(`return document.querySelector('[aria-label="Подпись панели 2"]').value`),'Вода');
+    await click('Применить');
+    const saved=await evaluate('return (await qaProject()).scenes.find(s=>s.documentary.motionGraphic)?.documentary.motionGraphic');
+    assert.equal(saved.presentation,'panels');assert.equal(saved.activeIndex,1);assert.deepEqual(saved.panels.map(p=>p.label),['Ворота','Вода','Суда']);
+    assert.equal(saved.origin,'manual');assert.equal(saved.sequenceId,undefined);
+    await evaluate('document.querySelector("[data-nav-key=projects]").click();');await pause();
+    await evaluate('document.querySelector(".projects-table-row").click();');await pause();
+    if(await evaluate('return [...document.querySelectorAll("button")].some(e=>e.textContent.trim()==="Таймлайн")'))await click('Таймлайн');
+    await until(`document.querySelector('[aria-label="Подпись панели 2"]')`);
+    assert.equal(await evaluate(`return document.querySelector('[aria-label="Подпись панели 2"]').value`),'Вода');
+    assert.equal(errors.filter(e=>/Uncaught|Maximum update|Too many re-renders/.test(e)).length,0,errors.join('\n'));
+    const root=resolve('captures/stock-release-20260927/ui');await mkdir(root,{recursive:true});
+    await writeFile(join(root,'panels-editor.png'),(await win.webContents.capturePage()).toPNG());
+    await writeFile(join(root,'result.json'),JSON.stringify({saved,checks:['three panels','edit labels','switch composition','choose focus','save/reopen','no render crash'],errors},null,2));
+    win.destroy();console.log('PASS focus panels editor save/reopen');return;
+  }
+  await set('[aria-label="Motion-графика"]','map-locator');
+  await set('[aria-label="Место: поиск"]','Денвер');
+  await until('document.querySelector(".motion-place-results button")');await evaluate('document.querySelector(".motion-place-results button").click();');await pause();
+  await click('Загрузить спутниковый снимок');
+  await until('document.querySelector(".motion-inspector").textContent.includes("Спутниковый снимок сохранён")');
+  const root=resolve('captures/motion-ui-20260926');await mkdir(root,{recursive:true});
+  await writeFile(join(root,'map-editor.png'),(await win.webContents.capturePage()).toPNG());
+  await click('Применить');
+  const saved=await evaluate('return (await qaProject()).scenes.find(s=>s.documentary.motionGraphic)?.documentary.motionGraphic');
+  assert.equal(saved.kind,'map-locator');assert.equal(saved.place.name,'Денвер');assert.ok(saved.place.latitude>39);
+  assert.equal(saved.detail.kind,'satellite');assert.equal(saved.detail.radiusKm,35);
+  // Re-open the editor from the saved project, not only React's unsaved draft.
+  await evaluate('document.querySelector("[data-nav-key=projects]").click();');await pause();
+  await evaluate('document.querySelector(".projects-table-row").click();');await pause();
+  if(await evaluate('return [...document.querySelectorAll("button")].some(e=>e.textContent.trim()==="Таймлайн")'))await click('Таймлайн');
+  await until('document.querySelector(".motion-inspector select")');
+  assert.equal(await evaluate('return document.querySelector(".motion-inspector select").value'),'map-locator');
+  assert.equal(errors.filter(e=>/Uncaught|Maximum update|Too many re-renders/.test(e)).length,0,errors.join('\n'));
+  await writeFile(join(root,'result.json'),JSON.stringify({saved,checks:['choose map','resolve Russian city','edit title','load city detail (fixture API)','save','reopen','no render crash'],errors},null,2));
+  win.destroy();console.log('PASS motion editor save/reopen');
+}).then(()=>app.exit(0),e=>{console.error(e);app.exit(1);});

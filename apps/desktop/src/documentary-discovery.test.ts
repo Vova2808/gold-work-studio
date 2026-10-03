@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {setImmediate as tick} from 'node:timers/promises';
+import type {DocumentaryCandidate} from '@gold-work/shared';
+import {discoverDocumentarySources,discoverDocumentarySourceBatches} from './documentary-discovery.js';
+import {DocumentarySearch} from './documentary-search.js';
+import {DocumentarySelectionSession} from './documentary-selection-session.js';
+
+test('a precise ready source can be inspected and accepted without starting archive or shared discovery',async()=>{
+  const calls:string[]=[];
+  const batches=discoverDocumentarySourceBatches({kind:'image',queries:['exact subject','alternate subject'],stockQueries:[],youtubeQueries:[],stopped:()=>false,
+    discover:async(query,providers)=>{calls.push(`${query}:${providers.join(',')}`);return [{id:'exact'}] as DocumentaryCandidate[];},
+    supplement:async()=>{throw Error('Unused shared discovery must not start');}});
+  const first=await batches.next();assert.equal(first.value?.[0]?.id,'exact');
+  await batches.return(undefined);
+  assert.deepEqual(calls,['exact subject:commons']);
+});
+
+test('rejection requests full discovery; an empty first source does not end the search',async()=>{
+  for(const empty of [false,true]){
+    const calls:string[]=[];
+    const batches=discoverDocumentarySourceBatches({kind:'video',queries:['precise'],stockQueries:[],youtubeQueries:['precise'],stopped:()=>false,
+      discover:async(_query,providers)=>{calls.push(providers.join(','));return providers.length===1&&providers[0]==='youtube'?(empty?[]:[{id:'first'}] as DocumentaryCandidate[]):[{id:'archive'}] as DocumentaryCandidate[];},
+      supplement:async()=>[{id:'shared'}] as DocumentaryCandidate[]});
+    const first=await batches.next();
+    const fallback=empty?first:await batches.next();
+    assert.ok(fallback.value?.some(c=>c.id==='archive'));assert.ok(fallback.value?.some(c=>c.id==='shared'));
+    assert.ok(calls.some(c=>c.includes('internet-archive')));
+    await batches.return(undefined);
+  }
+});
+
+test('stop between precise and broad waves dispatches no more network work',async()=>{
+  let stopped=false,calls=0;
+  const batches=discoverDocumentarySourceBatches({kind:'image',queries:['subject'],stockQueries:[],youtubeQueries:[],stopped:()=>stopped,
+    discover:async()=>{calls++;return [{id:'first'}] as DocumentaryCandidate[];}});
+  await batches.next();stopped=true;
+  assert.equal((await batches.next()).done,true);assert.equal(calls,1);
+});
+
+test('slow discovery does not consume inspection time or reset the existing paid-attempt cap',()=>{
+  let now=0;const session=new DocumentarySelectionSession(()=>now);
+  session.budget('scene','image');now=50_000;session.accountSearch('scene','image',50_000);
+  assert.equal(session.remaining('scene','image'),60_000);assert.equal(session.searchRemaining('scene','image'),10_000);
+  assert.equal(session.takeAttempt('scene','image'),true);
+  now+=12_000;assert.equal(session.remaining('scene','image'),48_000);
+  now+=10_000;session.accountSearch('scene','image',10_000);
+  assert.equal(session.searchRemaining('scene','image'),0);assert.equal(session.remaining('scene','image'),48_000);
+  assert.equal(session.takeAttempt('scene','image'),true);assert.equal(session.takeAttempt('scene','image'),false);
+});
+
+test('a slow archive does not delay other source families; results retain checkpoint order',async()=>{
+  let release!:()=>void;const archive=new Promise<void>(r=>{release=r;});const started:string[]=[];
+  const run=discoverDocumentarySources({queries:['archive1','archive2','archive3'],stockQueries:['stock'],youtubeQueries:['youtube'],stopped:()=>false,
+    discover:async query=>{started.push(query);if(query.startsWith('archive'))await archive;return [{id:query}] as DocumentaryCandidate[];}});
+  await tick();assert.ok(started.includes('youtube'));assert.ok(started.includes('stock'));assert.ok(!started.includes('archive3'));
+  release();assert.deepEqual((await run).map(c=>c.id),['stock','archive1','archive2','archive3','youtube']);
+});
+test('stop drains running searches and does not dispatch another batch',async()=>{
+  let release!:()=>void,stopped=false;const gate=new Promise<void>(r=>{release=r;});let calls=0;
+  const run=discoverDocumentarySources({queries:['one','two','three'],stockQueries:[],youtubeQueries:[],stopped:()=>stopped,discover:async()=>{calls++;await gate;return [];}});
+  await tick();stopped=true;release();await run;assert.equal(calls,2);
+});
+test('parallel scene searches share a provider cap and deduplicate identical requests',async()=>{
+  let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});let active=0,peak=0,calls=0;
+  const search=new DocumentarySearch(undefined,undefined,undefined,undefined,{search:async()=>{calls++;active++;peak=Math.max(peak,active);await gate;active--;return [];}});
+  const jobs=Array.from({length:9},(_,i)=>search.search({query:`source ${i}`,kind:'video',providers:['youtube']}));
+  jobs.push(search.search({query:'source 0',kind:'video',providers:['youtube']}));
+  await tick();assert.equal(calls,4);release();await Promise.all(jobs);assert.equal(calls,9);assert.equal(peak,4);
+});
