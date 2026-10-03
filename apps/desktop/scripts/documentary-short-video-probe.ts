@@ -20,10 +20,15 @@ const result: Record<string, unknown> = {
 };
 try {
   const previewStart = performance.now();
-  const preview = await downloadDirectDocumentaryPreview(candidate, join(output, 'preview'), AbortSignal.timeout(45_000));
+  try {
+    const preview = await downloadDirectDocumentaryPreview(candidate, join(output, 'preview'), AbortSignal.timeout(45_000));
+    result.previewBytes = preview.bytes;
+    result.previewTransferBytes = preview.downloadedBytes;
+  } catch (error) {
+    result.previewError = (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+      .replace(/https?:\/\/\S+/g, '[source]').slice(-400);
+  }
   result.previewSeconds = Math.round((performance.now() - previewStart) / 10) / 100;
-  result.previewBytes = preview.bytes;
-  result.previewTransferBytes = preview.downloadedBytes;
   const fullPath = join(output, 'original.mp4');
   const fullStart = performance.now();
   await downloadDocumentaryFile(candidate.downloadUrl, fullPath, AbortSignal.timeout(120_000));

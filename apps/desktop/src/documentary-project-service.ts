@@ -1056,7 +1056,7 @@ export class DocumentaryProjectService {
       // transfer more bytes than its original. The full file still receives the
       // same quality and actual-frame review before it can be selected.
       const shortDirectStock = candidate.kind==='video' && (candidate.provider==='pexels'||candidate.provider==='pixabay')
-        && (candidate.durationSeconds??Infinity)<=20;
+        && (candidate.durationSeconds??Infinity)<=30;
       if(!localCopy&&!commit&&candidate.kind==='video'&&(candidate.durationSeconds??0)>=12&&!shortDirectStock&&this.intelligence?.inspectPreview
         &&(candidate.provider!=='youtube'||this.youtube?.preview)){
         const remaining=(downloadDeadline??Infinity)-Date.now();

@@ -403,15 +403,15 @@ test("an unavailable preview of a long YouTube source skips the original downloa
   assert.equal(result.project.scenes[0]!.documentary!.selected!.kind, "image");
 });
 
-test("a short curated stock video downloads once and still reaches actual-frame review", async t => {
+test("a 29-second curated stock video downloads once and still reaches actual-frame review", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = join(root, "short-tractor.mp4");
-  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24:d=16", "-an", "-c:v", "libx264", "-preset", "ultrafast", source]);
+  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24:d=29", "-an", "-c:v", "libx264", "-preset", "ultrafast", source]);
   const scene = project.scenes[0]!;
   const candidate: DocumentaryCandidate = { id: "pexels:short-tractor", provider: "pexels", kind: "video", title: "Red tractor in a field", description: "Field work",
     pageUrl: "https://example.test/tractor", downloadUrl: "https://example.test/tractor.mp4", author: "Fixture", license: "CC0", licenseUrl: "",
-    rights: "licensed", attribution: "Fixture", query: "red tractor", retrievedAt: "now", match: "exact-metadata", concerns: [], width: 1280, height: 720, durationSeconds: 16 };
+    rights: "licensed", attribution: "Fixture", query: "red tractor", retrievedAt: "now", match: "exact-metadata", concerns: [], width: 1280, height: 720, durationSeconds: 29 };
   const searcher = new DocumentarySearch();
   searcher.search = async input => ({ candidates: input.kind === "video" ? [candidate] : [], sources: [] });
   let downloads = 0, reviews = 0;
