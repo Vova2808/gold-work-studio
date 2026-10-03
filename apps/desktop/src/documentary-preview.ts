@@ -102,23 +102,18 @@ export async function downloadDirectDocumentaryPreview(candidate:DocumentaryCand
   if(!ranges.length)throw Error('Для пробной загрузки нужна длительность источника');
   await mkdir(directory,{recursive:true});
   const cached=await readDocumentaryPreview(directory);if(cached)return cached;
-  const transfer=await withDocumentaryPreviewRelay(candidate.downloadUrl,signal,url=>renderDirectDocumentaryPreviewSegments(url,directory,ranges,signal));
+  const transfer=await withDocumentaryPreviewRelay(candidate.downloadUrl,signal,async url=>{
+    const segments:DocumentaryPreviewSegment[]=[];
+    for(const [index,range] of ranges.entries()){
+      signal?.throwIfAborted();const path=join(directory,`sample-${index}.mp4`);
+      // The aspect-preserving scale can round 16:9 to 853x480. H.264 needs
+      // even dimensions; an invalid preview used to trigger a full download.
+      await withDocumentaryFrameSlot(()=>effectFfmpeg(['-y','-ss',String(range.start),'-i',url,'-t',String(range.end-range.start),'-map','0:v:0','-an','-vf','scale=854:480:force_original_aspect_ratio=decrease:force_divisible_by=2','-c:v','libx264','-preset','ultrafast','-crf','28','-movflags','+faststart',path],signal));
+      segments.push({path,...range});
+    }
+    return segments;
+  });
   return saveDocumentaryPreview(directory,transfer.result,signal,transfer.bytes);
-}
-
-/** Independent seeks share the existing memory-aware decoder queue. Wait for
- * every started FFmpeg job before closing the short-lived range relay. */
-export async function renderDirectDocumentaryPreviewSegments(url:string,directory:string,ranges:readonly {start:number;end:number}[],signal?:AbortSignal):Promise<DocumentaryPreviewSegment[]> {
-  const settled=await Promise.allSettled(ranges.map(async(range,index)=>{
-    signal?.throwIfAborted();const path=join(directory,`sample-${index}.mp4`);
-    // The aspect-preserving scale can round 16:9 to 853x480. H.264 needs
-    // even dimensions; an invalid preview used to trigger a full download.
-    await withDocumentaryFrameSlot(()=>effectFfmpeg(['-y','-ss',String(range.start),'-i',url,'-t',String(range.end-range.start),'-map','0:v:0','-an','-vf','scale=854:480:force_original_aspect_ratio=decrease:force_divisible_by=2','-c:v','libx264','-preset','ultrafast','-crf','28','-movflags','+faststart',path],signal));
-    return {path,...range};
-  }));
-  const failure=settled.find((item):item is PromiseRejectedResult=>item.status==='rejected');
-  if(failure)throw failure.reason;
-  return settled.map(item=>(item as PromiseFulfilledResult<DocumentaryPreviewSegment>).value);
 }
 
 /** A glimpse cannot prove a named person/detail is absent from unseen parts.

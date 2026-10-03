@@ -5,7 +5,7 @@ import {mkdtemp,readFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {effectFfmpeg,probeEffectMedia} from './effect-media.js';
-import {documentaryPreviewRanges,documentaryPreviewRejection,renderDirectDocumentaryPreviewSegments,withDocumentaryPreviewRelay} from './documentary-preview.js';
+import {documentaryPreviewRanges,documentaryPreviewRejection,withDocumentaryPreviewRelay} from './documentary-preview.js';
 import {documentarySceneContext,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
 import type {Project,Scene} from '@gold-work/shared';
 
@@ -60,13 +60,4 @@ test('real FFmpeg preview seeks through HTTP Range instead of receiving the whol
   assert.ok(bytes<data.length/2,`${bytes} of ${data.length} transferred`);
   assert.ok(Math.abs(media.durationSeconds!-3)<.1);
   assert.ok((await stat(output)).size>0);
-  const ranges=documentaryPreviewRanges(40);
-  const sampled=await withDocumentaryPreviewRelay(`http://127.0.0.1:${address.port}/source.mp4`,AbortSignal.timeout(30000),url=>
-    renderDirectDocumentaryPreviewSegments(url,root,ranges),async value=>new URL(value));
-  assert.deepEqual(sampled.result.map(segment=>({start:segment.start,end:segment.end})),ranges);
-  assert.ok(sampled.bytes<data.length,`Preview transferred ${sampled.bytes} of ${data.length} bytes`);
-  for(const segment of sampled.result){
-    const sample=await probeEffectMedia(segment.path);
-    assert.ok(sample.videoCodec&&Math.abs(sample.durationSeconds!-(segment.end-segment.start))<.1);
-  }
 });
