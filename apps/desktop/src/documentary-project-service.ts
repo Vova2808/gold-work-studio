@@ -5,7 +5,7 @@ import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
-import {documentarySceneContext,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryGeneralIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import type { ProjectService } from "@gold-work/core";
@@ -725,7 +725,7 @@ export class DocumentaryProjectService {
           const searchStarted=Date.now();
           const context=documentarySceneContext(project,scene);
           const sourceQueries=documentarySearchQueries(requirement,kind,context);
-          const queries=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
+          const queries=documentaryGeneralIllustration(scene)||kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
             :documentaryDatedSearchQueries(sourceQueries,documentaryNarrationContext(project,scene));
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>) => {
             // Search results are transient until the final shortlist. Persisting

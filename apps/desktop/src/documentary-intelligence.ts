@@ -8,7 +8,7 @@ import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
-import {documentarySceneContext,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryGeneralIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
@@ -177,7 +177,7 @@ export class DocumentaryIntelligence {
   private analysisPauseRemainingMs = 0;
   private analysisPauseRevision = 0;
   private analysisWaiters = new Set<()=>void>();
-  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean }>();
+  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;generalIllustration?:boolean;sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean }>();
   constructor(private readonly client: Completion, private readonly rootFor: (id: string) => string, private readonly beforePaidRequest: () => Promise<void> = async () => {}, private readonly sharedVideoCatalogRoot?: string,
     private readonly retryWait:(ms:number)=>Promise<void>=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {}
   async available() { return this.client.configured(); }
@@ -579,6 +579,10 @@ export class DocumentaryIntelligence {
         input:JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(words.source??this.inspection.getStore()?.sourceEra)})});
       input=JSON.stringify({...JSON.parse(input),sourceEraReferences:documentarySourceEraReferences(sourceEra)});
       system+=documentaryEraProvenanceInstruction;
+      if(this.inspection.getStore()?.generalIllustration){
+        previousRequests.push({system,input});
+        system+=documentaryGeneralIllustrationInstruction;
+      }
     }
     const generalDiagramScope=visualReview&&words.mediaKind==='image'&&narrativeContext
       ?documentaryGeneralDiagramScope(narrativeContext,identities):undefined;
@@ -605,6 +609,11 @@ export class DocumentaryIntelligence {
       };
       return Array.isArray(value.reviews)?{...value,reviews:value.reviews.map(row=>row&&typeof row==='object'?review(row as Record<string,unknown>):row)}:review(value);
     };
+    // The illustration rule is inserted before later review-contract fields.
+    // Guard the exact former FULL request too, after all fields are assembled;
+    // otherwise an older pending paid check could be submitted again.
+    if(visualReview&&this.inspection.getStore()?.generalIllustration)
+      previousRequests.push({system:system.replace(documentaryGeneralIllustrationInstruction,''),input});
     // Adding distant script dates must not conceal an unknown request made
     // with the earlier, neighbouring-scenes-only context. Include the current
     // and all prior policy variants, for ranking as well as visual checks.
@@ -901,7 +910,7 @@ export class DocumentaryIntelligence {
   }
 
   async rankCandidates(project: Project, scene: Scene, candidates: DocumentaryCandidate[], progress?: (message:string)=>void, shouldStop:()=>boolean=()=>false): Promise<DocumentaryCandidate[]> {
-    if(!this.inspection.getStore())return this.inspection.run({submissions:0,shouldStop,progress,comparisonSubjects:[],identities:undefined,narrativeContext:documentarySceneContext(project,scene)},()=>this.rankCandidates(project,scene,candidates));
+    if(!this.inspection.getStore())return this.inspection.run({submissions:0,shouldStop,progress,comparisonSubjects:[],identities:undefined,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene)},()=>this.rankCandidates(project,scene,candidates));
     if (!candidates.length) return [];
     const catalogued = this.cataloguedCandidates(project,scene,candidates);
     if (catalogued.length) {
@@ -988,11 +997,14 @@ export class DocumentaryIntelligence {
     const previousPartRankingSystem=previousCurrentRankingSystem+(visiblePart
       ?` The narration explicitly requires a visible ${visiblePart}. A whole-object exterior with no visible internal mechanism is not a plausible still for this passage, even when its model name matches. Shortlist a schematic or cutaway only when its metadata plausibly names the required part; otherwise return ids:[] and let discovery continue. This is candidate ranking only, not final visual approval.`:'');
     const videoPart=visiblePart&&pool[0]?.candidate.kind==='video';
-    const currentRankingSystem=videoPart
+    const previousRankingSystem=videoPart
       ?previousCurrentRankingSystem+` These candidates are VIDEOS. This passage requires a visibly exposed ${visiblePart}. A race or vehicle exterior is not useful merely because it names the right model. Shortlist only real-camera footage whose metadata plausibly describes that exposed part or a physical test rig/cutaway showing it. Rendered diagrams, CGI and animation do not count as real video footage. If the metadata only describes racing or the whole vehicle, return ids:[] and continue discovery. Final actual-frame review remains mandatory.`
       :previousPartRankingSystem;
+    const currentRankingSystem=previousRankingSystem+(documentaryGeneralIllustration(scene)?documentaryGeneralIllustrationInstruction:'');
+    if(currentRankingSystem!==previousRankingSystem)previousRankings.push({system:previousRankingSystem,input:rankingInput});
     const longRankingInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:candidatesForRanking.map(candidate=>
       ({...candidate,id:shortKeys.find(item=>item.shortKey===candidate.id)!.key}))});
+    if(currentRankingSystem!==previousRankingSystem)previousRankings.push({system:previousRankingSystem,input:longRankingInput});
     if(visiblePart)previousRankings.push({system:previousCurrentRankingSystem,input:rankingInput},
       {system:previousCurrentRankingSystem,input:longRankingInput});
     if(videoPart)previousRankings.push({system:previousPartRankingSystem,input:rankingInput},
@@ -1038,7 +1050,7 @@ export class DocumentaryIntelligence {
 
   async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
     const source=scene.documentary?.selected;
-    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
+    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
       let review=await this.inspect(project,scene,progress);
       // An older or inconsistent completed review can say "accepted" without
       // current narrative evidence. Reusing its paid checkpoint is allowed;
