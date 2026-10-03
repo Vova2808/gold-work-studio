@@ -19,8 +19,9 @@ export function documentarySourceQualityIssue(source:Pick<DocumentaryCandidate,'
   if(presentation!=='subject-card'&&occupancy<.5&&!detailedPortrait)return `Формат оригинала ${w}×${h} занимает менее половины кадра ${aspectRatio}. Для крупного изображения нужен другой исходник без сильной обрезки.`;
 }
 
-/** Only these adapters supply original/download dimensions, not preview sizes.
- * Unknown geometry still reaches download + ffprobe, never a metadata approval. */
+/** Stock adapters and catalogued local originals supply source dimensions.
+ * YouTube thumbnail dimensions are not original dimensions. Unknown geometry
+ * still reaches download + ffprobe, never a metadata approval. */
 export function documentaryKnownQualityIssue(candidate:DocumentaryCandidate,project:Pick<Project,'aspectRatio'>,scene:Scene):string|undefined{
   // The YouTube API already reports SD before a costly original download.
   // Small subject cards may still use it; ffprobe decides their real quality.
@@ -33,7 +34,8 @@ export function documentaryKnownQualityIssue(candidate:DocumentaryCandidate,proj
   if(candidate.kind==='video'&&/\bgameplay\b|\bin[- ]game footage\b|геймплей|игровой процесс|#motogp\d{2}\b/iu.test(metadata)
     &&!/\breal\s*(?:vs\.?|versus)\b|\b(?:real life|real footage)\b.*\bcomparison\b|сравнен\S*\s+с\s+реальн/iu.test(metadata))
     return 'Источник помечен как запись видеоигры. Для документального кадра нужна натурная съёмка.';
-  if(!candidate.width||!candidate.height||!['commons','pexels','pixabay'].includes(candidate.provider))return;
+  if(!candidate.width||!candidate.height||!(['commons','pexels','pixabay'].includes(candidate.provider)
+    || candidate.provider==='local'&&Boolean(candidate.localPath)))return;
   return documentarySourceQualityIssue(candidate,project.aspectRatio,documentaryQualityPresentation(scene));
 }
 

@@ -4,12 +4,13 @@ import { availableParallelism, freemem } from "node:os";
 
 const execFileAsync = promisify(execFile);
 export const DOCUMENTARY_MEMORY_RESERVE = 1024 ** 3;
-/** Selection mostly waits for remote analysis. Decode work has its own small cap. */
+/** Match the provider and analysis lanes so extra scenes do not queue up
+ * searches and paid reviews while holding their own candidate pools in RAM. */
 export function documentarySelectionWorkers(cores:number,physicalBytes:number,commitBytes:number):number {
   const headroom=Math.min(physicalBytes,commitBytes);
   if(![cores,headroom].every(Number.isFinite))return 4;
   if(headroom<1.25*1024**3)return 1;
-  return Math.max(2,Math.min(8,Math.max(2,cores),Math.floor((headroom-.75*1024**3)/(.4*1024**3))));
+  return Math.max(2,Math.min(4,Math.max(2,cores),Math.floor((headroom-.75*1024**3)/(.4*1024**3))));
 }
 
 /** Re-evaluate memory after each completed scene. Existing paid work drains;

@@ -98,7 +98,7 @@ test('prepared lists gain verified focus panels when their source posters arrive
 
 test('parallel selection stays within memory headroom and decode slots recover after failures',async()=>{
   const gb=1024**3;
-  assert.equal(documentarySelectionWorkers(12,8*gb,8*gb),8);
+  assert.equal(documentarySelectionWorkers(12,8*gb,8*gb),4);
   assert.equal(documentarySelectionWorkers(12,1.5*gb,8*gb),2);
   assert.equal(documentarySelectionWorkers(12,8*gb,2*gb),3);
   let active=0,peak=0;

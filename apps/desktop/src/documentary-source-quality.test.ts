@@ -19,6 +19,8 @@ test('sharp portrait photographs remain usable and original dimensions reject wa
   for(const [width,height] of [[480,854],[601,900]])assert.ok(documentarySourceQualityIssue({kind:'image',width,height}));
   const source={provider:'commons',kind:'image',width:640,height:360} as const;
   assert.ok(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},scene));
+  assert.match(documentaryKnownQualityIssue({provider:'local',kind:'video',localPath:'catalogued-original.mp4',width:480,height:854} as never,{aspectRatio:'16:9'},scene)!,/менее половины кадра/);
+  assert.equal(documentaryKnownQualityIssue({provider:'local',kind:'video',localPath:'catalogued-original.mp4',width:1920,height:1080} as never,{aspectRatio:'16:9'},scene),undefined);
   assert.equal(documentaryKnownQualityIssue({...source,provider:'youtube'} as never,{aspectRatio:'16:9'},scene),undefined,'YouTube previews are not original dimensions');
   assert.equal(documentaryKnownQualityIssue({...source,width:undefined} as never,{aspectRatio:'16:9'},scene),undefined);
 });
