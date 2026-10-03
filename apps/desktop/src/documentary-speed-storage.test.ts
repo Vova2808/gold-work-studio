@@ -122,7 +122,9 @@ test("indexed long sources do not extract discarded overview frames", async t =>
   Object.assign(intelligence, { inspectCatalogRange: async () => { catalogCalls++; return { status: "accepted" }; } });
   // A missing source guarantees an unwanted FFmpeg overview would fail.
   const scene = { id: "one", order: 0, durationSeconds: 3, narration: "A tractor works.", videoPath: join(root, "not-needed.mp4"), documentary: { checksum: "a".repeat(64), requirement: { text: "A tractor works.", entities: ["Tractor"], years: [], queries: [] }, selected: { id: "local:a", kind: "video", durationSeconds: 600, width: 1920, height: 1080 }, candidates: [] } } as unknown as Scene;
-  assert.equal((await intelligence.inspect({ id: "project", scenes: [scene] } as never, scene)).status, "accepted");
+  // The stub lacks narrative approval; selection must hold it for review while
+  // still taking the indexed path instead of extracting overview frames.
+  assert.equal((await intelligence.inspect({ id: "project", scenes: [scene] } as never, scene)).status, "uncertain");
   assert.equal(catalogCalls, 1);
 });
 
@@ -191,6 +193,17 @@ test("catalog shortlist prefers visible detail and rejects incidental background
   assert.equal(representativeCatalogChoices(larger, news).length, 3, "Comparative size is a representative view, not an unavailable mechanical action");
   const explicitlyDifferent = news.map(item => ({ ...item, entities: ["Different Vessel"], description: "Wide view of Different Vessel transiting canal" }));
   assert.equal(documentaryCatalogIdentityConflict(scene, explicitlyDifferent[0]!, explicitlyDifferent), true, "Repeated explicit subject names still contradict the requested vessel");
+  const omittedEntity={...unnamed,description:"Close view of Different Vessel beside the dock",entities:[]};
+  const corroborated={...other,id:50,sample:500,entities:["Different Vessel"],description:"Different Vessel leaves the port"};
+  assert.equal(documentaryCatalogIdentityConflict(scene,omittedEntity,[omittedEntity,corroborated]),true,
+    "A visible competing name in prose is a conflict when another frame independently names it");
+  assert.equal(documentaryCatalogIdentityConflict(scene,{...omittedEntity,description:"Example Vessel beside Different Vessel"},[omittedEntity,corroborated]),false,
+    "A frame mentioning the requested vessel as well still gets its actual-frame review");
+  const m1={...scene,documentary:{...scene.documentary!,requirement:{...scene.documentary!.requirement,
+    entities:["Yamaha YZR-M1"],identities:[{name:"Yamaha YZR-M1",aliases:[]}]}}};
+  const honda={...unnamed,description:"Close-up of Repsol Honda RC211V motorcycle",entities:[]};
+  assert.equal(documentaryCatalogIdentityConflict(m1,honda,[honda,{...other,entities:["Honda"],description:"Honda RC211V racing motorcycle"}]),true,
+    "A Honda catalog shot cannot spend Yamaha's range-analysis budget when its prose clearly identifies Honda");
 });
 
 test("two different scene sources inspect concurrently and save both selections", async t => {

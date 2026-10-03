@@ -121,7 +121,16 @@ function catalogSubjectEntities(segment: VideoSegment, catalog: VideoSegment[]):
     return catalog.length >= 3 && catalog.filter(other => other.entities.some(value => normalizedName(value) === name)).length >= Math.ceil(catalog.length * .8)
       && !catalog.some(other => ` ${normalizedName(other.description)} `.includes(` ${name} `));
   };
-  return segment.entities.filter(entity => !incidental(entity));
+  // Some indexed frames describe a visible name in prose but leave their
+  // entities array empty. Corroborate that prose against names independently
+  // identified in another frame of the same source before spending a paid
+  // range check on an explicitly different subject.
+  const description=` ${normalizedName(segment.description)} `;
+  const namedInDescription=catalog.flatMap(other=>other.entities).filter(entity=>{
+    const name=normalizedName(entity);
+    return name.length>=4&&description.includes(` ${name} `);
+  });
+  return [...new Set([...segment.entities,...namedInDescription])].filter(entity=>!incidental(entity));
 }
 
 /** A source title cannot establish identity when this actual part of a mixed
@@ -132,6 +141,8 @@ export function documentaryCatalogIdentityConflict(scene: Scene, segment: VideoS
   if(!wanted.length)return false;
   const matches=(entity:string)=>documentaryIdentityMatches(requirement,entity);
   if(segment.entities.some(matches))return false;
+  const description=` ${normalizedName(segment.description)} `;
+  if(wanted.some(name=>description.includes(` ${normalizedName(name)} `)))return false;
   const currentNames = catalogSubjectEntities(segment, catalog);
   const named=currentNames.length?currentNames:catalog.filter(other=>Math.abs(other.id-segment.id)===1&&Math.abs(other.sample-segment.sample)<10).flatMap(other=>catalogSubjectEntities(other,catalog));
   return named.length>0&&!named.some(matches);

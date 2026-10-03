@@ -21,6 +21,7 @@ import {DocumentaryIntelligence} from '../src/documentary-intelligence.js';
 import {DocumentaryProjectService} from '../src/documentary-project-service.js';
 import {DocumentarySearch} from '../src/documentary-search.js';
 import {DocumentaryAnalysisError} from '../src/documentary-analysis-error.js';
+import {documentarySavedContextIssue} from '../src/documentary-context-approval.js';
 import {LocalProjectStorage} from '../src/local-project-storage.js';
 import {EffectLibrary} from '../src/effect-library.js';
 import {ensureDocumentaryMemory} from '../src/documentary-resources.js';
@@ -72,7 +73,7 @@ app.whenReady().then(async()=>{
   const started=Date.now(),context=new AsyncLocalStorage<string>();let submissions=0,tokens=0,lastProgress=0;
   const maxSubmissions=Number(process.argv.find(a=>a.startsWith('--max-calls='))?.slice(12)??20),deadline=started+20*60_000;
   assert.ok(Number.isInteger(maxSubmissions)&&maxSubmissions>=0&&maxSubmissions<=60);
-  const perScene=new Map(sample.map(s=>[s.id,{...s,wasVerified:Boolean(project.scenes.find(scene=>scene.id===s.id)?.documentary?.verified),startedAt:0,finishedAt:0,submissions:0,tokens:0}]));
+  const perScene=new Map(sample.map(s=>[s.id,{...s,wasVerified:Boolean(project.scenes.find(scene=>scene.id===s.id)?.documentary?.verified),startedAt:0,finishedAt:0,worked:false,submissions:0,tokens:0}]));
   const log=(event:string,details:Record<string,unknown>)=>appendFileSync(join(out,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),event,...details})+'\n');
   setDiagnosticSink((_level,event,d)=>{
     const sceneId=context.getStore()??(typeof d.sceneId==='string'?d.sceneId:undefined);
@@ -81,6 +82,7 @@ app.whenReady().then(async()=>{
       if(event==='documentary.stage.started')measured.startedAt=Date.parse(String(d.startedAt));
       if(event==='documentary.stage.finished')measured.finishedAt=Date.parse(String(d.finishedAt));
     }
+    if(measured&&event==='documentary.stage.started'&&['search','search-related','download','download-preview','analysis','media-preparation'].includes(String(d.stage)))measured.worked=true;
     if(event==='anymodel.completion.usage'){
       const count=typeof d.totalCount==='number'?d.totalCount:0;tokens+=count;
       const row=sceneId?perScene.get(sceneId):undefined;if(row)row.tokens+=count;
@@ -138,14 +140,17 @@ app.whenReady().then(async()=>{
   await atomicWrite(join(out,'project.json'),JSON.stringify(updated));
   const results=sample.map(expected=>{
     const s=updated.scenes.find(s=>s.id===expected.id)!,row=perScene.get(s.id)!;
-    return{...row,seconds:row.startedAt?((row.finishedAt||Date.now())-row.startedAt)/1000:undefined,verified:s.documentary?.verified,actualKind:s.documentary?.selected?.kind,
-      matchesRequestedKind:s.documentary?.verified&&s.documentary.selected?.kind===expected.kind,narration:s.narration,title:s.documentary?.selected?.title,
+    const contextIssue=documentarySavedContextIssue(updated,s);
+    const qualityVerified=Boolean(s.documentary?.verified&&!contextIssue);
+    return{...row,seconds:row.startedAt?((row.finishedAt||Date.now())-row.startedAt)/1000:undefined,verified:s.documentary?.verified,qualityVerified,
+      contextIssue,attempted:row.worked,actualKind:s.documentary?.selected?.kind,
+      matchesRequestedKind:qualityVerified&&s.documentary?.selected?.kind===expected.kind,narration:s.narration,title:s.documentary?.selected?.title,
       width:s.documentary?.selected?.width,height:s.documentary?.selected?.height,imagePath:s.imagePath,videoPath:s.videoPath,trimStart:s.trimStartSeconds,trimEnd:s.trimEndSeconds,review:s.documentary?.visualReview,error:s.documentary?.autoError};
   });
   // The user may search/edit in the open app while this isolated test runs.
   // Always save its report; never write this test's snapshot back to that app.
   const finalRegistryHash=await registryHash();
-  const stats=['image','video'].map(kind=>{const rows=results.filter(r=>r.kind===kind),accepted=rows.filter(r=>r.matchesRequestedKind),fresh=accepted.filter(r=>!r.wasVerified&&r.startedAt);return{kind,requested:rows.length,accepted:accepted.length,newlyAccepted:fresh.length,failedOrFallback:rows.length-accepted.length,meanAcceptedSeconds:fresh.length?fresh.reduce((n,r)=>n+(r.seconds??0),0)/fresh.length:null,meanAttemptSeconds:rows.some(r=>r.startedAt)?rows.filter(r=>r.startedAt).reduce((n,r)=>n+(r.seconds??0),0)/rows.filter(r=>r.startedAt).length:null,tokens:rows.reduce((n,r)=>n+r.tokens,0)};});
+  const stats=['image','video'].map(kind=>{const rows=results.filter(r=>r.kind===kind),attempted=rows.filter(r=>r.attempted),accepted=rows.filter(r=>r.matchesRequestedKind),fresh=accepted.filter(r=>!r.wasVerified&&r.attempted);return{kind,requested:rows.length,attempted:attempted.length,accepted:accepted.length,newlyAccepted:fresh.length,failedOrFallback:rows.length-accepted.length,meanAcceptedSeconds:fresh.length?fresh.reduce((n,r)=>n+(r.seconds??0),0)/fresh.length:null,meanAttemptSeconds:attempted.length?attempted.reduce((n,r)=>n+(r.seconds??0),0)/attempted.length:null,tokens:rows.reduce((n,r)=>n+r.tokens,0)};});
   const result={at:new Date().toISOString(),round,repository:'FileProjectRepository isolated full registry',projectId:project.id,elapsedSeconds:(Date.now()-started)/1000,submissions,reportedTokens:tokens,failure,stats,peakRssMB:peakRss/1048576,peakHeapMB:peakHeap/1048576,minFreeMB:minFree/1048576,maxEventLoopDelayMs:lag,registryPreserved:finalRegistryHash===originalHash,registryStartHash:originalHash,registryFinalHash:finalRegistryHash,productionRegistryWrittenByHarness:false,results,note:'Real providers on unfinished existing scenes; prior cache/checkpoints retained. Means include contention and fallback. Not a cold full-film benchmark. Baseline used MemoryProjectRepository; memory/timing cannot be directly compared.'};
   await atomicWrite(join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,results:undefined}));
   app.exit(failure?1:0);
