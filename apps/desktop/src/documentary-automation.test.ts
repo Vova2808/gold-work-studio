@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, readdir, mkdir, writeFile, copyFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, mkdir, writeFile, copyFile, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -401,6 +401,36 @@ test("an unavailable preview of a long YouTube source skips the original downloa
   assert.equal(downloads, 0);
   assert.equal(result.selected, 1, JSON.stringify(result.failures));
   assert.equal(result.project.scenes[0]!.documentary!.selected!.kind, "image");
+});
+
+test("a short curated stock video downloads once and still reaches actual-frame review", async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "short-tractor.mp4");
+  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24:d=16", "-an", "-c:v", "libx264", "-preset", "ultrafast", source]);
+  const scene = project.scenes[0]!;
+  const candidate: DocumentaryCandidate = { id: "pexels:short-tractor", provider: "pexels", kind: "video", title: "Red tractor in a field", description: "Field work",
+    pageUrl: "https://example.test/tractor", downloadUrl: "https://example.test/tractor.mp4", author: "Fixture", license: "CC0", licenseUrl: "",
+    rights: "licensed", attribution: "Fixture", query: "red tractor", retrievedAt: "now", match: "exact-metadata", concerns: [], width: 1280, height: 720, durationSeconds: 16 };
+  const searcher = new DocumentarySearch();
+  searcher.search = async input => ({ candidates: input.kind === "video" ? [candidate] : [], sources: [] });
+  let downloads = 0, reviews = 0;
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, "workspace")), searcher, join(root, "Materials"), {
+    download: async () => { throw Error("Use streaming download"); },
+    downloadToFile: async (_asset, destination) => { downloads++; await copyFile(source, destination); return {extension: ".mp4", bytes: (await stat(destination)).size, contentType: "video/mp4"}; },
+  }, () => {}, {
+    available: async () => true,
+    plan: async (_project, scenes) => new Map(scenes.map(item => [item.id, { ...item.documentary!.requirement,
+      entities: ["Red tractor"], identities: [], years: [], queries: ["red tractor field"], plannedBy: "semantic" as const }])),
+    inspectPreview: async () => { throw Error("Short curated stock should not fetch three previews"); },
+    inspectForSelection: async () => { reviews++; return { review: { status: "rejected" as const, confidence: 1,
+      reason: "Fixture rejects the source after actual-frame review", quality: "1280x720", checkedAt: "now", sampleSeconds: [0] }, usedNewAnalysis: true }; },
+    inspect: async () => { throw Error("Use selection review"); },
+  });
+  const result = await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(downloads, 1, JSON.stringify(result.failures));
+  assert.equal(reviews, 1, "Skipping the preview must not skip actual-frame review");
+  assert.equal(result.project.scenes[0]!.documentary!.verified, false);
 });
 
 test("a long named YouTube source needs scene evidence in its preview before downloading", async t => {
