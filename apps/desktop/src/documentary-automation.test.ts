@@ -433,6 +433,38 @@ test("a 29-second curated stock video downloads once and still reaches actual-fr
   assert.equal(result.project.scenes[0]!.documentary!.verified, false);
 });
 
+test("a 71-second YouTube clip skips duplicate previews but still reaches actual-frame review", async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "short-youtube.mp4");
+  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24:d=6", "-an", "-c:v", "libx264", "-preset", "ultrafast", source]);
+  const scene = project.scenes[0]!;
+  const video: DocumentaryCandidate = { id: "youtube:short-action", provider: "youtube", kind: "video", title: "Red tractor driving", description: "A tractor moves in a field",
+    pageUrl: "https://example.test/short-action", downloadUrl: "https://example.test/short-action", author: "Fixture", license: "CC BY", licenseUrl: "https://example.test/license",
+    rights: "licensed", attribution: "Fixture", query: "red tractor driving", retrievedAt: "now", match: "exact-metadata", concerns: [], width: 1280, height: 720, durationSeconds: 71 };
+  const searcher = new DocumentarySearch();
+  searcher.search = async input => ({ candidates: input.kind === "video" ? [video] : [], sources: [] });
+  let previews = 0, downloads = 0, reviews = 0;
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, "workspace")), searcher, join(root, "Materials"),
+    { download: async () => { throw Error("Stock download is not used for YouTube"); } }, () => {}, {
+      available: async () => true,
+      plan: async (_project, scenes) => new Map(scenes.map(item => [item.id, { ...item.documentary!.requirement,
+        entities: ["Red tractor"], identities: [{ name: "Red tractor", aliases: [] }], years: [], queries: ["red tractor driving"], plannedBy: "semantic" as const }])),
+      inspectPreview: async () => { throw Error("Short YouTube clip must not buy a source-only preview analysis"); },
+      inspectForSelection: async () => { reviews++; return { review: { status: "rejected" as const, confidence: 1,
+        reason: "Actual frames do not show the required action", quality: "1280x720", checkedAt: "now", sampleSeconds: [0] }, usedNewAnalysis: true }; },
+      inspect: async () => { throw Error("Use selection review"); },
+    }, undefined, {
+      preview: async () => { previews++; throw Error("Short YouTube clip must not download previews"); },
+      download: async (_candidate, destination) => { downloads++; await copyFile(source, destination); },
+    });
+  const result = await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(previews, 0);
+  assert.equal(downloads, 1, JSON.stringify(result.failures));
+  assert.equal(reviews, 1, "Skipping the preview must retain the actual-frame review");
+  assert.equal(result.project.scenes[0]!.documentary!.verified, false);
+});
+
 test("a long named YouTube source needs scene evidence in its preview before downloading", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -1052,12 +1052,12 @@ export class DocumentaryProjectService {
       for (const copy of [candidate.localPath, projectOriginal, previousSource?.localPath, catalogOriginal, existingCopy]) {
         if (copy && await stat(copy).then(info => info.isFile(), () => false)) { localCopy = copy; break; }
       }
-      // For a short curated stock clip, three separately decoded previews can
-      // transfer more bytes than its original. The full file still receives the
-      // same quality and actual-frame review before it can be selected.
-      const shortDirectStock = candidate.kind==='video' && (candidate.provider==='pexels'||candidate.provider==='pixabay')
-        && (candidate.durationSeconds??Infinity)<=30;
-      if(!localCopy&&!commit&&candidate.kind==='video'&&(candidate.durationSeconds??0)>=12&&!shortDirectStock&&this.intelligence?.inspectPreview
+      // For a short clip, three independently sought previews plus their paid
+      // classification can cost more than downloading the original once.
+      // Actual-frame, quality and identity checks still run on that original.
+      const shortOriginal = candidate.kind==='video' && ((candidate.provider==='pexels'||candidate.provider==='pixabay')
+        && (candidate.durationSeconds??Infinity)<=30 || candidate.provider==='youtube' && (candidate.durationSeconds??Infinity)<=90);
+      if(!localCopy&&!commit&&candidate.kind==='video'&&(candidate.durationSeconds??0)>=12&&!shortOriginal&&this.intelligence?.inspectPreview
         &&(candidate.provider!=='youtube'||this.youtube?.preview)){
         const remaining=(downloadDeadline??Infinity)-Date.now();
         signal?.throwIfAborted();
