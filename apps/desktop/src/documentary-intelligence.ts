@@ -5,6 +5,7 @@ import {documentaryReviewContract} from './documentary-review-contract.js';
 import {withDocumentaryFrameSlot} from './documentary-resources.js';
 import {documentaryLocalShortlist} from './documentary-local-shortlist.js';
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
+import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
 import {documentarySceneContext,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
@@ -962,7 +963,8 @@ export class DocumentaryIntelligence {
     // unknown and older-context forms stay in the guards passed below.
     if(longRanking?.state==='complete'&&Array.isArray(longRanking.result?.ids)&&longRanking.result.ids.every(id=>typeof id==='string')){
       const keys=resolveDocumentaryCandidateKeys(longRanking.result.ids as string[],shortKeys.map(item=>item.key));
-      return keys.map(key=>shortKeys.find(item=>item.key===key)!.candidate);
+      const grounded=filterDocumentaryRankingEra(longRanking.result,narrativeContext,shortKeys.map(item=>({id:item.key,title:item.candidate.title,description:item.candidate.description})),keys);
+      return grounded.map(key=>shortKeys.find(item=>item.key===key)!.candidate);
     }
     const negatives=await documentaryNegativeRankingCache(this.rootFor(project.id),currentRankingSystem,rankingInput);
     const previousContextNegatives=generalDiagramScope?await documentaryNegativeRankingCache(this.rootFor(project.id),legacyContextSystem,legacyContextInput):undefined;
@@ -984,7 +986,9 @@ export class DocumentaryIntelligence {
     if (!Array.isArray(response.ids) || response.ids.some(id => typeof id !== "string")) throw new Error("Некорректный ответ предварительного отбора материалов; ответ сохранён");
     const unique = resolveDocumentaryCandidateKeys(response.ids as string[], negatives.remainingCandidates.map(item=>String(item.id)));
     if(response.ids.length===0)await negatives.rememberEmpty();
-    return unique.map(id => shortKeys.find(item => item.shortKey === id)!.candidate);
+    const grounded=filterDocumentaryRankingEra(response,narrativeContext,candidatesForRanking,unique);
+    if(grounded.length!==unique.length)recordDiagnosticEvent('info','documentary.ranking.era-filter',{projectId:project.id,sceneId:scene.id,rejected:unique.length-grounded.length,remaining:grounded.length});
+    return grounded.map(id => shortKeys.find(item => item.shortKey === id)!.candidate);
   }
 
   async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {

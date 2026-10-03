@@ -2,9 +2,10 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {atomicWrite} from './fs-utils.js';
 import {AnyModelOutputFormatError} from './anymodel-client.js';
+import {documentaryRankingEraInstruction} from './documentary-ranking-era.js';
 
 type Item={system:string;input:string;onPartial:(raw:string)=>void;onBatch:(file:string,member:number)=>Promise<void>;resolve:(raw:string)=>void;reject:(error:unknown)=>void};
-export const documentaryRankingResponseInstruction=' This request ranks METADATA ONLY: return exactly {"ids":["up to six supplied IDs"],"reason":"at most 20 words"}. No markdown or other fields. Visual-review schemas in the instructions apply only to the later actual-frame inspection: do not fill generalDiagram, identityMatch, narrativeEvidence, annotations or technicalQuality from titles/descriptions.';
+export const documentaryRankingResponseInstruction=' This request ranks METADATA ONLY: return {"ids":["up to six supplied IDs"],"reason":"at most 20 words"}, with era and sourceQuotes when dated narrative context requires them. No markdown. Visual-review schemas in the instructions apply only to the later actual-frame inspection: do not fill generalDiagram, identityMatch, narrativeEvidence, annotations or technicalQuality from titles/descriptions.'+documentaryRankingEraInstruction;
 /** Each caller already saved its own pending checkpoint before joining. A
  * broken batch never transfers another member's text/IDs into that checkpoint. */
 export class DocumentaryRankingBatch {
@@ -38,7 +39,7 @@ export class DocumentaryRankingBatch {
     try {
       await Promise.all(items.map((item,id)=>item.onBatch(`ranking-batch-${batchId}.json`,id)));
       await atomicWrite(path,JSON.stringify({state:'pending',model,members:items.length,createdAt:new Date().toISOString()}));
-      raw=await this.send('Rank the candidates for EACH independent request using its instructions and data. Return JSON only: {"results":[{"id":0,"ids":["candidate id from THIS request only"]}]}. Include each request id exactly once, with at most six candidate IDs. Never transfer a subject, constraint or candidate between requests. An empty ids array is a valid rejection. Metadata is a download shortlist, not visual approval. No explanations or markdown.',content,model,value=>{raw=value;});
+      raw=await this.send('Rank the candidates for EACH independent request using its instructions and data. Return JSON only: {"results":[{"id":0,"ids":["candidate id from THIS request only"]}]}, adding era and sourceQuotes to each dated member. Include each request id exactly once, with at most six candidate IDs. Never transfer a subject, constraint or candidate between requests. An empty ids array is a valid rejection. Metadata is a download shortlist, not visual approval. No explanations or markdown.'+documentaryRankingEraInstruction,content,model,value=>{raw=value;});
       await atomicWrite(path,JSON.stringify({state:'received',model,members:items.length,raw}));
       const value=JSON.parse(raw.replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/,''));
       if(!Array.isArray(value.results)||value.results.length!==items.length)throw new Error('Incomplete ranking batch');
@@ -46,7 +47,7 @@ export class DocumentaryRankingBatch {
         const rows=value.results.filter((row:any)=>row.id===id);
         const allowed=new Set(JSON.parse(item.input).candidates.map((candidate:any)=>candidate.id));
         if(rows.length!==1||!Array.isArray(rows[0].ids)||rows[0].ids.length>6||rows[0].ids.some((candidate:unknown)=>typeof candidate!=='string'||!allowed.has(candidate)))throw new Error('Invalid ranking member');
-        return JSON.stringify({ids:rows[0].ids});
+        return JSON.stringify({ids:rows[0].ids,...(rows[0].era===undefined?{}:{era:rows[0].era}),...(rows[0].sourceQuotes===undefined?{}:{sourceQuotes:rows[0].sourceQuotes})});
       });
       await atomicWrite(path,JSON.stringify({state:'complete',model,members:items.length,raw,outputs:outputs.map(value=>JSON.parse(value))}));
       items.forEach((item,index)=>item.resolve(outputs[index]!));

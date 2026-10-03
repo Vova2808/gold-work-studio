@@ -684,7 +684,9 @@ export class DocumentaryProjectService {
           let waitingAt=Date.now();
           const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
-            youtubeQueries:kind==='video'&&this.youtube?[...new Set([queries[0]!,searchSubjects[0]].filter((q):q is string=>Boolean(q)))]:[],
+            // Keep the second planned scene query, including its event/detail.
+            // A bare inherited name often targets a different participant/era.
+            youtubeQueries:kind==='video'&&this.youtube?queries.slice(0,2):[],
             discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<=0,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);

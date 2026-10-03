@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
+import {documentaryRankingResponseInstruction} from './documentary-ranking-batch.js';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
 
 test('named scenes do not pay to rank unrelated generic stock; a real named source remains eligible',async t=>{
@@ -32,7 +33,11 @@ test('filtering generic stock never bypasses a pending ranking of the original f
   const pool=[{...base,id:'generic',title:'Podcast studio',downloadUrl:'https://example.test/generic'},
     {...base,id:'named',title:'Masao Furusawa interview',downloadUrl:'https://example.test/named'}] as DocumentaryCandidate[];
   let recordedSystem='',recordedInput='';
-  await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{recordedSystem=system;recordedInput=input;return '{"ids":[]}';}},()=>join(root,'capture')).rankCandidates(project,scene,pool);
+  await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
+    assert.ok(system.endsWith(documentaryRankingResponseInstruction));
+    // Response-format hints are appended at dispatch, after the saved key.
+    recordedSystem=system.slice(0,-documentaryRankingResponseInstruction.length);recordedInput=input;return '{"ids":[]}';
+  }},()=>join(root,'capture')).rankCandidates(project,scene,pool);
   const request=JSON.parse(recordedInput);
   request.candidates=pool.map(c=>({id:createHash('sha256').update(documentaryCandidateKey(c)).digest('hex').slice(0,8),title:c.title,description:c.description,provider:c.provider,author:c.author,kind:c.kind})).sort((a,b)=>a.id.localeCompare(b.id));
   const key=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',recordedSystem,JSON.stringify(request),[]])).digest('hex');
@@ -66,7 +71,10 @@ test('mixed ranking sends only newly seen candidates and cannot bypass an old pe
   const project={id:'p',scenes:[scene]} as Project;
   const pool=['a','b','c'].map(id=>({id,provider:'commons',kind:'image',title:`Unrelated ${id}`,description:'Unknown object',downloadUrl:`https://example.test/${id}.jpg`,pageUrl:`https://example.test/${id}`})) as DocumentaryCandidate[];
   let fullSystem='',fullInput='';
-  await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{fullSystem=system;fullInput=input;return '{"ids":[]}';}},()=>join(root,'capture')).rankCandidates(project,scene,pool);
+  await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
+    assert.ok(system.endsWith(documentaryRankingResponseInstruction));
+    fullSystem=system.slice(0,-documentaryRankingResponseInstruction.length);fullInput=input;return '{"ids":[]}';
+  }},()=>join(root,'capture')).rankCandidates(project,scene,pool);
   for(const pending of [false,true]){
     const directory=join(root,String(pending));const inputs:string[]=[];
     const client={configured:async()=>true,documentaryCompletion:async(_system:string,input:string)=>{inputs.push(input);const data=JSON.parse(input);return inputs.length===1?' {"ids":[]} ':JSON.stringify({ids:[data.candidates[0].id]});}};

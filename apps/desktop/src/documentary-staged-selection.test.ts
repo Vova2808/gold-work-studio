@@ -56,3 +56,28 @@ for(const rejectFirst of [false,true])test(`staged selection ${rejectFirst?'cont
   assert.equal(result.project.scenes[0]!.audioPath,scene.audioPath);
   assert.deepEqual(result.project.scenes[1],untouched);
 });
+
+test('actual video discovery retains the planned rival and event in the second YouTube query',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'gws-rival-discovery-'));
+ const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
+ let p=await projects.create({title:'Race',topic:'Rossi and Biaggi',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
+ p.videoBrief={...p.videoBrief!,creationMode:'script',readyScript:'Rossi faced Max Biaggi at the 2004 opening race.'};
+ const calibration=createVoiceCalibration({provider:'elevenlabs',voice:'fixture',language:'en',sampleText:p.videoBrief.readyScript!,audioDurationSeconds:5});
+ const scene=prepareDocumentaryScript(p,calibration)[0]!;
+ const queries=['Max Biaggi Honda RC211V 2004 South Africa','Biaggi MotoGP season opener 2004','Max Biaggi pit box Welkom'];
+ scene.documentary!.requirement={...scene.documentary!.requirement,entities:['Max Biaggi'],identities:[{name:'Valentino Rossi',aliases:[]},{name:'Max Biaggi',aliases:['Biaggi']}],years:[],queries,preferredKind:'video',plannedBy:'semantic',identityContextVersion:3};
+ p=await projects.update(p.id,{settings:{...p.settings,stockVideoPercent:100},scenes:[scene]});
+ const seen:string[]=[];
+ const searcher=new DocumentarySearch();searcher.search=async(input)=>{
+   if(input.kind==='video'&&input.providers?.length===1&&input.providers[0]==='youtube')seen.push(input.query);
+   return {candidates:[],sources:[]};
+ };
+ const service=new DocumentaryProjectService(projects,new LocalProjectStorage(root),searcher,join(root,'Materials'),
+   {download:async()=>{throw Error('No media in this test');}},()=>{},{available:async()=>true,
+     plan:async(_p,scenes)=>new Map(scenes.map(s=>[s.id,s.documentary!.requirement])),inspect:async()=>{throw Error('No candidates');}},
+   undefined,{download:async()=>{throw Error('No candidates');}});
+ const result=await service.autoSelect(p.id,{sceneIds:[scene.id]});
+ assert.equal(result.selected,0);
+ assert.deepEqual([...new Set(seen)],queries.slice(0,2));
+ assert.ok(!seen.includes('Valentino Rossi'),'The second request must not silently change to the other participant');
+});
