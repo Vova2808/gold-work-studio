@@ -10,13 +10,15 @@ type DiscoveryInput={
  * Accepting a source never starts unused archive queries or background jobs. */
 export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   kind:'image'|'video';supplement?:()=>Promise<DocumentaryCandidate[]>;
+  /** Defer a weak precise batch until the broader pool is available. */
+  firstBatchReady?:(candidates:DocumentaryCandidate[])=>boolean;
 }):AsyncGenerator<DocumentaryCandidate[],void>{
   if(input.stopped())return;
   const youtube=input.kind==='video'&&input.youtubeQueries.length>0;
   const query=youtube?input.youtubeQueries[0]:input.queries[0];
   if(query){
     const first=await input.discover(query,youtube?['youtube']:input.kind==='image'?['commons']:['pexels','pixabay']);
-    if(first.length)yield first;
+    if(first.length&&input.firstBatchReady?.(first)!==false)yield first;
   }
   if(input.stopped())return;
   // Existing provider cache/single-flight reuses the first query. Archives,

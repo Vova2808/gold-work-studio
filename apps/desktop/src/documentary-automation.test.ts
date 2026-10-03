@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryProjectRepository, MockDirectorProvider, ProjectService } from "@gold-work/core";
-import { createVoiceCalibration, type DocumentaryCandidate } from "@gold-work/shared";
+import { createVoiceCalibration, type DocumentaryCandidate, type DocumentaryRequirement } from "@gold-work/shared";
 import { DocumentaryIntelligence, documentaryJson, documentaryNarrationContext, resolveDocumentaryCandidateKeys, documentaryRankingPool } from "./documentary-intelligence.js";
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
 import { AnyModelProviderResponseError } from "./anymodel-client.js";
@@ -13,7 +13,7 @@ import { DocumentaryAnalysisError } from "./documentary-analysis-error.js";
 import { ensureDocumentaryMemory, DOCUMENTARY_MEMORY_RESERVE, DocumentaryMemoryUnavailableError } from "./documentary-resources.js";
 import { DocumentaryStorageUnavailableError } from "./documentary-storage.js";
 import { prepareDocumentaryScript } from "./documentary-plan.js";
-import { DocumentaryProjectService, documentaryCandidateAttempts, documentarySearchQueries, documentaryStockQueries, hasExactDocumentaryVideoCandidate, selectDocumentaryCandidates } from "./documentary-project-service.js";
+import { DocumentaryProjectService, documentaryCandidateAttempts, documentaryFirstVideoBatchWorthInspecting, documentarySearchQueries, documentaryStockQueries, hasExactDocumentaryVideoCandidate, selectDocumentaryCandidates } from "./documentary-project-service.js";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { DocumentarySearch } from "./documentary-search.js";
 import { effectFfmpeg, probeEffectMedia } from "./effect-media.js";
@@ -159,6 +159,17 @@ test("script search planning does not announce material selection", async () => 
   assert.ok(planned.scenes.every(scene => scene.documentary?.requirement.plannedBy === "semantic"));
   assert.deepEqual(phases, [], "No stock toast before the user starts production");
   assert.equal(planned.scenes.map(scene => scene.narration).join(""), project.videoBrief!.readyScript);
+});
+
+test("only a short first video with the named subject, year and detail merits early AI ranking", () => {
+  const requirement={text:'Honda RC211V entered in 2002',entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:[]}],years:['2002'],
+    queries:['Honda RC211V 2002 four-stroke race'],detail:'four-stroke racing regulations',preferredKind:'video',plannedBy:'semantic'} as DocumentaryRequirement;
+  const clip={kind:'video',rights:'licensed',title:'Honda RC211V 2002 four-stroke race',description:'Racing archive',durationSeconds:30} as DocumentaryCandidate;
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([clip],requirement),true);
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([{...clip,durationSeconds:600}],requirement),false);
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([{...clip,title:'Honda RC211V 2014 four-stroke race'}],requirement),false);
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([{...clip,title:'Yamaha YZR-M1 2002 four-stroke race'}],requirement),false);
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([{...clip,rights:'unknown'}],requirement),false);
 });
 
 test("exact video metadata skips a second metadata vote but still requires visual inspection", async () => {
@@ -338,6 +349,37 @@ test("a timed-out YouTube original does not start another long YouTube download 
   assert.equal(result.project.scenes[0]!.documentary!.selected!.kind, "image");
   assert.equal(downloads, 1, "One stalled origin must not consume several consecutive fifteen-minute slots for the same scene");
   assert.equal(result.project.settings.stockVideoPercent, project.settings.stockVideoPercent);
+});
+
+test("an unavailable preview of a long YouTube source skips the original download", async t => {
+  const { root, projects, project } = await setup();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const photo = join(root, "tractor-preview-fallback.png");
+  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720", "-frames:v", "1", photo]);
+  const scene = project.scenes[0]!;
+  const video: DocumentaryCandidate = { id: "youtube:long-preview", provider: "youtube", kind: "video", title: "Red tractor documentary", description: "Field work",
+    pageUrl: "https://example.test/long-preview", downloadUrl: "https://example.test/long-preview", author: "Fixture", license: "CC BY", licenseUrl: "https://example.test/license",
+    rights: "licensed", attribution: "Fixture", query: "tractor", retrievedAt: "now", match: "exact-metadata", concerns: [], width: 1280, height: 720, durationSeconds: 611 };
+  const searcher = new DocumentarySearch();
+  searcher.search = async input => ({ candidates: input.kind === "image"
+    ? [{ ...video, provider: "commons", id: "fallback-photo", kind: "image", downloadUrl: "", localPath: photo }]
+    : [video], sources: [] });
+  let previews = 0, downloads = 0;
+  const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, "workspace")), searcher, join(root, "Materials"),
+    { download: async () => { throw new Error("No stock download expected"); } }, () => {}, {
+      available: async () => true,
+      plan: async (_project, scenes) => new Map(scenes.map(item => [item.id, { ...item.documentary!.requirement, entities: ["Red tractor"], queries: ["red tractor field"], plannedBy: "semantic" as const }])),
+      inspectPreview: async () => { throw new Error("Preview inspection must not run"); },
+      inspect: async () => ({ status: "accepted", confidence: .99, reason: "Mock fallback review", checkedAt: "now", sampleSeconds: [0], quality: "1280x720" }),
+    }, undefined, {
+      preview: async () => { previews++; throw new Error("Preview unavailable"); },
+      download: async () => { downloads++; throw new Error("Long original must not download"); },
+    });
+  const result = await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  assert.equal(previews, 1);
+  assert.equal(downloads, 0);
+  assert.equal(result.selected, 1, JSON.stringify(result.failures));
+  assert.equal(result.project.scenes[0]!.documentary!.selected!.kind, "image");
 });
 
 test("local stock lookup ignores stopwords and old search queries, ranking actual source metadata", async () => {

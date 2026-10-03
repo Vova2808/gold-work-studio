@@ -81,3 +81,34 @@ test('actual video discovery retains the planned rival and event in the second Y
  assert.deepEqual([...new Set(seen)],queries.slice(0,2));
  assert.ok(!seen.includes('Valentino Rossi'),'The second request must not silently change to the other participant');
 });
+
+test('weak first YouTube results receive one metadata vote after broad discovery',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'gws-video-pool-'));
+ const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
+ let project=await projects.create({title:'Motorcycle',topic:'Honda RC211V',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
+ project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:'The Honda RC211V entered the new four-stroke MotoGP class in 2002.'};
+ const calibration=createVoiceCalibration({provider:'elevenlabs',voice:'fixture',language:'en',sampleText:project.videoBrief.readyScript!,audioDurationSeconds:5});
+ const scene=prepareDocumentaryScript(project,calibration)[0]!;
+ scene.audioPath=join(root,'preserved-voice.mp3');
+ scene.documentary!.requirement={...scene.documentary!.requirement,entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:[]}],years:['2002'],
+   queries:['Honda RC211V 2002 four-stroke MotoGP'],detail:'four-stroke MotoGP regulations',preferredKind:'video',plannedBy:'semantic',identityContextVersion:3};
+ project=await projects.update(project.id,{settings:{...project.settings,stockVideoPercent:100},scenes:[scene]});
+ const make=(id:string,title:string,durationSeconds:number):DocumentaryCandidate=>({id,provider:id.startsWith('youtube:')?'youtube':'commons',kind:'video',title,description:'Archive',
+   pageUrl:`https://example.test/${id.replace(':','-')}`,downloadUrl:`https://example.test/${id.replace(':','-')}.mp4`,author:'Fixture',license:'CC BY',licenseUrl:'https://example.test/license',
+   rights:'licensed',attribution:'Fixture',query:'Honda RC211V 2002',retrievedAt:'now',match:'unverified',concerns:[],durationSeconds});
+ const weak=make('youtube:abcdefghijk','Honda RC211V 2002 race archive',600);
+ const broad=make('commons:race','Honda RC211V 2002 four-stroke MotoGP',30);
+ const searcher=new DocumentarySearch();
+ searcher.search=async input=>({candidates:input.kind!=='video'?[]:input.providers?.length===1&&input.providers[0]==='youtube'?[weak]:input.providers?.includes('commons')?[broad]:[],sources:[]});
+ const ranked:string[][]=[];
+ const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'projects')),searcher,join(root,'Materials'),
+   {download:async()=>{throw Error('No media download expected');}},()=>{},
+   {available:async()=>true,plan:async(_p,scenes)=>new Map(scenes.map(item=>[item.id,item.documentary!.requirement])),
+     rankCandidates:async(_p,_s,pool)=>{ranked.push(pool.map(item=>item.id));return [];},inspect:async()=>{throw Error('No inspection expected');}},
+   undefined,{download:async()=>{throw Error('No YouTube download expected');}});
+ const result=await service.autoSelect(project.id,{sceneIds:[scene.id]});
+ assert.equal(result.selected,0);
+ assert.equal(ranked.length,1);
+ assert.deepEqual(new Set(ranked[0]),new Set([weak.id,broad.id]));
+ assert.equal(result.project.scenes[0]!.audioPath,scene.audioPath);
+});

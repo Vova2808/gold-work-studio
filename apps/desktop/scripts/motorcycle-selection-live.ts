@@ -43,9 +43,11 @@ app.whenReady().then(async()=>{
   assert.match(manifestName,/^manifest(?:-[a-z0-9-]+)?\.json$/);
   const manifest=JSON.parse(await readFile(join(root,manifestName),'utf8'));
   const requested=manifest.groups.flatMap((g:{scenes:Array<{id:string;number:number;kind:string}>})=>g.scenes) as Array<{id:string;number:number;kind:string}>;
-  const only=process.argv.find(a=>a.startsWith('--scenes='))?.slice(9).split(',').map(Number);
+  const scenesArg=process.argv.find(a=>a.startsWith('--scenes='));
+  const only=scenesArg?.slice(9).trim().split(/[\s,]+/).map(Number);
   const sample=requested.filter(s=>!only||only.includes(s.number));
-  assert.ok(sample.length>0&&sample.length<=10&&new Set(sample.map(s=>s.id)).size===sample.length);
+  assert.ok(sample.length>0&&sample.length<=10&&new Set(sample.map(s=>s.id)).size===sample.length,
+    `Invalid sample: flag=${JSON.stringify(scenesArg)}, only=${JSON.stringify(only)}, selected=${sample.length}, manifest=${manifestName}`);
   const registryPath=join(profile,'projects.json');
   const registryHash=async()=>createHash('sha256').update(await readFile(registryPath)).digest('hex');
   const originalHash=await registryHash();
@@ -147,4 +149,4 @@ app.whenReady().then(async()=>{
   const result={at:new Date().toISOString(),round,repository:'FileProjectRepository isolated full registry',projectId:project.id,elapsedSeconds:(Date.now()-started)/1000,submissions,reportedTokens:tokens,failure,stats,peakRssMB:peakRss/1048576,peakHeapMB:peakHeap/1048576,minFreeMB:minFree/1048576,maxEventLoopDelayMs:lag,registryPreserved:finalRegistryHash===originalHash,registryStartHash:originalHash,registryFinalHash:finalRegistryHash,productionRegistryWrittenByHarness:false,results,note:'Real providers on unfinished existing scenes; prior cache/checkpoints retained. Means include contention and fallback. Not a cold full-film benchmark. Baseline used MemoryProjectRepository; memory/timing cannot be directly compared.'};
   await atomicWrite(join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,results:undefined}));
   app.exit(failure?1:0);
-}).catch(error=>{console.error(String(error).replace(/https?:\/\/\S+/g,'[source]'));app.exit(1);});
+}).catch(error=>{console.error((error instanceof Error ? error.stack ?? error.message : String(error)).replace(/https?:\/\/\S+/g,'[source]'));app.exit(1);});

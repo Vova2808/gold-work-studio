@@ -30,6 +30,18 @@ test('rejection requests full discovery; an empty first source does not end the 
   }
 });
 
+test('a weak precise video batch waits for broad results instead of requiring two shortlists',async()=>{
+  const calls:string[]=[];
+  const batches=discoverDocumentarySourceBatches({kind:'video',queries:['named subject'],stockQueries:[],youtubeQueries:['named subject'],stopped:()=>false,
+    firstBatchReady:()=>false,
+    discover:async(_query,providers)=>{calls.push(providers.join(','));return [{id:providers.length===1&&providers[0]==='youtube'?'weak':'broad'}] as DocumentaryCandidate[];}});
+  const first=await batches.next();
+  assert.ok(first.value?.some(candidate=>candidate.id==='weak'));
+  assert.ok(first.value?.some(candidate=>candidate.id==='broad'));
+  assert.ok(calls.some(call=>call.includes('internet-archive')));
+  assert.equal((await batches.next()).done,true);
+});
+
 test('stop between precise and broad waves dispatches no more network work',async()=>{
   let stopped=false,calls=0;
   const batches=discoverDocumentarySourceBatches({kind:'image',queries:['subject'],stockQueries:[],youtubeQueries:[],stopped:()=>stopped,

@@ -186,6 +186,19 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
 }
 
+/** Only a short, well-labelled first clip merits an AI shortlist before other
+ * source families return. Weak YouTube captions remain in the broad pool. */
+export function documentaryFirstVideoBatchWorthInspecting(candidates: DocumentaryCandidate[], requirement: DocumentaryRequirement): boolean {
+  const identities=requirement.identities??[];
+  return candidates.some(candidate=>{
+    if(candidate.kind!=='video'||candidate.rights==='unknown'||(candidate.durationSeconds??Infinity)>45)return false;
+    const metadata=`${candidate.title} ${candidate.description}`.toLowerCase();
+    if(identities.some(identity=>![identity.name,...identity.aliases].some(name=>name&&metadata.includes(name.toLowerCase()))))return false;
+    if(requirement.years.length&&!requirement.years.some(year=>metadata.includes(year)))return false;
+    return !requirement.detail?.trim()||documentaryDetailScore(candidate,requirement)>=3;
+  });
+}
+
 export function documentaryDetailScore(candidate: DocumentaryCandidate, requirement: DocumentaryRequirement): number {
   const words = (value: string) => value.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
   const ignored = new Set([...requirement.entities.flatMap(words), "video", "footage", "photo", "view", "archive", "archival"]);
@@ -688,6 +701,9 @@ export class DocumentaryProjectService {
             // A bare inherited name often targets a different participant/era.
             youtubeQueries:kind==='video'&&this.youtube?queries.slice(0,2):[],
             discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<=0,
+            firstBatchReady:kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
+              ?first=>session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<10_000
+                ||documentaryFirstVideoBatchWorthInspecting(first,requirement):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);
               for(const source of shared.sources.filter(source=>source.error)){
@@ -1046,6 +1062,13 @@ export class DocumentaryProjectService {
           } catch(error){
             signal?.throwIfAborted();
             if(error instanceof DocumentaryStorageUnavailableError||error instanceof DocumentaryYouTubeDefinitionError||(error as NodeJS.ErrnoException)?.code==='ENOSPC')throw error;
+            // A long original can exceed the scene budget after an unavailable
+            // preview. Try another source rather than spending that budget on
+            // hundreds of megabytes without any view-level evidence.
+            if(!commit&&candidate.provider==='youtube'&&(candidate.durationSeconds??0)>=600){
+              recordDiagnosticEvent('info','documentary.preview.long-original-deferred',{projectId,sceneId,provider:candidate.provider,durationSeconds:candidate.durationSeconds});
+              throw new Error('Пробные участки долгого YouTube-видео недоступны; пропускаю автоматическую загрузку оригинала и проверяю другой источник.');
+            }
             // An unavailable seek/preview is not evidence against the footage.
             // Original download retains the same total scene budget and guards.
             recordDiagnosticEvent('warn','documentary.preview.unavailable',{projectId,sceneId,provider:candidate.provider,message:String(error).replace(/https?:\/\/\S+/g,'[source]').slice(0,250)});
