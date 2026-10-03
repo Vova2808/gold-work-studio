@@ -7,6 +7,9 @@ test('selection reduces new work when memory falls, without cancelling accepted 
   const gb=1024**3;
   assert.equal(documentarySelectionWorkers(12,.7*gb,3*gb),1);
   assert.equal(documentarySelectionWorkers(12,8*gb,.7*gb),1);
+  assert.equal(documentarySelectionWorkers(12,1.5*gb,8*gb),1);
+  assert.equal(documentarySelectionWorkers(12,2*gb,8*gb),2);
+  assert.equal(documentarySelectionWorkers(12,3*gb,8*gb),4);
   let samples=0,active=0;const starts:number[]=[];const finished:number[]=[];
   await runDocumentarySelectionQueue([0,1,2,3],async id=>{
     starts[id]=++active;

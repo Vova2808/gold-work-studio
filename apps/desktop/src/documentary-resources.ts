@@ -8,9 +8,11 @@ export const DOCUMENTARY_MEMORY_RESERVE = 1024 ** 3;
  * searches and paid reviews while holding their own candidate pools in RAM. */
 export function documentarySelectionWorkers(cores:number,physicalBytes:number,commitBytes:number):number {
   const headroom=Math.min(physicalBytes,commitBytes);
-  if(![cores,headroom].every(Number.isFinite))return 4;
-  if(headroom<1.25*1024**3)return 1;
-  return Math.max(2,Math.min(4,Math.max(2,cores),Math.floor((headroom-.75*1024**3)/(.4*1024**3))));
+  if(![cores,headroom].every(Number.isFinite))return 1;
+  // Reserve the same 1 GiB required before paid analysis. The former 2-worker
+  // floor could admit ~800 MiB of scene work with only 1.5 GiB available.
+  const memoryWorkers=Math.floor((headroom-DOCUMENTARY_MEMORY_RESERVE)/(.4*1024**3));
+  return Math.max(1,Math.min(4,Math.max(1,cores),memoryWorkers));
 }
 
 /** Re-evaluate memory after each completed scene. Existing paid work drains;
