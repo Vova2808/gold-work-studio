@@ -4,7 +4,7 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext} from './docum
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
-import {documentaryRequiredVisiblePart} from './documentary-detail-evidence.js';
+import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentarySceneContext,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -220,10 +220,18 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
   // narration actually needs an exposed internal part. Do not bypass the
   // metadata shortlist for that case; the final original check still applies.
   if(requiredVisiblePart&&candidates.some(candidate=>candidate.kind==='video'
-    &&!`${candidate.title} ${candidate.description}`.toLowerCase().includes(requiredVisiblePart.toLowerCase())))return false;
+    &&!documentaryVisiblePartInMetadata(requiredVisiblePart,`${candidate.title} ${candidate.description}`)))return false;
   return candidates.some(candidate => candidate.kind === "video" && candidate.match === "exact-metadata" && candidate.rights !== "unknown")
     && candidates.every(candidate => candidate.kind !== "video" || candidate.localPath || (candidate.durationSeconds ?? Infinity) <= 45
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
+}
+
+/** A broad wave may contain the named part even when the first exact search
+ * returned only surrounding vehicles. The iterator yields the first batch at
+ * the end if nothing better appears, so no source is silently discarded. */
+export function documentaryFirstImageBatchWorthInspecting(candidates:DocumentaryCandidate[],requiredVisiblePart:string):boolean {
+  return candidates.some(candidate=>candidate.kind==='image'
+    &&documentaryVisiblePartInMetadata(requiredVisiblePart,`${candidate.title} ${candidate.description}`));
 }
 
 /** Only a short, well-labelled first clip merits an AI shortlist before other
@@ -747,15 +755,21 @@ export class DocumentaryProjectService {
           }
           session.accountSearch(scene.id,kind,Date.now()-searchStarted);
           let waitingAt=Date.now();
+          const requiredImagePart=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)
+            ?documentaryRequiredVisiblePart(scene.narration):undefined;
           const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
             // Keep the second planned scene query, including its event/detail.
             // A bare inherited name often targets a different participant/era.
             youtubeQueries:kind==='video'&&this.youtube?queries.slice(0,2):[],
             discover,stopped:()=>Boolean(fatal)||this.stopRequested.has(projectId)||session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<=0,
-            firstBatchReady:kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
+            firstBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
+              ?first=>documentaryFirstImageBatchWorthInspecting(first,requiredImagePart)
+              :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
               ?first=>session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<10_000
                 ||documentaryFirstVideoBatchWorthInspecting(first,requirement):undefined,
+            deferredBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
+              ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);
               for(const source of shared.sources.filter(source=>source.error)){

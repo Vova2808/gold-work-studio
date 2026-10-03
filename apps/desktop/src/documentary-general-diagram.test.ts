@@ -8,6 +8,7 @@ import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
 import {documentarySceneContext} from './documentary-scene-context.js';
 import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
+import {documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {DocumentaryIntelligence,DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {documentaryRankingResponseInstruction} from './documentary-ranking-batch.js';
 import {effectFfmpeg} from './effect-media.js';
@@ -75,6 +76,12 @@ test('diagram evidence cannot approve a photograph, invented quotation, missing 
     {...valid,narrativeEvidence:{...valid.narrativeEvidence,detailMatch:false}},
     {...valid,identityMatch:true,identifiedEntity:'Yamaha YZR-M1'}
   ])assert.equal(documentaryGeneralDiagramVerified(invalid,context,identities),false);
+});
+
+test('visible part hints distinguish multilingual mechanism captions from model-only exteriors',()=>{
+  assert.equal(documentaryVisiblePartInMetadata('connecting-rod','Piston bielle vilebrequin coupe et schema cinematique'),true);
+  assert.equal(documentaryVisiblePartInMetadata('connecting-rod','MotoGP first race with Yamaha YZR-M1'),false);
+  assert.equal(documentaryVisiblePartInMetadata('crankshaft','Crank shaft on a mechanical test rig'),true);
 });
 
 test('video ranking requires the exposed mechanism and protects the previous paid ranking',async t=>{

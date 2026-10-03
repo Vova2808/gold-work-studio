@@ -12,6 +12,19 @@ export function documentaryRequiredVisiblePart(narration:string):string|undefine
   ];
   return parts.find(([pattern])=>pattern.test(narration))?.[1];
 }
+/** Metadata can justify inspecting a physical detail, never approve its pixels.
+ * Short multilingual part names occur in otherwise useful archive captions. */
+export function documentaryVisiblePartInMetadata(part:string,metadata:string):boolean {
+  const patterns:Record<string,RegExp>={
+    'crankshaft':/\bcrank[ -]?shaft\b|\bvilebrequin\b|колен(?:вал|чат\p{L}*\s+вал)/iu,
+    'connecting-rod':/\bconnecting[ -]?rods?\b|\bconrods?\b|\bbielles?\b|шатун/iu,
+    'piston':/\bpistons?\b|поршн/iu,
+    'camshaft':/\bcam[ -]?shafts?\b|\barbre[s]?\s+[àa]\s+cames\b|распред/iu,
+    'valve':/\bvalves?\b|\bsoupapes?\b|клапан/iu,
+    'exposed-engine':/\b(?:engine|motor)\s+(?:cutaway|cross[ -]?section|internals?)\b|\binternal\s+combustion\s+engine\b|двигател\p{L}*\s+в\s+разрезе/iu,
+  };
+  return Boolean(patterns[part]?.test(metadata));
+}
 export function documentaryDetailEvidenceIssue(part:string,inventory:Record<string,unknown>):string|undefined {
   if(inventory.prominentParts&&Array.isArray(inventory.prominentParts)&&inventory.prominentParts.includes(part)&&typeof inventory.evidence==='string'&&inventory.evidence.trim().length>=12)return;
   return `В реальном кадре не подтверждена явно видимая деталь «${part}». Общий вид транспорта или закрытый корпус не заменяет изображение внутреннего механизма.`;

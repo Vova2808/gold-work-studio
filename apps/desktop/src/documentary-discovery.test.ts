@@ -5,6 +5,7 @@ import type {DocumentaryCandidate} from '@gold-work/shared';
 import {discoverDocumentarySources,discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import {DocumentarySearch} from './documentary-search.js';
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
+import {documentaryFirstImageBatchWorthInspecting} from './documentary-project-service.js';
 
 test('a precise ready source can be inspected and accepted without starting archive or shared discovery',async()=>{
   const calls:string[]=[];
@@ -38,6 +39,31 @@ test('a weak precise video batch waits for broad results instead of requiring tw
   assert.ok(first.value?.some(candidate=>candidate.id==='weak'));
   assert.ok(first.value?.some(candidate=>candidate.id==='broad'));
   assert.ok(calls.some(call=>call.includes('internet-archive')));
+  assert.equal((await batches.next()).done,true);
+});
+
+test('a technical photo search waits for the actual named part before paying to rank exteriors',async()=>{
+  const exterior={id:'exterior',kind:'image',title:'Yamaha racing motorcycle',description:'Whole bike at a race'} as DocumentaryCandidate;
+  const secondExterior={id:'second-exterior',kind:'image',title:'Yamaha YZR-M1 race',description:'Racing motorcycle on track'} as DocumentaryCandidate;
+  const diagram={id:'diagram',kind:'image',title:'Piston bielle vilebrequin',description:'Piston, connecting rod and crankshaft cutaway'} as DocumentaryCandidate;
+  assert.equal(documentaryFirstImageBatchWorthInspecting([exterior],'connecting-rod'),false);
+  assert.equal(documentaryFirstImageBatchWorthInspecting([diagram],'connecting-rod'),true);
+  const batches=discoverDocumentarySourceBatches({kind:'image',queries:['MotoGP engine diagram'],stockQueries:[],youtubeQueries:[],stopped:()=>false,
+    firstBatchReady:first=>documentaryFirstImageBatchWorthInspecting(first,'connecting-rod'),
+    deferredBatchReady:batch=>documentaryFirstImageBatchWorthInspecting(batch,'connecting-rod'),
+    discover:async(_query,providers)=>providers.length===1?[exterior]:[secondExterior,diagram]});
+  assert.deepEqual((await batches.next()).value?.map(candidate=>candidate.id),['exterior','second-exterior','diagram']);
+  assert.equal((await batches.next()).done,true);
+});
+
+test('a technical photo search keeps two weak waves for fallback instead of ranking either separately',async()=>{
+  const exterior={id:'exterior',kind:'image',title:'Motorcycle exterior'} as DocumentaryCandidate;
+  const race={id:'race',kind:'image',title:'Yamaha race'} as DocumentaryCandidate;
+  const batches=discoverDocumentarySourceBatches({kind:'image',queries:['engine diagram'],stockQueries:[],youtubeQueries:[],stopped:()=>false,
+    firstBatchReady:batch=>documentaryFirstImageBatchWorthInspecting(batch,'connecting-rod'),
+    deferredBatchReady:batch=>documentaryFirstImageBatchWorthInspecting(batch,'connecting-rod'),
+    discover:async(_query,providers)=>providers.length===1?[exterior]:[race]});
+  assert.deepEqual((await batches.next()).value?.map(candidate=>candidate.id),['exterior','race']);
   assert.equal((await batches.next()).done,true);
 });
 

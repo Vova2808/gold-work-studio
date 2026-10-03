@@ -12,6 +12,9 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   kind:'image'|'video';supplement?:()=>Promise<DocumentaryCandidate[]>;
   /** Defer a weak precise batch until the broader pool is available. */
   firstBatchReady?:(candidates:DocumentaryCandidate[])=>boolean;
+  /** For a detail-critical image, keep accumulating instead of paying to rank
+   * successive batches that still contain no plausible depiction. */
+  deferredBatchReady?:(candidates:DocumentaryCandidate[])=>boolean;
 }):AsyncGenerator<DocumentaryCandidate[],void>{
   if(input.stopped())return;
   const youtube=input.kind==='video'&&input.youtubeQueries.length>0;
@@ -69,7 +72,8 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
           const oldIds=new Set(deferred.map(candidate=>candidate.id));
           if(batch.candidates.some(candidate=>!oldIds.has(candidate.id))){
             const combined=fresh([...deferred,...batch.candidates]);deferred=[];
-            combined.forEach(candidate=>yielded.add(candidate.id));if(combined.length)yield combined;
+            if(input.deferredBatchReady?.(combined)===false)deferred=combined;
+            else {combined.forEach(candidate=>yielded.add(candidate.id));if(combined.length)yield combined;}
           }
         }else {const novel=fresh(batch.candidates);novel.forEach(candidate=>yielded.add(candidate.id));if(novel.length)yield novel;}
       }
