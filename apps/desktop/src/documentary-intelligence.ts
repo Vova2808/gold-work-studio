@@ -914,13 +914,18 @@ export class DocumentaryIntelligence {
         const req=scene.documentary!.requirement,row=rows.find(item=>item.id===scene.id);
         const quote=typeof row?.quote==='string'?row.quote.trim():'';
         const query=typeof row?.query==='string'?row.query.trim().replace(/\s+/g,' '):'';
+        // [music] is a non-spoken transcript marker, not a change of claim.
+        // Keep the original narration intact while grounding the returned
+        // quotation in its spoken words.
+        const spokenNarration=scene.narration.replace(/\[(?:music|музыка)\]/giu,' ').replace(/\s+/g,' ');
+        const groundedQuote=scene.narration.includes(quote)||spokenNarration.includes(quote.replace(/\s+/g,' '));
         const namedTerms=(req.identities??[]).flatMap(identity=>[identity.name,...identity.aliases]);
         const normalizedQuery=` ${query.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
         const containsName=namedTerms.some(name=>{
           const canonical=name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
           return canonical.length>=4&&normalizedQuery.includes(` ${canonical} `);
         });
-        const illustrative=row?.scope==='illustrative'&&quote.length>=4&&scene.narration.includes(quote)
+        const illustrative=row?.scope==='illustrative'&&quote.length>=4&&groundedQuote
           &&query.length>=8&&query.length<=100&&!containsName&&!/\b(?:1[0-9]|20)\d{2}\b/.test(query)
           &&!documentaryRequiredVisiblePart(scene.narration);
         resolved.set(scene.id,illustrative?{...req,visualScope:'illustrative',visualScopeQuote:quote,illustrationQuery:query,

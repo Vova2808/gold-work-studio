@@ -70,6 +70,10 @@ test('a short thematic stock video found by a concise query reaches pixel review
   assert.equal(documentaryThematicStockProbe([sparse],requirement),sparse);
   assert.equal(documentaryThematicStockProbe([sparse],{...requirement,visualScope:'exact'}),undefined);
   assert.equal(documentaryThematicStockProbe([{...sparse,width:640}],requirement),undefined);
+  const darkCruiser={...sparse,id:'pixabay:cruiser',title:'motorcycle engine chopper',durationSeconds:22};
+  const racing={...sparse,id:'pexels:racing',title:'motorcycle racing on circuit track',width:1920,height:1080,durationSeconds:10};
+  assert.equal(documentaryThematicStockProbe([darkCruiser,racing],{...requirement,
+    illustrationQuery:'motorcycle engine racing'}),racing);
 });
 
 test('an explicit maker name keeps its inherited motorcycle model exact',async()=>{
@@ -103,6 +107,21 @@ test('a name in the preceding slice does not force a generic video close-up of t
   assert.equal(result?.visualScope,'illustrative');
   assert.deepEqual(result?.identities,[]);
   assert.equal(result?.narrativeIdentities?.[0]?.name,'Honda RC211V');
+});
+
+test('a non-spoken music marker does not invalidate a grounded illustrative quote',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-music-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const narration='It made around 30% more power than the 500 [music] cm two-stroke it replaced.';
+  const requirement={text:narration,entities:['Honda RC211V','Honda NSR500'],identities:[
+    {name:'Honda RC211V',aliases:[]},{name:'Honda NSR500',aliases:[]}],identityContextVersion:3,years:[],
+    queries:['Honda NSR500 versus RC211V'],plannedBy:'semantic'} as DocumentaryRequirement;
+  const scene={id:'power',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  let result:DocumentaryRequirement|undefined;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>JSON.stringify({scenes:[{
+    id:'power',scope:'illustrative',quote:'30% more power than the 500 cm two-stroke',query:'500cc two-stroke motorcycle engine racing'}]})},()=>root);
+  await intelligence.resolveVisualScopes({id:'music',scenes:[scene]} as Project,[scene],async batch=>{result=batch.get('power');});
+  assert.equal(result?.visualScope,'illustrative');
+  assert.deepEqual(result?.identities,[]);
 });
 
 test('an uncertain old visual-scope batch blocks regrouping without another paid request',async t=>{

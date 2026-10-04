@@ -150,7 +150,7 @@ test('a short general video verifies its actual rendered range in one paid check
   await assert.rejects(restart.inspectForSelection(project,scene),/незавершённый ответ анализа/);
 });
 
-test('a medium general clip reviews three exact excerpts in one paid call',async t=>{
+test('a medium general clip reviews one spoken-length excerpt in one paid call',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-medium-general-')),videoPath=join(root,'fixture.mp4');
   t.after(()=>rm(root,{recursive:true,force:true}));
   await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=2','-t','30','-c:v','mpeg4',videoPath]);
@@ -161,21 +161,20 @@ test('a medium general clip reviews three exact excerpts in one paid call',async
   const project={id:'p',aspectRatio:'16:9',scenes:[scene]} as Project;
   let calls=0;
   const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input,images)=>{
-    calls++;const groups=JSON.parse(input).groups;
-    assert.match(system,/groups of 3 ACTUAL ordered video frames/);
-    assert.equal(groups.length,3);assert.equal(images?.length,9);
-    return JSON.stringify({reviews:groups.map((group:{id:number})=>group.id===1
-      ?{id:group.id,status:'accepted',confidence:.96,reason:'Actual moving motorcycles on a circuit.',isCameraFootage:true,
-        mediaType:'camera',presentation:'clean',physicalEvidence:'Race circuit and riders',
-        technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Subject edges are sharp'},
-        narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
-          evidence:'The middle excerpt shows the narrated motorcycle-racing topic.'}}
-      :{id:group.id,status:'rejected',confidence:1,reason:'Not the best excerpt.'})});
+    calls++;const range=JSON.parse(input);
+    assert.match(system,/ONLY and FINAL check of this fixed illustrative excerpt/);
+    assert.ok(range.startSeconds>12&&range.endSeconds<18);
+    assert.equal(images?.length,3);
+    return JSON.stringify({status:'accepted',confidence:.96,reason:'Actual moving motorcycles on a circuit.',isCameraFootage:true,
+      mediaType:'camera',presentation:'clean',physicalEvidence:'Race circuit and riders',
+      technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Subject edges are sharp'},
+      narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
+        evidence:'The excerpt shows the narrated motorcycle-racing topic.'}});
   }},()=>root);
   const {review}=await intelligence.inspectForSelection(project,scene);
   assert.equal(calls,1);
   assert.equal(review.status,'accepted',review.reason);
-  assert.ok((review.trimStartSeconds??0)>8&&review.trimEndSeconds!<23);
+  assert.ok((review.trimStartSeconds??0)>12&&review.trimEndSeconds!<18);
 });
 
 test('a completed accepted review without current context approval cannot verify a scene',async()=>{

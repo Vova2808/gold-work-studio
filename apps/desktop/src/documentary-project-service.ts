@@ -259,11 +259,21 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
  * unrelated long archival videos for an intentionally general illustration. */
 export function documentaryThematicStockProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement):DocumentaryCandidate|undefined{
   if(requirement.visualScope!=='illustrative')return;
-  return candidates.find(candidate=>candidate.kind==='video'
+  const words=new Set((requirement.illustrationQuery??requirement.queries[0]??'').toLowerCase().match(/[\p{L}]{4,}/gu)??[]);
+  const eligible=candidates.filter(candidate=>candidate.kind==='video'
     &&(candidate.provider==='pexels'||candidate.provider==='pixabay')
     &&candidate.rights!=='unknown'
     &&(candidate.durationSeconds??0)>=3&&(candidate.durationSeconds??Infinity)<=45
     &&(candidate.width??0)>=1280&&(candidate.height??0)>=720);
+  // Provider order is not a quality ranking: a dark 720p cruiser can precede
+  // several clear 1080p racing clips for the same motorcycle query.
+  const score=(candidate:DocumentaryCandidate)=>{
+    const title=new Set(candidate.title.toLowerCase().match(/[\p{L}]{4,}/gu)??[]);
+    const overlap=[...words].filter(word=>title.has(word)).length;
+    return overlap*2+Math.min(1,(candidate.width??0)*(candidate.height??0)/(1920*1080))
+      +((candidate.durationSeconds??0)>=8?.15:0);
+  };
+  return eligible.sort((a,b)=>score(b)-score(a))[0];
 }
 
 /** Only metadata ranking is skipped; original pixels and context are checked. */
@@ -988,7 +998,12 @@ export class DocumentaryProjectService {
             &&!tried.has(documentaryCandidateKey(item))
             &&!rejectedCandidates.has(rejectedCandidateFingerprint(item))
             &&!isUncertain(item)&&!formatUnavailable(item))).map(item=>({...item,match:'unverified' as const})):undefined;
-          const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
+          // Reconsider two more distinct short stock clips already returned by
+          // the same search before paying for a long YouTube preview/download.
+          // The ordinary per-scene inspection budget and pixel review still apply.
+          const batches=localOnly||quick?(async function*(){
+            for(let i=0;i<(quick&&kind==='video'&&documentaryGeneralIllustration(scene)?3:1);i++)yield [] as DocumentaryCandidate[];
+          })():discoverDocumentarySourceBatches({kind,queries,
             coalesceMs:kind==='video'?200:0,
             reused:reusable,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],

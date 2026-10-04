@@ -8,6 +8,10 @@
 .documentary-material-modal button:disabled { opacity: .5; cursor: default; }
 .documentary-search-controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
 .documentary-search-controls > input { flex: 1; min-width: 230px; }
+.documentary-candidate-preview { display: grid; gap: 10px; margin: 12px 0 18px; padding: 12px; border: 1px solid #647481; border-radius: 8px; background: #12171d; }
+.documentary-candidate-preview > div { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.documentary-candidate-preview video, .documentary-candidate-preview iframe { display: block; width: 100%; max-height: 55vh; aspect-ratio: 16 / 9; background: #050608; border: 0; }
+.documentary-candidate-preview small { color: #b5c0ce; }
 .documentary-material-content { display: grid; grid-template-columns: minmax(0, 1fr) 335px; gap: 20px; }
 .documentary-candidates { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
 .documentary-candidates article { border: 1px solid #414652; border-radius: 7px; padding: 10px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
@@ -22,6 +26,9 @@
 .documentary-review label, .documentary-manual label { display: block; margin: 12px 0; font-size: 13px; }
 .documentary-review input:not([type=checkbox]), .documentary-review textarea, .documentary-manual input { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; }
 .documentary-review p { font-size: 12px; }
+.documentary-source-range { display: grid; gap: 7px; margin: 12px 0; padding: 10px; border: 1px solid #4a5061; border-radius: 6px; }
+.documentary-material-modal .documentary-source-range input[type=range] { display: block; width: 100%; margin: 10px 0 0; padding: 0; }
+.documentary-source-range span { font-variant-numeric: tabular-nums; color: #9dd0df; }
 .documentary-error { color: #ff9b94; white-space: pre-wrap; }
 .documentary-photo-fallback { color: #f4c36b; font-size: 12px; line-height: 1.5; margin: 8px 0; }
 .documentary-requirement { color: #9dd0df; }
