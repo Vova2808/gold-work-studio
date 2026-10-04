@@ -27,6 +27,14 @@ export function documentaryGeneralIllustration(scene:Scene):boolean {
     &&!/(?:\b(?:1[0-9]|20)\d{2}\b|\b(?:he|she|they|his|her|their|it|its|that day|that year|this event|the same|later that year)\b|\b(?:он|она|они|его|её|их|тот же|в тот день|в том году)\b)/iu.test(scene.narration);
 }
 
+/** A self-contained audience prompt needs an on-topic background, not footage
+ * of someone operating the platform UI. Named people and dated events stay
+ * under their normal exact-evidence rules. */
+export function documentaryCallToActionIllustration(scene:Scene):boolean {
+  return documentaryGeneralIllustration(scene)
+    && /\b(?:subscribe|hit (?:the )?bell|follow (?:this|the) channel|like (?:this|the) video)\b|подпиш\p{L}*|ставьте лайк/iu.test(scene.narration);
+}
+
 export const documentaryGeneralIllustrationInstruction=' This CURRENT editing slice is a self-contained general editorial statement: the vetted plan requires no named subject and no period. A clean relevant stock view may illustrate its general topic even when adjacent sentences discuss historical events. For this slice use requiredEra:"none" and assess the actual visible subject, action, quality and rights. Do not claim a modern shot depicts an earlier named person, model or event; do not apply this exception to any other scene.';
 
 export const documentaryContinuityInstruction=' Narrative continuity: narrativeContext contains the exact current editing slice and nearby ORIGINAL script, in order. Resolve pronouns, current event/season and the actual person from this script BEFORE looking at candidate/source metadata. A historical comparison (e.g. first title since 1992) does not replace the currently narrated 2004 season. A source labelled 2015 cannot illustrate an actual 2004 race merely because the same racer appears. Upload/publication date alone is not capture date: distinguish them. Do not inherit a date across an explicit flashback or subject change. Preserve required named identities; a colleague, opponent or generic person cannot substitute. For a literal part/action require that detail itself; whole-vehicle views may illustrate abstract specifications but not exposed internals. A sentence about an engineer speaking is not illustrated by an unrelated racing rider just because both work for the same brand. Source metadata and generated search hints must never overwrite the original story.';

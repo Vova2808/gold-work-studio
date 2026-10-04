@@ -94,8 +94,16 @@ export async function readVideoFrames(file: string, root: string, times: number[
         try { return await readFile(path); }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          await withDocumentaryFrameSlot(()=>effectFfmpeg(["-y", "-threads", "2", "-ss", String(time), "-i", file, "-frames:v", "1", "-vf", "scale=768:768:force_original_aspect_ratio=decrease", "-q:v", "4", path]));
-          return readFile(path);
+          const extract=(at:number)=>withDocumentaryFrameSlot(()=>effectFfmpeg(["-y", "-threads", "2", "-ss", String(at), "-i", file, "-frames:v", "1", "-vf", "scale=768:768:force_original_aspect_ratio=decrease", "-q:v", "4", path]));
+          await extract(time);
+          try{return await readFile(path);}
+          catch(error){
+            if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+            // Variable/low frame-rate files can end before their container's
+            // reported duration. FFmpeg exits 0 but emits no JPEG near EOF.
+            await extract(Math.max(0,time-.6));
+            return readFile(path);
+          }
         }
       })();
       frameReads.set(path, pending);

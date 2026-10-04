@@ -6,7 +6,7 @@ import {documentaryPreviewKey,documentaryPreviewDownloadRange,downloadDirectDocu
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
-import {documentarySceneContext,documentaryGeneralIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import type { ProjectService } from "@gold-work/core";
@@ -725,7 +725,15 @@ export class DocumentaryProjectService {
         // pixels show. Carry attempts across passes of this run. A changed
         // narrative target gets a fresh set; later manual resumes remain allowed.
         const scope=JSON.stringify([documentaryNarrationContext(project,scene),requirement.entities,requirement.identities,requirement.years,requirement.detail,scene.documentary?.motionGraphic]);
-        const rejectionScope=createHash('sha256').update(JSON.stringify(['visual-rejection-v1',scope,project.aspectRatio,requirement.preferredKind,scene.documentary?.layout])).digest('hex');
+        const visualScopeParts=[scope,project.aspectRatio,requirement.preferredKind,scene.documentary?.layout];
+        const oldRejectionScope=createHash('sha256').update(JSON.stringify(['visual-rejection-v1',...visualScopeParts])).digest('hex');
+        // Old visual refusals on an audience CTA were based on the mistaken
+        // demand to show a literal subscription action. Reconsider those
+        // known refusals under the corrected on-topic background policy, but
+        // retain unknown paid submissions under their original scope.
+        const rejectionScope=documentaryCallToActionIllustration(scene)
+          ?createHash('sha256').update(JSON.stringify(['visual-rejection-cta-v2',...visualScopeParts])).digest('hex')
+          :oldRejectionScope;
         const rejectionPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'rejected-candidates.json');
         const rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
         // A Creative Commons video's HD hint does not guarantee an MP4 format
@@ -741,13 +749,13 @@ export class DocumentaryProjectService {
         // keep the source for manual review, but never download it again merely
         // to rediscover the same pending/partial completion on auto resume.
         const uncertainPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'uncertain-candidates.json');
-        const uncertainCandidates=await readDocumentaryRejections(uncertainPath,rejectionScope);
+        const uncertainCandidates=await readDocumentaryRejections(uncertainPath,oldRejectionScope);
         const isUncertain=(candidate:DocumentaryCandidate)=>uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key));
         const rememberUncertain=async(candidate:DocumentaryCandidate,checksum?:string)=>{
           const keys=[...uncertainCandidateFingerprints(candidate),...(checksum?[uncertainFileFingerprint(checksum)]:[])];
           if(keys.every(key=>uncertainCandidates.has(key)))return;
           for(const key of keys)uncertainCandidates.add(key);
-          await saveDocumentaryRejections(uncertainPath,rejectionScope,uncertainCandidates).catch(()=>{
+          await saveDocumentaryRejections(uncertainPath,oldRejectionScope,uncertainCandidates).catch(()=>{
             recordDiagnosticEvent('warn','documentary.search.uncertain-cache-write-failed',{projectId,sceneId:scene.id});
           });
         };

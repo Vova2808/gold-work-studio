@@ -9,7 +9,7 @@ import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
-import {documentarySceneContext,documentaryGeneralIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
@@ -200,7 +200,7 @@ export class DocumentaryIntelligence {
   private analysisPauseRemainingMs = 0;
   private analysisPauseRevision = 0;
   private analysisWaiters = new Set<()=>void>();
-  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;generalIllustration?:boolean;sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean }>();
+  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;generalIllustration?:boolean;callToActionTheme?:string[];sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean }>();
   constructor(private readonly client: Completion, private readonly rootFor: (id: string) => string, private readonly beforePaidRequest: () => Promise<void> = async () => {}, private readonly sharedVideoCatalogRoot?: string,
     private readonly retryWait:(ms:number)=>Promise<void>=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {}
   async available() { return this.client.configured(); }
@@ -637,6 +637,19 @@ export class DocumentaryIntelligence {
     // otherwise an older pending paid check could be submitted again.
     if(visualReview&&this.inspection.getStore()?.generalIllustration)
       previousRequests.push({system:system.replace(documentaryGeneralIllustrationInstruction,''),input});
+    const callToActionTheme=visualReview?this.inspection.getStore()?.callToActionTheme:undefined;
+    if(callToActionTheme?.length){
+      // This exact fully assembled former request may already be pending or
+      // partial. A clearer CTA brief must not pay for that same unknown work.
+      previousRequests.push({system,input});
+      input=JSON.stringify({...JSON.parse(input),editorialBackgroundQueries:callToActionTheme});
+      system+=' This narration is a self-contained audience call to action over a topical documentary background. The background does not need to depict someone pressing Subscribe or Like. editorialBackgroundQueries suggest the episode topic, not verified facts: use the neighboring ORIGINAL script to identify that topic, then check the ACTUAL frames. An on-topic, clean real-camera shot may have narrativeEvidence.subjectMatch:true and detailMatch:true even when the words ask viewers to subscribe. Do not invent a depicted subscription action. Reject unrelated sports or subjects, contradictory named events, poor quality, CGI and still images in video.';
+      // The first CTA policy could accept an empty venue because the broad
+      // overview spanned a later race. Guard its exact old checkpoint before
+      // requiring an action-rich excerpt of the requested spoken length.
+      previousRequests.push({system,input});
+      system+=' For VIDEO, return one exact continuous interval of about desiredSeconds, not a broad source-wide range that will be truncated from its empty beginning. Prefer a visible central subject or action of the episode topic in that interval. An empty track is not motorcycle racing, an empty harbor is not a ship, and an empty runway is not an aircraft. For a final range, require that central subject in the actual supplied frames; do not approve a venue alone just because a later unsampled moment contains the subject. State the visible subject and its change or camera motion in reason. Keep any mandatory identity, era and technical-quality checks unchanged.';
+    }
     // Adding distant script dates must not conceal an unknown request made
     // with the earlier, neighbouring-scenes-only context. Include the current
     // and all prior policy variants, for ranking as well as visual checks.
@@ -1092,7 +1105,7 @@ export class DocumentaryIntelligence {
 
   async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
     const source=scene.documentary?.selected;
-    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
+    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),callToActionTheme:documentaryCallToActionIllustration(scene)?scene.documentary!.requirement.queries.slice(0,2):undefined,sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
       let review=await this.inspect(project,scene,progress);
       // An older or inconsistent completed review can say "accepted" without
       // current narrative evidence. Reusing its paid checkpoint is allowed;
@@ -1285,6 +1298,42 @@ export class DocumentaryIntelligence {
         const rangeInput={...contentRequest,startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext};
         const value=await this.complete(project.id,'visual-range',rangeSystem,JSON.stringify(rangeInput),await sample(checked));
         return finish(value,start,end,checked);
+      }
+    }
+    // A medium-length general clip otherwise buys a broad overview and then
+    // a second exact-range review. Inspect three distributed spoken-length
+    // excerpts together; the actual ordered frames of the winning excerpt
+    // still receive the normal identity, editorial and quality contract.
+    if(selected.kind==='video'&&scene.videoPath&&duration>12&&duration<=45&&desiredSeconds<=duration-.2
+      &&!usedRanges.length&&documentaryGeneralIllustration(scene)&&!documentaryGeneralActionIssue(scene)){
+      let oldOverviewAvailable=true;
+      try{
+        await this.inspection.run({...this.inspection.getStore()!,cacheOnly:true},()=>this.complete(project.id,'visual-overview',
+          footageSystem+narrationContextInstruction,JSON.stringify({...overviewInput,narrationContext}),overviewImages,earlierRequests,legacySampling?1:2));
+      }catch(error){if(error instanceof DocumentaryCachedAnalysisMissing)oldOverviewAvailable=false;else throw error;}
+      if(!oldOverviewAvailable){
+        const starts=[times[0],times[Math.floor(times.length/2)],times.at(-1)]
+          .filter((time):time is number=>time!==undefined)
+          .map(time=>Math.max(0,Math.min(duration-desiredSeconds,time-desiredSeconds/2)));
+        const unique=[...new Set(starts.map(start=>start.toFixed(3)))].map(Number);
+        const regions=unique.map((startSeconds,id)=>({id,startSeconds,endSeconds:startSeconds+desiredSeconds}));
+        progress(`Проверяю ${regions.length} коротких фрагмента одним анализом реальных кадров…`);
+        const reviews=await inspectDocumentaryRangeBatch({file:scene.videoPath,root,
+          request:{...contentRequest,narrationContext,desiredSeconds,
+            source:{title:selected.title,author:selected.author},
+            searchHints:{detail:scene.documentary!.requirement.detail,queries:scene.documentary!.requirement.queries}},
+          identities:scene.documentary!.requirement.identities,regions,samplesPerRegion:3,
+          complete:(purpose,system,input,images)=>this.complete(project.id,purpose,system,input,images)});
+        let result:Review|undefined;
+        for(const region of regions){
+          const value=reviews.get(documentaryRangeKey(region.startSeconds,region.endSeconds));
+          if(!value)continue;
+          const checked=[.03,.5,.97].map(fraction=>region.startSeconds+desiredSeconds*fraction);
+          result=finish(value,region.startSeconds,region.endSeconds,checked);
+          if(result.status==='accepted')return result;
+        }
+        return result??{status:'rejected',confidence:1,reason:'В проверенных коротких фрагментах нет подходящего чистого видео.',
+          checkedAt:new Date().toISOString(),sampleSeconds:[],quality:`${width}×${height}`};
       }
     }
     let value = await this.complete(project.id, "visual-overview", footageSystem + narrationContextInstruction, JSON.stringify({ ...overviewInput, narrationContext }), overviewImages, earlierRequests, legacySampling ? 1 : 2);

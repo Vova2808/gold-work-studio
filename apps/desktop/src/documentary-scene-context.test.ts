@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
-import {documentarySceneContext,documentaryGeneralIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
 import {effectFfmpeg} from './effect-media.js';
 import {documentaryTechnicalQualityInstruction} from './documentary-source-quality.js';
 
@@ -23,6 +23,48 @@ test('only a vetted general line can use period-independent illustrative stock',
   assert.equal(documentaryNarrativeEvidenceIssue({narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,
     requiredEra:'none',observedEra:'modern',evidence:'A generic racing motorcycle is visible on a track.'}},
     {title:'Modern race footage'},context),undefined);
+});
+
+test('a generic subscribe line can use topical footage without repaying an older unknown review',async t=>{
+  const scene={id:'cta',order:1,narration:"If you're enjoying this, hit subscribe.",
+    documentary:{requirement:{identityContextVersion:3,identities:[],years:[],queries:['MotoGP race grid start footage']}}} as unknown as Scene;
+  assert.equal(documentaryCallToActionIllustration(scene),true);
+  assert.equal(documentaryCallToActionIllustration({...scene,narration:'The 2004 race ended.'}),false);
+  assert.equal(documentaryCallToActionIllustration({...scene,documentary:{...scene.documentary!,requirement:{...scene.documentary!.requirement,identities:[{name:'Valentino Rossi',aliases:[]}]}}}),false);
+  const root=await mkdtemp(join(tmpdir(),'gws-cta-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const context=documentarySceneContext({scenes:[{id:'race',order:0,narration:'Rossi races his Honda on the circuit.'} as Scene,scene]} as Project,scene);
+  const input=JSON.stringify({narration:scene.narration}),images=['unchanged actual frame bytes'];
+  let calls=0;
+  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{calls++;return '{"reviews":[]}';}},()=>root);
+  const inspection=Reflect.get(service,'inspection');
+  const request=()=>Reflect.get(service,'complete').call(service,'project','catalog-range-batch','Review actual frames',input,images);
+  const base={submissions:0,shouldStop:()=>false,comparisonSubjects:[],identities:[],narrativeContext:context,generalIllustration:true};
+  await inspection.run(base,request);
+  const analysis=join(root,'Documentary','Analysis'),files=await readdir(analysis);
+  assert.equal(files.length,1);
+  await writeFile(join(analysis,files[0]!),JSON.stringify({state:'partial',purpose:'catalog-range-batch',raw:'unfinished reply'}));
+  await assert.rejects(inspection.run({...base,callToActionTheme:['MotoGP race grid start footage']},request),/неизвестный результат|незавершённый/);
+  assert.equal(calls,1,'An unfinished former request must never be repaid');
+  const fresh=await mkdtemp(join(tmpdir(),'gws-cta-new-'));t.after(()=>rm(fresh,{recursive:true,force:true}));
+  let priorCtaKey='';
+  const enhanced=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,submitted,frames)=>{
+    assert.match(system,/does not need to depict someone pressing Subscribe/);
+    assert.match(system,/An empty track is not motorcycle racing/);
+    assert.deepEqual(JSON.parse(submitted).editorialBackgroundQueries,['MotoGP race grid start footage']);
+    const oldSystem=system.split(documentaryTechnicalQualityInstruction)[0]!.split(' For VIDEO, return one exact continuous interval')[0]!;
+    priorCtaKey=createHash('sha256').update(JSON.stringify([2,'catalog-range-batch',oldSystem,submitted,frames])).digest('hex');
+    return '{"reviews":[]}';
+  }},()=>fresh);
+  await Reflect.get(enhanced,'inspection').run({...base,callToActionTheme:['MotoGP race grid start footage']},
+    ()=>Reflect.get(enhanced,'complete').call(enhanced,'project','catalog-range-batch','Review actual frames',input,images));
+  const guarded=await mkdtemp(join(tmpdir(),'gws-cta-old-pending-'));t.after(()=>rm(guarded,{recursive:true,force:true}));
+  await mkdir(join(guarded,'Documentary','Analysis'),{recursive:true});
+  await writeFile(join(guarded,'Documentary','Analysis',`${priorCtaKey}.json`),JSON.stringify({state:'pending',purpose:'catalog-range-batch'}));
+  const restart=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    assert.fail('An uncertain first CTA policy request cannot be submitted again');
+  }},()=>guarded);
+  await assert.rejects(Reflect.get(restart,'inspection').run({...base,callToActionTheme:['MotoGP race grid start footage']},
+    ()=>Reflect.get(restart,'complete').call(restart,'project','catalog-range-batch','Review actual frames',input,images)),/неизвестный результат/);
 });
 
 test('general-illustration policy does not resend an older uncertain paid frame review',async t=>{
@@ -84,6 +126,34 @@ test('a short general video verifies its actual rendered range in one paid check
     assert.fail('The uncertain paid range must not be resubmitted');
   }},()=>root);
   await assert.rejects(restart.inspectForSelection(project,scene),/незавершённый ответ анализа/);
+});
+
+test('a medium general clip reviews three exact excerpts in one paid call',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-medium-general-')),videoPath=join(root,'fixture.mp4');
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=2','-t','30','-c:v','mpeg4',videoPath]);
+  const scene={id:'general-medium',order:0,narration:'Motorcycle racing can be thrilling.',durationSeconds:3,videoPath,
+    documentary:{checksum:'medium-video',requirement:{text:'Motorcycle racing can be thrilling.',entities:[],
+      identities:[],identityContextVersion:3,queries:['motorcycle racing'],years:[]},
+      selected:{kind:'video',provider:'pexels',title:'motorcycle race',description:'Race track footage',durationSeconds:30,width:1280,height:720}}} as unknown as Scene;
+  const project={id:'p',aspectRatio:'16:9',scenes:[scene]} as Project;
+  let calls=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input,images)=>{
+    calls++;const groups=JSON.parse(input).groups;
+    assert.match(system,/groups of 3 ACTUAL ordered video frames/);
+    assert.equal(groups.length,3);assert.equal(images?.length,9);
+    return JSON.stringify({reviews:groups.map((group:{id:number})=>group.id===1
+      ?{id:group.id,status:'accepted',confidence:.96,reason:'Actual moving motorcycles on a circuit.',isCameraFootage:true,
+        mediaType:'camera',presentation:'clean',physicalEvidence:'Race circuit and riders',
+        technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Subject edges are sharp'},
+        narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
+          evidence:'The middle excerpt shows the narrated motorcycle-racing topic.'}}
+      :{id:group.id,status:'rejected',confidence:1,reason:'Not the best excerpt.'})});
+  }},()=>root);
+  const {review}=await intelligence.inspectForSelection(project,scene);
+  assert.equal(calls,1);
+  assert.equal(review.status,'accepted',review.reason);
+  assert.ok((review.trimStartSeconds??0)>8&&review.trimEndSeconds!<23);
 });
 
 test('a completed accepted review without current context approval cannot verify a scene',async()=>{
