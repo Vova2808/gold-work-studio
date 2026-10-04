@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import type {Project,Scene,DocumentaryRequirement,DocumentaryCandidate} from '@gold-work/shared';
 import {DocumentaryIntelligence,documentaryMetadataShortlist} from './documentary-intelligence.js';
 import {documentaryGeneralIllustration} from './documentary-scene-context.js';
-import {documentarySearchQueries} from './documentary-project-service.js';
+import {documentarySearchQueries,documentaryThematicStockProbe} from './documentary-project-service.js';
 import {applyDocumentaryRequirement} from './documentary-visual-relevance.js';
 import {documentaryContextApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
 
@@ -63,6 +63,11 @@ test('a short thematic stock video found by a concise query reaches pixel review
     description:'Camera follows racing bikes',query:'motorcycle racing rider',durationSeconds:12,rights:'allowed'} as unknown as DocumentaryCandidate;
   assert.deepEqual(documentaryMetadataShortlist(scene,[stock]),[stock]);
   assert.deepEqual(documentaryMetadataShortlist({...scene,documentary:{...scene.documentary!,requirement:{...requirement,visualScope:'exact'}}},[stock]),[]);
+  const sparse={...stock,title:'Riders at sunset',width:1280,height:720};
+  assert.deepEqual(documentaryMetadataShortlist(scene,[sparse]),[]);
+  assert.equal(documentaryThematicStockProbe([sparse],requirement),sparse);
+  assert.equal(documentaryThematicStockProbe([sparse],{...requirement,visualScope:'exact'}),undefined);
+  assert.equal(documentaryThematicStockProbe([{...sparse,width:640}],requirement),undefined);
 });
 
 test('an explicit maker name keeps its inherited motorcycle model exact',async()=>{

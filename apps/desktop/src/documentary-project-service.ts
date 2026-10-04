@@ -254,6 +254,18 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
 }
 
+/** Stock APIs already rank the supplied thematic query. A short clean clip
+ * with a sparse caption deserves one actual-frame check before we download
+ * unrelated long archival videos for an intentionally general illustration. */
+export function documentaryThematicStockProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement):DocumentaryCandidate|undefined{
+  if(requirement.visualScope!=='illustrative')return;
+  return candidates.find(candidate=>candidate.kind==='video'
+    &&(candidate.provider==='pexels'||candidate.provider==='pixabay')
+    &&candidate.rights!=='unknown'
+    &&(candidate.durationSeconds??0)>=3&&(candidate.durationSeconds??Infinity)<=45
+    &&(candidate.width??0)>=1280&&(candidate.height??0)>=720);
+}
+
 /** Only metadata ranking is skipped; original pixels and context are checked. */
 export function documentaryExactNamedStillProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement,narration:string):DocumentaryCandidate|undefined {
   const identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
@@ -1032,7 +1044,9 @@ export class DocumentaryProjectService {
             && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates),
             kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries:requirement.queries, requirement);
           if(candidates.length)attemptState.found=true;
-          const earlyCandidates = quick ? documentaryMetadataShortlist(scene, candidates).slice(0, 1) : [];
+          const earlyCandidates = quick ? [documentaryMetadataShortlist(scene, candidates)[0]
+            ??(kind==='video'?documentaryThematicStockProbe(candidates,requirement):undefined)]
+            .filter((candidate):candidate is DocumentaryCandidate=>Boolean(candidate)) : [];
           if (quick && !earlyCandidates.length) continue;
           await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
             // A refined query may return only sources already tried in this
