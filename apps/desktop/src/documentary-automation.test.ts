@@ -962,6 +962,57 @@ test("photo verification passes explicit media kind without a fake clip duration
   assert.equal(repeated, 0, "A damaged checkpoint cannot silently order the analysis again");
 });
 
+test('saved short video is rechecked on its actual interval without replaying an unknown paid range',async()=>{
+  const {root,project}=await setup('A motorcycle moves around the track.');
+  const video=join(root,'moving.mp4');
+  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=1280x720:r=12:d=5','-c:v','libx264','-preset','ultrafast',video]);
+  const scene=project.scenes[0]!;
+  scene.videoPath=video;scene.trimStartSeconds=0;scene.trimEndSeconds=3;
+  scene.documentary={...scene.documentary!,checksum:'saved-video-fixture',
+    requirement:{...scene.documentary!.requirement,identities:[],entities:['motorcycle'],years:[],detail:'motorcycle on track',preferredKind:'video'},
+    selected:{kind:'video',title:'Moving motorcycle',description:'Track camera footage',width:1280,height:720,durationSeconds:5} as never,
+    visualReview:{status:'accepted',confidence:.95,reason:'Old camera review',quality:'clear',checkedAt:'now',sampleSeconds:[.1,1.5,2.85],trimStartSeconds:0,trimEndSeconds:3}};
+  let posts=0,rechecks=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system)=>{
+    posts++;
+    const recheck=system.includes('NEW final scene-context review');if(recheck)rechecks++;
+    return JSON.stringify({status:'accepted',confidence:.99,reason:'Moving motorcycle on a clean track',quality:'clear',
+      startSeconds:0,endSeconds:3,isCameraFootage:true,mediaType:'camera',presentation:'clean',
+      physicalEvidence:'Natural track surface and changing wheel position',technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Sharp edges without blocking'},
+      ...(recheck?{narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'',
+        evidence:'The original narration concerns a motorcycle moving on the track.'}}:{})});
+  }},()=>root);
+  const old=await intelligence.inspectForSelection(project,scene);
+  assert.equal(old.review.status,'uncertain','An old range without current evidence is not auto-approved');
+  const analysis=join(root,'Documentary','Analysis');
+  const oldRequests=(await Promise.all((await readdir(analysis)).filter(name=>name.endsWith('.json')).map(async name=>({
+    name,data:JSON.parse(await readFile(join(analysis,name),'utf8')) as {purpose?:string;overviewSamplingVersion?:number;result?:{narrativeEvidence?:unknown}}
+  })))).filter(entry=>['visual-range','visual-overview'].includes(entry.data.purpose??'')&&entry.data.result);
+  assert.ok(oldRequests.length,'Find completed old video requests');
+  const before=posts;
+  const checked=await intelligence.inspectForSelection(project,scene,undefined,undefined,false,true);
+  assert.equal(posts,before+1,'The saved original range costs one new final check');
+  assert.equal(rechecks,1);
+  assert.equal(checked.review.status,'accepted',JSON.stringify(checked.review));
+  assert.equal(checked.review.contextApproval?.version,1);
+  assert.deepEqual([checked.review.trimStartSeconds,checked.review.trimEndSeconds],[0,3]);
+  await intelligence.inspectForSelection(project,scene,undefined,undefined,false,true);
+  assert.equal(posts,before+1,'A completed range recheck is cached');
+  const pendingRoot=join(root,'pending-video');await mkdir(join(pendingRoot,'Documentary','Analysis'),{recursive:true});
+  for(const oldRequest of oldRequests)await writeFile(join(pendingRoot,'Documentary','Analysis',oldRequest.name),
+    JSON.stringify({state:'pending',purpose:oldRequest.data.purpose,overviewSamplingVersion:oldRequest.data.overviewSamplingVersion}));
+  let repeated=0;
+  const guarded=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{repeated++;throw Error('Must not submit');}},()=>pendingRoot);
+  await assert.rejects(guarded.inspectForSelection(project,scene,undefined,undefined,false,true),/Автоповтор отключён|неизвестный результат/);
+  assert.equal(repeated,0,'Current-version pending range/overview cannot be rechecked');
+  const legacyRoot=join(root,'legacy-video');await mkdir(join(legacyRoot,'Documentary','Analysis'),{recursive:true});
+  for(const oldRequest of oldRequests)await writeFile(join(legacyRoot,'Documentary','Analysis',oldRequest.name),
+    JSON.stringify({state:'pending',purpose:oldRequest.data.purpose}));
+  const legacyGuard=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{repeated++;throw Error('Must not submit');}},()=>legacyRoot);
+  await assert.rejects(legacyGuard.inspectForSelection(project,scene,undefined,undefined,false,true),/Старый платный обзор видео имеет неизвестный результат/);
+  assert.equal(repeated,0,'Legacy pending overview cannot switch sampling and bypass the guard');
+});
+
 test("visual context uses the complete original sentence while the edit slice stays exact", async () => {
   const { project } = await setup();
   const template = project.scenes[0]!;

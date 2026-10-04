@@ -416,6 +416,32 @@ export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], 
     || (allowUnlabelledStockVideos ? queryMatch(b) - queryMatch(a) : 0) || Number(used.has(a.id)) - Number(used.has(b.id)));
 }
 
+/** A model-year review in a search title is about the depicted motorcycle,
+ * unlike a publication timestamp. Avoid downloading a plainly different
+ * model year when the original script dates that same named model. */
+export function documentaryContradictoryModelYear(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement,context:DocumentarySceneContext):boolean{
+  if(candidate.provider!=='youtube'||candidate.kind!=='video'||requirement.identities?.length!==1)return false;
+  const modelCodes=[requirement.identities[0]!.name,...requirement.identities[0]!.aliases]
+    .flatMap(name=>name.match(/\b[A-Za-z]{2,8}[- ]?[A-Za-z]?\d{1,4}[A-Za-z0-9-]*\b/g)??[])
+    .map(code=>code.toLowerCase().replace(/[^a-z0-9]/g,''));
+  const compact=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,'');
+  const title=compact(candidate.title);
+  if(!modelCodes.some(code=>code.length>=4&&title.includes(code)))return false;
+  const titleYears=[...new Set(candidate.title.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
+  if(titleYears.length!==1)return false;
+  const scriptYears=requirement.years.length===1?requirement.years
+    :requirement.years.length?[]:[...new Set(context.current.text.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
+  let required=scriptYears.length===1?scriptYears[0]:undefined;
+  if(!required&&requirement.years.length===0&&/\b(?:this|that|same|it|its)\b/i.test(context.current.text)){
+    const next=context.following[0];
+    const nextYears=next?.text.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[];
+    if(next?.scene===context.current.scene+1&&nextYears.length===1
+      &&modelCodes.some(code=>code.length>=4&&compact(next.text).includes(code)))required=nextYears[0];
+  }
+  return Boolean(required&&titleYears[0]!==required
+    &&!new Set<string>(candidate.description.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[]).has(required));
+}
+
 export class DocumentaryProjectService {
   private active = new Set<string>();
   private autoRuns = new Map<string, Promise<AutoStockSelectionResult>>();
@@ -762,7 +788,10 @@ export class DocumentaryProjectService {
           let review:Awaited<ReturnType<DocumentaryIntelligence['inspectForSelection']>>['review']|undefined;
           try { review=(await this.intelligence.inspectForSelection(project,scene,undefined,()=>Boolean(fatal)||this.stopRequested.has(projectId),true)).review; }
           catch(error){ if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error; }
-          if(scene.documentary.selected.kind==='image'&&scene.imagePath&&!scene.documentary.visualReview.contextApproval
+          if((scene.documentary.selected.kind==='image'&&scene.imagePath
+              ||scene.documentary.selected.kind==='video'&&scene.videoPath&&scene.documentary.selected.durationSeconds!==undefined
+                &&scene.documentary.selected.durationSeconds<=45)
+            &&!scene.documentary.visualReview.contextApproval
             &&(!review||review.status==='uncertain')&&!this.stopRequested.has(projectId)){
             this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,
               message:`Кадр ${scene.order+1}: проверяю сохранённый оригинал по текущему тексту…`});
@@ -974,6 +1003,7 @@ export class DocumentaryProjectService {
           const candidates = selectDocumentaryCandidates(pool.filter(candidate => !rejectedCandidates.has(rejectedCandidateFingerprint(candidate))
             &&!formatUnavailable(candidate)
             &&!isUncertain(candidate)
+            &&!documentaryContradictoryModelYear(candidate,requirement,context)
             &&!recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
             && !tried.has(documentaryCandidateKey(candidate)) && !blockedCatalogs.has(documentaryCandidateKey(candidate)) && (candidate.localPath || candidate.provider !== "youtube" || this.youtube?.downloadAvailable?.() !== false)

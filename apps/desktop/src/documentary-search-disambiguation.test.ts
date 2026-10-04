@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {documentaryConflictingModelTitle,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
+import {documentaryConflictingModelTitle,documentaryContradictoryModelYear,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
+import type {DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import type {DocumentaryCandidate,DocumentaryRequirement} from '@gold-work/shared';
+
+test('an adjacent script year blocks a contradictory exact-model review before its download',()=>{
+  const requirement={text:'And the part of this story you can actually touch ended up in showrooms.',
+    entities:['Yamaha YZF-R1'],identities:[{name:'Yamaha YZF-R1',aliases:['YZF-R1']}],years:[],
+    queries:['Yamaha YZF-R1 showroom']} as DocumentaryRequirement;
+  const context:DocumentarySceneContext={current:{scene:242,text:requirement.text},preceding:[],earlierTimeReferences:[],
+    following:[{scene:243,text:'In 2009, Yamaha put a crossplane crankshaft into the YZFR1 road bike.'}]};
+  const source={provider:'youtube',kind:'video',title:"Just arrived at Gooch's Power Sports 2012 YAMAHA YZF R1 ONLY $8500",
+    description:'Pre-owned Yamaha sportbike',durationSeconds:89.49} as DocumentaryCandidate;
+  assert.equal(documentaryContradictoryModelYear(source,requirement,context),true);
+  assert.equal(documentaryContradictoryModelYear({...source,title:'2009 YAMAHA YZF R1 showroom'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear({...source,title:'Yamaha YZF R1 road bike'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear({...source,title:'2009–2012 Yamaha YZF R1 archive'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear({...source,description:'2009 and 2012 Yamaha YZF R1 archive'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear(source,requirement,{...context,
+    following:[{scene:243,text:'In 2009, the Honda RC211V changed racing.'}]}),false,
+    'An unrelated next subject cannot date this model');
+  assert.equal(documentaryContradictoryModelYear({...source,provider:'local'},requirement,context),false,
+    'Manual and other local files remain available for actual-frame review');
+});
 
 test('discovery keeps a provided title qualifier instead of searching a common word',()=>{
   const requirement={text:'The film was released.',entities:['Faster'],identities:[{name:'Faster',aliases:['Faster','Faster (2003 film)']}],years:['2003'],queries:['film editing suite','Faster documentary production']};

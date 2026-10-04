@@ -1305,6 +1305,30 @@ export class DocumentaryIntelligence {
         quality:`${width}×${height}; ${String(value.quality??'').slice(0,500)}`,checkedAt:new Date().toISOString(),sampleSeconds:checked,
         ...(selected.kind==='video'?{trimStartSeconds:start,trimEndSeconds:end}:{})};
     };
+    const savedStart=scene.trimStartSeconds??scene.documentary?.visualReview?.trimStartSeconds;
+    const savedEnd=scene.trimEndSeconds??scene.documentary?.visualReview?.trimEndSeconds;
+    if(selected.kind==='video'&&this.inspection.getStore()?.contextRecheck&&await this.hasUnresolvedLegacyOverview(project.id))
+      throw new DocumentaryAnalysisError('Старый платный обзор видео имеет неизвестный результат. Контекстная перепроверка сохранённого фрагмента не запускается.','pending','visual-overview');
+    if(selected.kind==='video'&&this.inspection.getStore()?.contextRecheck&&scene.videoPath
+      &&duration<=45&&scene.documentary?.visualReview?.status==='accepted'
+      &&Number.isFinite(savedStart)&&Number.isFinite(savedEnd)&&savedStart!>=0
+      &&savedEnd!>savedStart!+1.5&&savedEnd!<=duration+.2){
+      // Resolve the exact old overview/final-range requests first. A pending
+      // paid review cannot be sidestepped by inspecting the same saved range
+      // under a new policy. A missing completed cache is safe to leave behind.
+      try{await this.inspection.run({...this.inspection.getStore()!,cacheOnly:true,contextRecheck:false},()=>this.inspect(project,scene,progress));}
+      catch(error){if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error;}
+      const start=savedStart!,end=savedEnd!;
+      if(await documentaryFrozenVideoRange(scene.videoPath,start,end))return {status:'rejected',confidence:1,
+        reason:'Сохранённый видеофрагмент почти полностью неподвижен; вместо видео нужна движущаяся съёмка.',
+        checkedAt:new Date().toISOString(),sampleSeconds:[],quality:`${width}×${height}`};
+      const checked=[start+.1,start+(end-start)/2,Math.max(start,end-.15)];
+      const system=footageSystem+' This is a NEW final scene-context review of the EXACT previously saved video interval. Independently inspect all three actual ordered frames. Require clean real-camera footage and visible movement, the correct named subject and era, and narrativeEvidence grounded in the CURRENT original narration. Do not use the old accepted verdict as evidence. Keep startSeconds and endSeconds unchanged; reject or return uncertain when subject, era, action, technical quality or continuity is not established.'+narrationContextInstruction;
+      const input=JSON.stringify({...contentRequest,source:{title:selected.title,description:selected.description,date:selected.capturedAt,page:selected.pageUrl},
+        startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext});
+      const value=await this.complete(project.id,'visual-range',system,input,await sample(checked));
+      return finish(value,start,end,checked);
+    }
     // Long clips use their reusable shot index. Extracting up to 16 overview
     // JPEGs first was discarded work on EVERY scene and every candidate.
     // Only legacy unresolved requests require recreating that exact old hash.
