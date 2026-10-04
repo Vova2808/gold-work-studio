@@ -29,6 +29,7 @@
 .documentary-source-range { display: grid; gap: 7px; margin: 12px 0; padding: 10px; border: 1px solid #4a5061; border-radius: 6px; }
 .documentary-material-modal .documentary-source-range input[type=range] { display: block; width: 100%; margin: 10px 0 0; padding: 0; }
 .documentary-source-range span { font-variant-numeric: tabular-nums; color: #9dd0df; }
+.documentary-trim-nudge { display: flex; gap: 6px; }
 .documentary-error { color: #ff9b94; white-space: pre-wrap; }
 .documentary-photo-fallback { color: #f4c36b; font-size: 12px; line-height: 1.5; margin: 8px 0; }
 .documentary-requirement { color: #9dd0df; }

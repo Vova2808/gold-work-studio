@@ -648,6 +648,20 @@ export class DocumentaryIntelligence {
       system+=documentaryReviewContract;
     }
     const enforceVisualEvidence=(value:Record<string,unknown>):Record<string,unknown>=>{
+      // Some completed single-range answers put the required evidence inside
+      // reviews[0] while keeping status/camera evidence at the root. This is
+      // one review, not a grouped batch: read the evidence actually returned
+      // instead of paying again or discarding a valid short stock excerpt.
+      if(typeof value.status==='string'&&Array.isArray(value.reviews)&&value.reviews.length===1
+        &&value.reviews[0]&&typeof value.reviews[0]==='object'){
+        const nested=value.reviews[0] as Record<string,unknown>;
+        const {reviews:_,...top}=value;
+        value={...top,narrativeEvidence:top.narrativeEvidence??nested.narrativeEvidence,
+          technicalQuality:top.technicalQuality??nested.technicalQuality,
+          annotations:top.annotations??nested.annotations};
+        if(typeof nested.status==='string'&&nested.status!==value.status)
+          value={...value,status:'uncertain',reason:'Противоречивые результаты одного визуального анализа; автоматическое одобрение не выдано.'};
+      }
       value=enforceDocumentaryTechnicalQuality(value);
       if(!activeItem&&!mapCandidate&&!rivalryTarget&&!narrativeContext)return value;
       const review=(row:Record<string,unknown>)=>{

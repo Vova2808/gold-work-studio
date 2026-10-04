@@ -34,6 +34,7 @@ export function DocumentaryMaterialModal({ api, project, scene, onClose, onAppli
   const [trimStart, setTrimStart] = useState(scene.trimStartSeconds || 0);
   const [trimEnd, setTrimEnd] = useState<number | undefined>(scene.trimEndSeconds);
   const [sourceDuration,setSourceDuration]=useState(0);
+  const [playbackSeconds,setPlaybackSeconds]=useState(0);
   const [previewSegment,setPreviewSegment]=useState(false);
   const [previewCandidate,setPreviewCandidate]=useState<DocumentaryCandidate>();
   const sourcePlayer=useRef<HTMLVideoElement>(null);
@@ -47,7 +48,7 @@ export function DocumentaryMaterialModal({ api, project, scene, onClose, onAppli
   },[current,api,project.id,scene.id]);
   const update = async (updated: Project) => { setCurrent(updated.scenes.find(item => item.id === scene.id)!); await onApplied(updated); };
   const run = async (work: () => Promise<void>) => { setBusy(true); setError(""); try { await work(); } catch (error) { setError(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } };
-  const applied = async (updated: Project) => { setMatched(false); setRights(false); setIllustrative(false); setNote(""); setTrimStart(0); setTrimEnd(undefined); setSourceDuration(0); setPreviewSegment(false); setPreviewCandidate(undefined); await update(updated); };
+  const applied = async (updated: Project) => { setMatched(false); setRights(false); setIllustrative(false); setNote(""); setTrimStart(0); setTrimEnd(undefined); setSourceDuration(0); setPlaybackSeconds(0); setPreviewSegment(false); setPreviewCandidate(undefined); await update(updated); };
   const doc = current.documentary!;
   const stream=previewCandidate?candidateStream(previewCandidate,api):undefined;
   const clipSeconds=Math.max(.5,(doc.timing?.durationInFrames??scene.durationSeconds*30)/30);
@@ -73,6 +74,7 @@ export function DocumentaryMaterialModal({ api, project, scene, onClose, onAppli
         setMatched(Boolean(selected.documentary?.verified)); setRights(selected.documentary?.selected?.rights === "user-confirmed");
         setIllustrative(Boolean(selected.documentary?.illustrative)); setNote(selected.documentary?.reviewNote ?? "");
         setTrimStart(selected.trimStartSeconds ?? 0); setTrimEnd(selected.trimEndSeconds);
+        setSourceDuration(0);setPlaybackSeconds(0);
         await update(result.project);
         if (result.failed) setError(result.failures[0]?.message ?? "Подходящая замена не найдена");
       })}>Автоподбор по сценарию</button>
@@ -114,7 +116,7 @@ export function DocumentaryMaterialModal({ api, project, scene, onClose, onAppli
       {doc.visualReview && <details open className="documentary-requirement"><summary>Автопроверка: {doc.visualReview.status === "accepted" ? "соответствует" : doc.visualReview.status === "rejected" ? "отклонён" : "нужна проверка"} · {Math.round(doc.visualReview.confidence * 100)}%</summary><p>{doc.visualReview.reason}</p><p>{doc.visualReview.quality}</p><small>Просмотренные точки, с: {doc.visualReview.sampleSeconds.map(time => time.toFixed(1)).join(", ")}. Проверка выборочная; спорный материал можно заменить.</small></details>}
       {doc.autoError && <p className="documentary-error">{doc.autoError}</p>}
       {doc.selected ? <>
-        {current.videoPath ? <video ref={sourcePlayer} key={current.videoPath} controls muted playsInline preload="metadata" src={api.mediaUrl(current.videoPath)} onLoadedMetadata={event => { const duration=event.currentTarget.duration;setSourceDuration(Number.isFinite(duration)?duration:0);event.currentTarget.currentTime=Math.min(trimStart,Number.isFinite(duration)?duration:trimStart); }} onTimeUpdate={event => { if (previewSegment&&trimEnd!==undefined&&event.currentTarget.currentTime >= trimEnd) {event.currentTarget.pause();setPreviewSegment(false);} }} />
+        {current.videoPath ? <video ref={sourcePlayer} key={current.videoPath} controls muted playsInline preload="metadata" src={api.mediaUrl(current.videoPath)} onLoadedMetadata={event => { const duration=event.currentTarget.duration;setSourceDuration(Number.isFinite(duration)?duration:0);event.currentTarget.currentTime=Math.min(trimStart,Number.isFinite(duration)?duration:trimStart); }} onTimeUpdate={event => {setPlaybackSeconds(event.currentTarget.currentTime);if (previewSegment&&trimEnd!==undefined&&event.currentTarget.currentTime >= trimEnd) {event.currentTarget.pause();setPreviewSegment(false);} }} onSeeked={event=>setPlaybackSeconds(event.currentTarget.currentTime)} />
           : current.imagePath && <img src={api.mediaUrl(current.imagePath)} alt={doc.selected.title} />}
         <strong>{doc.selected.title}</strong><p>{doc.selected.attribution}</p>
         {doc.selected.excerpt && <p className="documentary-requirement">Сохранён отдельный фрагмент {doc.selected.excerpt.startSeconds.toFixed(1)}–{doc.selected.excerpt.endSeconds.toFixed(1)} с исходного видео. Монтаж использует этот короткий файл; его начало — 0 с. Для другого участка откройте источник. Журнал фрагментов: Documentary/Excerpts/fragments.json.</p>}
@@ -124,12 +126,16 @@ export function DocumentaryMaterialModal({ api, project, scene, onClose, onAppli
           {sourceDuration>0&&<div className="documentary-source-range"><label>Выберите {segmentLength.toFixed(1)} с из исходника длительностью {sourceDuration.toFixed(1)} с
             <input aria-label="Положение фрагмента в исходнике" type="range" min="0" max={maxStart} step="0.1" value={Math.min(trimStart,maxStart)} onChange={event=>moveSegment(Number(event.target.value))}/></label>
             <span>{trimStart.toFixed(1)}–{(trimEnd??trimStart+segmentLength).toFixed(1)} с</span>
+            <button onClick={()=>moveSegment(playbackSeconds)}>Начать с текущего момента ({playbackSeconds.toFixed(1)} с)</button>
+            <div className="documentary-trim-nudge"><button onClick={()=>moveSegment(trimStart-1)}>−1 с</button><button onClick={()=>moveSegment(trimStart+1)}>+1 с</button></div>
             <button onClick={()=>{const player=sourcePlayer.current;if(!player)return;player.currentTime=trimStart;setPreviewSegment(true);void player.play().catch(()=>setPreviewSegment(false));}}>Просмотреть отрезок</button>
           </div>}
           <label>Начало, с<input type="number" step="0.1" min="0" value={trimStart} onChange={event => { setTrimStart(Number(event.target.value)); setMatched(false); setPreviewSegment(false); }} /></label>
           <label>Конец, с<input type="number" step="0.1" min="0" value={trimEnd ?? ""} placeholder={String(doc.selected.durationSeconds ?? "")} onChange={event => { setTrimEnd(event.target.value ? Number(event.target.value) : undefined); setMatched(false); }} /></label>
           <button disabled={busy} onClick={() => void run(async () => {
-            if (!Number.isFinite(trimStart) || trimStart < 0 || (trimEnd !== undefined && trimEnd <= trimStart) || (doc.selected?.durationSeconds && (trimEnd ?? trimStart) > doc.selected.durationSeconds)) throw new Error("Укажите диапазон внутри исходного видео");
+            const availableSeconds=sourceDuration>0?sourceDuration:doc.selected?.durationSeconds;
+            if (!Number.isFinite(trimStart) || trimStart < 0 || (trimEnd !== undefined && (!Number.isFinite(trimEnd) || trimEnd <= trimStart))
+              || (availableSeconds && (trimEnd ?? trimStart) > availableSeconds)) throw new Error("Укажите диапазон внутри исходного видео");
             const latest = await api.getProject(project.id); if (!latest) throw new Error("Проект не найден");
             await update(await api.updateProject(project.id, { scenes: latest.scenes.map(item => item.id === scene.id ? { ...item, trimStartSeconds: trimStart, trimEndSeconds: trimEnd, documentary: { ...item.documentary!, verified: false } } : item) }));
           })}>Сохранить диапазон</button></div>}

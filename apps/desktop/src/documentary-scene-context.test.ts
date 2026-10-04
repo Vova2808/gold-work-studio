@@ -167,9 +167,9 @@ test('a medium general clip reviews one spoken-length excerpt in one paid call',
     assert.equal(images?.length,3);
     return JSON.stringify({status:'accepted',confidence:.96,reason:'Actual moving motorcycles on a circuit.',isCameraFootage:true,
       mediaType:'camera',presentation:'clean',physicalEvidence:'Race circuit and riders',
-      technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Subject edges are sharp'},
-      narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
-        evidence:'The excerpt shows the narrated motorcycle-racing topic.'}});
+      reviews:[{technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Subject edges are sharp'},
+        narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,requiredEra:'none',observedEra:'unspecified',eraEvidenceQuote:'',
+          evidence:'The excerpt shows the narrated motorcycle-racing topic.'}}]});
   }},()=>root);
   const {review}=await intelligence.inspectForSelection(project,scene);
   assert.equal(calls,1);
