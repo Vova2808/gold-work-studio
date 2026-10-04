@@ -39,7 +39,9 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   const lanes=[
     {queries:input.stockQueries,providers:['pexels','pixabay'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
     {queries:input.queries,providers:['commons','internet-archive','local','pexels','pixabay'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
-    {queries:input.youtubeQueries,providers:['youtube'] as NonNullable<DocumentarySearchInput['providers']>,offset:0},
+    // The first YouTube query already completed above with this same provider.
+    // Repeating it here adds no candidates and can spend scarce search quota.
+    {queries:input.youtubeQueries,providers:['youtube'] as NonNullable<DocumentarySearchInput['providers']>,offset:youtube?1:0},
   ];
   type Batch={index:number;candidates:DocumentaryCandidate[];error?:unknown};
   const pending=new Map<number,Promise<Batch>>();

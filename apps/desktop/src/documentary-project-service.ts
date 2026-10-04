@@ -252,17 +252,32 @@ export function documentaryFirstImageBatchWorthInspecting(candidates:Documentary
     &&documentaryVisiblePartInMetadata(requiredVisiblePart,`${candidate.title} ${candidate.description}`));
 }
 
-/** Only a short, well-labelled first clip merits an AI shortlist before other
+/** Only a concise, well-labelled clip merits an AI shortlist before other
  * source families return. Weak YouTube captions remain in the broad pool. */
 export function documentaryFirstVideoBatchWorthInspecting(candidates: DocumentaryCandidate[], requirement: DocumentaryRequirement): boolean {
   const identities=requirement.identities??[];
   return candidates.some(candidate=>{
-    if(candidate.kind!=='video'||candidate.rights==='unknown'||(candidate.durationSeconds??Infinity)>45)return false;
+    if(candidate.kind!=='video'||candidate.rights==='unknown'||(candidate.durationSeconds??Infinity)>120)return false;
     const metadata=`${candidate.title} ${candidate.description}`.toLowerCase();
     if(identities.some(identity=>![identity.name,...identity.aliases].some(name=>name&&metadata.includes(name.toLowerCase()))))return false;
     if(requirement.years.length&&!requirement.years.some(year=>metadata.includes(year)))return false;
     return !requirement.detail?.trim()||documentaryDetailScore(candidate,requirement)>=3;
   });
+}
+
+/** Metadata can be a false negative in a crowded pool. An exact named short
+ * source gets one real-frame chance when semantic ranking picked only long
+ * compilations. This is never an approval or a license/quality bypass. */
+export function documentaryExactNamedShortVideoProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement,narration:string):DocumentaryCandidate|undefined{
+  const identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
+  if(!identity||requirement.years.length||documentaryRequiredVisiblePart(narration)||documentaryGeneralActionIssue({narration}))return;
+  const normalize=(value:string)=>` ${value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
+  const name=normalize(identity.name);
+  if(name.trim().split(' ').length<2)return;
+  return candidates.find(candidate=>candidate.kind==='video'&&candidate.rights!=='unknown'
+    &&(candidate.durationSeconds??0)>=8&&(candidate.durationSeconds??Infinity)<=90
+    &&candidate.videoDefinition!=='sd'&&normalize(candidate.title).includes(name)
+    &&!documentaryProjectionIssue(candidate));
 }
 
 export function documentaryDetailScore(candidate: DocumentaryCandidate, requirement: DocumentaryRequirement): number {
@@ -788,7 +803,11 @@ export class DocumentaryProjectService {
               ?first=>session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<10_000
                 ||documentaryFirstVideoBatchWorthInspecting(first,requirement):undefined,
             deferredBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
-              ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart):undefined,
+              ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart)
+              :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
+                &&requirement.identities?.length===1&&!requirement.years.length
+                &&!documentaryRequiredVisiblePart(scene.narration)
+              ?batch=>Date.now()-searchStarted>=8000||documentaryFirstVideoBatchWorthInspecting(batch,requirement):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);
               for(const source of shared.sources.filter(source=>source.error)){
@@ -855,6 +874,14 @@ export class DocumentaryProjectService {
               // actual-frame validation below is still mandatory for approval.
             }
             if (!attempts.length) await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: "В найденных источниках не подтверждается нужный предмет; продолжаю поиск другого вида материала." } }));
+          }
+          if(!quick&&!localOnly&&kind==='video'){
+            const short=documentaryExactNamedShortVideoProbe(localOrder,requirement,scene.narration);
+            if(short&&!attempts.some(candidate=>candidate.kind==='video'&&(candidate.durationSeconds??Infinity)<=120)
+              &&!attempts.some(candidate=>documentaryCandidateKey(candidate)===documentaryCandidateKey(short))){
+              attempts=[short,...attempts].slice(0,6);
+              recordDiagnosticEvent('info','documentary.ranking.exact-short-probe',{projectId,sceneId:scene.id,provider:short.provider,durationSeconds:short.durationSeconds});
+            }
           }
           for (const candidate of attempts) {
               if (fatal || this.stopRequested.has(projectId)) return;

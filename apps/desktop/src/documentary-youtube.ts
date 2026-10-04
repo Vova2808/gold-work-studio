@@ -126,7 +126,7 @@ export class DocumentaryYouTube {
     for (const name of ["active.json", "complete.json"]) await rm(join(partialDirectory, name), { force: true });
     const bridge = route === "public-dns" ? await createYouTubeDnsBridge() : route === "proxy" ? await createAuthenticatedProxyBridge(proxyUrl!, { host: "www.youtube.com", port: 443 }) : undefined;
     try { await this.runner(["--ignore-config", "--no-playlist", "--part", "--continue", "--no-mtime", "--no-progress", "--socket-timeout", "15", "--retries", "1", "--fragment-retries", "1", "--extractor-retries", "1",
-      "--concurrent-fragments", "4", "--js-runtimes", "node", "--max-filesize", String(maximumBytes), "-f", "bestvideo[ext=mp4][height<=1080]/best[ext=mp4][height<=1080]",
+      "--concurrent-fragments", "4", "--js-runtimes", "node", "--max-filesize", String(maximumBytes), "-f", documentaryYouTubeFormatSelector(requireHd),
       "--restrict-filenames", "--no-simulate", "--print-to-file", "before_dl:%(filename)j", join(partialDirectory, "active.json"),
       "--print-to-file", "after_move:%(filepath)j", join(partialDirectory, "complete.json"),
       ...(bridge ? ["--proxy", bridge.proxyUrl] : []), ...(cookies ? ["--cookies", cookies] : []),
@@ -184,6 +184,13 @@ export class DocumentaryYouTube {
       return await saveDocumentaryPreview(directory,ranges.map((range,index)=>({...range,path:paths[index]})),signal);
     } finally {await bridge?.close();}
   }
+}
+
+/** YouTube's HD flag includes portrait 480×854. A normal full-frame video
+ * cannot use that narrow original; reject its formats before transferring it. */
+export function documentaryYouTubeFormatSelector(requireHd:boolean):string{
+  const minimumWidth=requireHd?'[width>=640]':'';
+  return `bestvideo[ext=mp4][height<=1080]${minimumWidth}/best[ext=mp4][height<=1080]${minimumWidth}`;
 }
 
 export async function downloadWithYtDlp(args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string): Promise<void> {

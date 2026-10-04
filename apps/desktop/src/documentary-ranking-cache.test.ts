@@ -6,9 +6,36 @@ import {documentaryCandidateKey} from './documentary-reuse.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
-import {DocumentaryIntelligence} from './documentary-intelligence.js';
+import {DocumentaryIntelligence,documentaryNamedShortVideoRankingPool} from './documentary-intelligence.js';
 import {documentaryRankingResponseInstruction} from './documentary-ranking-batch.js';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
+
+test('a concise exact-model video survives a crowded shortlist without replaying an old pending ranking',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-short-named-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const scene={id:'s',order:0,narration:'Meet the Honda RC211V motorcycle.',documentary:{requirement:{entities:['Honda RC211V'],
+    identities:[{name:'Honda RC211V',aliases:[]}],years:[],queries:['Honda RC211V motorcycle']}}} as unknown as Scene;
+  const project={id:'p',scenes:[scene]} as Project;
+  const long=Array.from({length:50},(_,index)=>({id:`youtube:long-${index}`,provider:'youtube',kind:'video',
+    title:`Honda RC211V racing history part ${index}`,description:'MotoGP documentary compilation',durationSeconds:600,
+    rights:'licensed',downloadUrl:`https://example.test/long-${index}`,pageUrl:`https://example.test/long-${index}`})) as DocumentaryCandidate[];
+  const short={...long[0]!,id:'youtube:short',title:'Honda RC211V Valentino Rossi',durationSeconds:60,
+    downloadUrl:'https://example.test/short',pageUrl:'https://example.test/short'};
+  const prioritized=documentaryNamedShortVideoRankingPool([...long,short],scene.documentary!.requirement,scene.narration);
+  assert.equal(prioritized.length,40);
+  assert.ok(prioritized.includes(short),'The exact 60-second source must reach the paid shortlist');
+  let oldSystem='',oldInput='';
+  await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
+    oldSystem=system.slice(0,-documentaryRankingResponseInstruction.length);oldInput=input;return '{"ids":[]}';
+  }},()=>join(root,'capture')).rankCandidates(project,scene,long);
+  const guarded=join(root,'guarded');await mkdir(join(guarded,'Documentary','Analysis'),{recursive:true});
+  const key=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',oldSystem,oldInput,[]])).digest('hex');
+  await writeFile(join(guarded,'Documentary','Analysis',`${key}.json`),JSON.stringify({state:'pending',purpose:'candidate-relevance'}));
+  let newCalls=0;
+  await assert.rejects(new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    newCalls++;return '{"ids":[]}';
+  }},()=>guarded).rankCandidates(project,scene,[...long,short]),/неизвестный результат|Автоповтор/);
+  assert.equal(newCalls,0,'Adding a source cannot resend an unknown paid selection');
+});
 
 test('named scenes do not pay to rank unrelated generic stock; a real named source remains eligible',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-named-stock-'));t.after(()=>rm(root,{recursive:true,force:true}));

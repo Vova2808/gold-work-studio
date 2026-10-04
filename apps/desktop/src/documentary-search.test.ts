@@ -7,7 +7,7 @@ import type {DocumentaryCandidate} from '@gold-work/shared';
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
 import {StockApiRateLimitError} from "./stock-client.js";
-import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
+import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, documentaryYouTubeFormatSelector, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
 
 test('a daily YouTube quota refusal stops fresh queries but preserves other sources',async()=>{
   let calls=0,local=0;
@@ -119,6 +119,22 @@ test("YouTube retains its SD/HD hint so full-screen scenes can avoid unusable do
   const [sd, hd] = youtubeDocumentaryCandidates([base, { ...base, id: "lmnopqrstuv", contentDetails: { ...base.contentDetails, definition: "hd" as const } }], "motorcycle");
   assert.equal(sd?.videoDefinition, "sd");
   assert.equal(hd?.videoDefinition, "hd");
+});
+
+test('full-frame YouTube download excludes narrow portrait formats before transferring them',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-youtube-format-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const video={id:'abcdefghijk',snippet:{title:'Honda RC211V'},status:{license:'creativeCommon',privacyStatus:'public'},
+    contentDetails:{duration:'PT1M',definition:'hd' as const}};
+  const candidate=youtubeDocumentaryCandidates([video],'Honda RC211V')[0]!;
+  let launched:string[]=[];
+  const youtube=new DocumentaryYouTube({apiKey:async()=> 'test-key',resolveValidatedCookies:async()=>undefined},
+    async()=>Response.json({items:[video]}),async args=>{launched=args;throw Error('format-only fixture');});
+  await assert.rejects(youtube.download(candidate,join(root,'video.download'),undefined,undefined,true),/format-only fixture/);
+  const selector=launched[launched.indexOf('-f')+1];
+  assert.equal(selector,documentaryYouTubeFormatSelector(true));
+  assert.match(selector,/bestvideo\[ext=mp4\]\[height<=1080\]\[width>=640\]/);
+  assert.match(selector,/\/best\[ext=mp4\]\[height<=1080\]\[width>=640\]/);
+  assert.doesNotMatch(documentaryYouTubeFormatSelector(false),/width>=640/);
 });
 
 test("YouTube download rechecks licensing and blocks injected source URLs before launching a downloader", async () => {
