@@ -6,6 +6,7 @@ import {documentaryPreviewKey,documentaryPreviewDownloadRange,downloadDirectDocu
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
+import {documentaryContinuityModelYear,documentaryContradictoryModelYear} from './documentary-model-year.js';
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -416,45 +417,6 @@ export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], 
     || (allowUnlabelledStockVideos ? queryMatch(b) - queryMatch(a) : 0) || Number(used.has(a.id)) - Number(used.has(b.id)));
 }
 
-/** Take a year from the original script only when it unambiguously refers to
- * this one named model. An adjacent date is not generally inherited. */
-export function documentaryContinuityModelYear(requirement:DocumentaryRequirement,context:DocumentarySceneContext):string|undefined{
-  if(requirement.identities?.length!==1)return;
-  const modelCodes=[requirement.identities[0]!.name,...requirement.identities[0]!.aliases]
-    .flatMap(name=>name.match(/\b[A-Za-z]{2,8}[- ]?[A-Za-z]?\d{1,4}[A-Za-z0-9-]*\b/g)??[])
-    .map(code=>code.toLowerCase().replace(/[^a-z0-9]/g,''));
-  const compact=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,'');
-  const scriptYears=requirement.years.length===1?requirement.years
-    :requirement.years.length?[]:[...new Set(context.current.text.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
-  let required=scriptYears.length===1?scriptYears[0]:undefined;
-  if(!required&&requirement.years.length===0&&/\b(?:this|that|same|it|its)\b/i.test(context.current.text)){
-    const next=context.following[0];
-    const nextYears=next?.text.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[];
-    if(next?.scene===context.current.scene+1&&nextYears.length===1
-      &&modelCodes.some(code=>code.length>=4&&compact(next.text).includes(code)))required=nextYears[0];
-  }
-  return modelCodes.some(code=>code.length>=4)?required:undefined;
-}
-
-/** A model-year review in a search title is about the depicted motorcycle,
- * unlike a publication timestamp. Avoid downloading a plainly different
- * model year when the original script dates that same named model. */
-export function documentaryContradictoryModelYear(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement,context:DocumentarySceneContext):boolean{
-  if(candidate.provider!=='youtube'||candidate.kind!=='video'||requirement.identities?.length!==1)return false;
-  const required=documentaryContinuityModelYear(requirement,context);
-  if(!required)return false;
-  const compact=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,'');
-  const title=compact(candidate.title);
-  const modelCodes=[requirement.identities[0]!.name,...requirement.identities[0]!.aliases]
-    .flatMap(name=>name.match(/\b[A-Za-z]{2,8}[- ]?[A-Za-z]?\d{1,4}[A-Za-z0-9-]*\b/g)??[])
-    .map(code=>compact(code));
-  if(!modelCodes.some(code=>code.length>=4&&title.includes(code)))return false;
-  const titleYears=[...new Set(candidate.title.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
-  if(titleYears.length!==1)return false;
-  return Boolean(required&&titleYears[0]!==required
-    &&!new Set<string>(candidate.description.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[]).has(required));
-}
-
 export class DocumentaryProjectService {
   private active = new Set<string>();
   private autoRuns = new Map<string, Promise<AutoStockSelectionResult>>();
@@ -794,6 +756,7 @@ export class DocumentaryProjectService {
       // Replay a completed actual-frame check first, with POSTs disabled.
       if(!scene.documentary?.verified&&!scene.documentary?.pinned&&scene.documentary?.visualReview?.status==='accepted'
         &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force
+        &&!documentaryContradictoryModelYear(scene.documentary.selected,scene.documentary.requirement,documentarySceneContext(project,scene))
         &&!documentarySavedIdentityIssue({...scene,documentary:{...scene.documentary,verified:true}})){
         try{
           this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,

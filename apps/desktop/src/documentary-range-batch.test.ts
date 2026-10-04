@@ -9,6 +9,40 @@ import {AnyModelCompletionUncertainError} from "./anymodel-client.js";
 import {effectFfmpeg} from "./effect-media.js";
 import {documentaryFrozenVideoRange} from './documentary-video-catalog.js';
 import {inspectDocumentaryRangeBatch} from './documentary-range-batch.js';
+import {documentaryAvailabilityIllustration,documentaryAvailabilitySearchHints,documentaryDistraction} from './documentary-visual-relevance.js';
+
+test('product availability allows an exact-model outdoor view while a literal showroom event stays literal',()=>{
+  assert.equal(documentaryAvailabilityIllustration({narration:'The road bike ended up in showrooms.'} as Scene),true);
+  assert.equal(documentaryAvailabilityIllustration({narration:'The aircraft came to market.'} as Scene),true);
+  assert.equal(documentaryAvailabilityIllustration({narration:'A customer walked into the showroom and bought the bike.'} as Scene),false);
+  assert.equal(documentaryAvailabilityIllustration({narration:'The engineer opened the engine inside the showroom.'} as Scene),false);
+  const scene={narration:'The road bike ended up in showrooms.',documentary:{requirement:{
+    detail:'road-going sportbike on showroom floor',queries:['Yamaha bike showroom'],entities:['Yamaha YZF-R1'],
+    identities:[{name:'Yamaha YZF-R1',aliases:[]}]}}} as unknown as Scene;
+  assert.deepEqual(documentaryAvailabilitySearchHints(scene),{detail:'road-going sportbike',queries:['Yamaha YZF-R1'],availabilityClaim:true});
+  assert.match(documentaryDistraction(scene,'Rider POV looking down at tank, handlebars and street')!,/вид от первого лица/);
+  assert.equal(documentaryDistraction(scene,'Wide side profile of the Yamaha sport motorcycle outdoors'),undefined);
+});
+
+test('new availability policy does not repay an unknown old range review',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-availability-pending-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const file=join(root,'moving.mp4');
+  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=640x360:r=8:d=4','-an','-c:v','libx264',file]);
+  let posts=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    posts++;throw new AnyModelCompletionUncertainError('disconnected','');
+  }},()=>root);
+  const oldRequest={narration:'The road bike ended up in showrooms.',searchHints:{detail:'road bike on showroom floor'}};
+  const run=(availabilityIllustration:boolean)=>Reflect.get(intelligence,'inspection').run({submissions:0,shouldStop:()=>false},
+    ()=>inspectDocumentaryRangeBatch({file,root:join(root,'frames'),request:availabilityIllustration
+      ?{narration:oldRequest.narration,searchHints:{detail:'road bike',availabilityClaim:true}}:oldRequest,
+      legacyRequest:oldRequest,
+      identities:[{name:'Yamaha YZF-R1',aliases:[]}],regions:[{id:0,startSeconds:0,endSeconds:3}],availabilityIllustration,
+      complete:(purpose,system,input,images,previous)=>Reflect.get(intelligence,'complete').call(intelligence,'project',purpose,system,input,images,previous)}));
+  await assert.rejects(run(false));
+  await assert.rejects(run(true),/неизвестный результат/);
+  assert.equal(posts,1,'A changed editorial interpretation cannot bypass an uncertain paid checkpoint');
+});
 
 test('a static image inside MP4 is rejected before paid range review; moving footage remains eligible',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-static-video-'));t.after(()=>rm(root,{recursive:true,force:true}));

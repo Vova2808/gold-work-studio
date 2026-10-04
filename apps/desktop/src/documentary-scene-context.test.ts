@@ -6,9 +6,31 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
+import {documentaryContextApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
 import {effectFfmpeg} from './effect-media.js';
 import {documentaryTechnicalQualityInstruction} from './documentary-source-quality.js';
+
+test('a 2006 R1 still cannot acquire approval for the script-linked 2009 model',async()=>{
+  const source={id:'local:saved-r1',provider:'local',kind:'image',title:'Yamaha YZF R1 2006 50th Anniversary.jpg',
+    description:'Yamaha YZF-R1 Model 2006'} as DocumentaryCandidate;
+  const scene={id:'showroom',order:0,narration:'And the part of this story you can actually touch ended up in showrooms.',
+    documentary:{checksum:'saved-photo',verified:true,selected:source,requirement:{
+      text:'And the part of this story you can actually touch ended up in showrooms.',
+      identities:[{name:'Yamaha YZF-R1',aliases:['YZF-R1']}],years:[],entities:['Yamaha YZF-R1'],queries:['Yamaha YZF-R1 showroom']},
+      visualReview:{status:'accepted',confidence:.99,checkedAt:'now',sampleSeconds:[0]}}} as unknown as Scene;
+  const project={id:'existing-motorcycle-script',scenes:[scene,{id:'next',order:1,
+    narration:'In 2009, Yamaha put a crossplane crankshaft into the YZFR1 road bike.'}]} as Project;
+  const value={status:'accepted',narrativeEvidence:{subjectMatch:true,eraMatch:true,detailMatch:true,
+    requiredEra:'none',observedEra:'2006',evidence:'A Yamaha YZF-R1 motorcycle stands on a showroom floor.'}};
+  assert.equal(documentaryContextApproval(project,scene,value),undefined);
+  assert.match(documentarySavedContextIssue(project,scene)!,/Год модели/);
+  let paid=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{paid++;return '{}';}},()=>'.');
+  const checked=await intelligence.inspectForSelection(project,scene);
+  assert.equal(checked.review.status,'rejected');
+  assert.equal(paid,0,'A known wrong-year still needs no paid frame review');
+});
 
 test('only a vetted general line can use period-independent illustrative stock',()=>{
   const scene=(narration:string,identities:Array<{name:string;aliases:string[]}>,years:string[])=>({narration,

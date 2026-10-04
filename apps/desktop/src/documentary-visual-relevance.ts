@@ -151,6 +151,9 @@ export function documentaryCatalogIdentityConflict(scene: Scene, segment: VideoS
 /** Obvious distractions described by the saved vision catalog, not guessed from a title. */
 export function documentaryDistraction(scene: Scene, description: string): string | undefined {
   const intent = `${scene.narration} ${scene.documentary?.requirement.detail ?? ""}`;
+  if(documentaryAvailabilityIllustration(scene)
+    &&/\b(?:rider|driver|pilot)\s+(?:pov|point.of.view)|\bfirst.person\b|\binstrument cluster\b|\bcockpit pov\b|\blooking down at\b.{0,35}\b(?:tank|controls|handlebars)\b/i.test(description))
+    return 'Для появления товара в продаже нужен ясный вид самого изделия, а не вид от первого лица или приборов';
   if (/\b(?:belly|stomach|bare torso|feet|legs|lying on (?:their |his |her )?back)\b/i.test(description)
     && !/\b(?:body|anatomy|stomach|medical|patient|exercise|athlete|human feet|human legs)\b/i.test(intent)) return "Кадр занят телом/ногами оператора, а не предметом рассказа";
   if (/\b(?:toasting|drinking|selfie|vlogger|talking[- ]head)\b/i.test(description)
@@ -220,6 +223,27 @@ export function proposedCatalogChoices(scene: Scene, ranges: VideoSegment[]): Ar
 export const documentarySubjectPolicy = " Editorial relevance: the narrated subject or its relevant detail must be the dominant readable subject, not an incidental logo or object behind foreground vloggers, people drinking, a selfie, a rider's belly or feet. Reject body-dominated POV and distracting foreground activity unless the narration specifically concerns that activity/body part. Abstract statistics do not require a visible ruler, but an unrelated activity in front of the object does not illustrate its size or engineering. Favor clean establishing/detail/action footage suitable for a documentary, not merely any shot filmed at the same location.";
 
 export const documentaryRangeEditorialPolicy = " Before deciding relevance, independently inspect the entire image canvas, including borders, and add these JSON fields: mediaType (camera|render|still|uncertain), presentation (clean|promo|obscured|uncertain), physicalEvidence (brief visible evidence, not source metadata). Camera movement is NOT evidence of camera footage: CGI and animated stills also move. Look for physically plausible surroundings, support/waterline, lighting, surface detail and real parallax. A photorealistic animated cutaway, impossible floating/unsupported object or synthetic engineering visualization is render, even when a prior catalog calls it camera footage. A close view of a hull in a real dry dock can be camera footage when its real surroundings establish this. Judge pixels before using the title or neighboring catalog descriptions; do not repeat those descriptions as evidence. A video embedded in a promotional card with large black borders, calls to watch/subscribe/full video, or dominant unrelated editorial text is promo. Ordinary source watermarks and documentary archive markings alone are not promo. Accept only mediaType=camera AND presentation=clean. If either is uncertain do not approve.";
+
+/** Product availability is a narrative claim, not a claim that the camera
+ * recorded a particular shop. Named model, period and frame quality remain
+ * mandatory; a literal visit, sale or person in a shop is still literal. */
+export function documentaryAvailabilityIllustration(scene:Scene):boolean{
+  return /\b(?:ended up in showrooms|reached showrooms|hit showrooms|arrived in showrooms|went on sale|came to market|became available to buyers|landed in dealerships|entered dealerships)\b|поступил[аи]? в продажу|появил(?:ся|ась|ись) в продаже/iu.test(scene.narration)
+    &&!/\b(?:customer|employee|salesperson|dealer|walked into|visited|bought|purchased)\b|покупател|продавец|продавц|купил|посетил/iu.test(scene.narration);
+}
+
+export const documentaryAvailabilityVisualInstruction=' This narration states that a product became available to buyers. A clean real view of the EXACT named product/model from the required period can illustrate that fact outdoors or on a road; a literal shop interior is not required. Do not relax model, year, camera footage, motion, technical quality, rights or any specifically narrated shop/person/transaction.';
+
+/** Search may ask for a shop, but the visual reviewer must not turn that
+ * discovery hint into a literal scene requirement for an availability claim. */
+export function documentaryAvailabilitySearchHints(scene:Scene){
+  const requirement=scene.documentary!.requirement;
+  if(!documentaryAvailabilityIllustration(scene))return {detail:requirement.detail,queries:requirement.queries};
+  const detail=(requirement.detail??'').replace(/\b(?:on|in|inside|at)\s+(?:a\s+|the\s+)?(?:showroom(?:\s+floor)?|dealership|retail\s+floor)\b/giu,'').trim();
+  return {detail:detail||requirement.entities.join(' '),
+    queries:requirement.identities?.length===1?[requirement.identities[0]!.name]:requirement.queries,
+    availabilityClaim:true};
+}
 
 export function documentaryRangeEditorialIssue(value: Record<string, unknown>): string | undefined {
   if (value.mediaType !== "camera") return value.mediaType === "render"

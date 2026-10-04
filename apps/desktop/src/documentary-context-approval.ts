@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {DocumentaryScene,Project,Scene} from '@gold-work/shared';
 import {documentarySceneContext,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
+import {documentaryContradictoryModelYear} from './documentary-model-year.js';
 
 type Review=NonNullable<DocumentaryScene['visualReview']>;
 type Approval=NonNullable<Review['contextApproval']>;
@@ -23,6 +24,7 @@ function fingerprint(project:Project,scene:Scene):string {
  * acquire a current proof merely because its old status says accepted. */
 export function documentaryContextApproval(project:Project,scene:Scene,value:Record<string,unknown>):Approval|undefined {
   if(value.status!=='accepted'||!scene.documentary?.checksum||!scene.documentary.selected
+    ||documentaryContradictoryModelYear(scene.documentary.selected,scene.documentary.requirement,documentarySceneContext(project,scene))
     ||documentaryNarrativeEvidenceIssue(value,sourceEvidence(scene),documentarySceneContext(project,scene)))return;
   const evidence=value.narrativeEvidence as Record<string,unknown>;
   return {version:1,fingerprint:fingerprint(project,scene),evidence:{
@@ -35,6 +37,8 @@ export function documentaryContextApproval(project:Project,scene:Scene,value:Rec
 export function documentarySavedContextIssue(project:Project,scene:Scene):string|undefined {
   const doc=scene.documentary;
   if(!doc?.verified||doc.pinned)return;
+  if(doc.selected&&documentaryContradictoryModelYear(doc.selected,doc.requirement,documentarySceneContext(project,scene)))
+    return 'Год модели в заголовке выбранного материала противоречит году той же модели в исходном сценарии. Нужен другой источник; исходник и озвучка сохранены.';
   const review=doc.visualReview,approval=review?.contextApproval;
   if(review?.status!=='accepted'||approval?.version!==1||!doc.checksum||!doc.selected)
     return 'Старое автоматическое одобрение не подтверждает человека, эпоху и деталь по текущим правилам. Нужна проверка сохранённого материала; исходник и озвучка сохранены.';

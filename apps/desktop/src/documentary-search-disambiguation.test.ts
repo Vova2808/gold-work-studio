@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {documentaryConflictingModelTitle,documentaryContinuityModelYear,documentaryContradictoryModelYear,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
+import {documentaryConflictingModelTitle,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
+import {documentaryContinuityModelYear,documentaryContradictoryModelYear} from './documentary-model-year.js';
 import type {DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
@@ -20,14 +21,27 @@ test('an adjacent script year blocks a contradictory exact-model review before i
   assert.equal(documentaryContradictoryModelYear(source,requirement,context),true);
   assert.equal(documentaryContradictoryModelYear({...source,title:'2009 YAMAHA YZF R1 showroom'},requirement,context),false);
   assert.equal(documentaryContradictoryModelYear({...source,title:'Yamaha YZF R1 road bike'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear({...source,title:'Yamaha YZF R1 1000 sportbike'},requirement,context),false,
+    'Engine displacement is not a historical year');
   assert.equal(documentaryContradictoryModelYear({...source,title:'2009–2012 Yamaha YZF R1 archive'},requirement,context),false);
-  assert.equal(documentaryContradictoryModelYear({...source,description:'2009 and 2012 Yamaha YZF R1 archive'},requirement,context),false);
+  assert.equal(documentaryContradictoryModelYear({...source,description:'2009 and 2012 Yamaha YZF R1 archive'},requirement,context),true,
+    'A short 2012 review is not a multi-year archive merely because its description mentions 2009');
+  assert.equal(documentaryContradictoryModelYear({...source,durationSeconds:600,description:'2009 and 2012 archive footage'},requirement,context),false);
   const unrelated={...context,following:[{scene:243,text:'In 2009, the Honda RC211V changed racing.'}]};
   assert.equal(documentaryContinuityModelYear(requirement,unrelated),undefined);
   assert.equal(documentaryContradictoryModelYear(source,requirement,unrelated),false,
     'An unrelated next subject cannot date this model');
-  assert.equal(documentaryContradictoryModelYear({...source,provider:'local'},requirement,context),false,
-    'Manual and other local files remain available for actual-frame review');
+  assert.equal(documentaryContradictoryModelYear({...source,id:'manual:uploaded',provider:'local'},requirement,context),false,
+    'Manually imported material remains available for actual-frame review');
+  assert.equal(documentaryContradictoryModelYear({...source,id:'local:saved',provider:'local',kind:'image',
+    title:'Yamaha YZF R1 2006 50th Anniversary.jpg',description:'Yamaha YZF-R1 Model 2006'},requirement,context),true,
+    'A previously downloaded 2006 still cannot stand in for the 2009 model');
+  assert.equal(documentaryContradictoryModelYear({...source,id:'commons:3160760',provider:'commons',kind:'image',
+    title:'YAMAHA YZF-R1 2007TMS.jpg',description:'YAMAHA YZF-R1 2008'},requirement,context),true,
+    'A year next to letters in a filename still dates the wrong model');
+  assert.equal(documentaryContradictoryModelYear({...source,id:'commons:other',provider:'commons',kind:'image',
+    title:'Motorcycle display.jpg',description:'Yamaha YZF-R1 model 2008'},requirement,context),true,
+    'An undated filename cannot hide a contradictory model year in its description');
 });
 
 test('discovery keeps a provided title qualifier instead of searching a common word',()=>{
