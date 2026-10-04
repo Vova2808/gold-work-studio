@@ -555,13 +555,14 @@ export function App() {
 
   async function deleteProject(id: string) {
     const project = projects.find((candidate) => candidate.id === id);
-    if (!window.confirm(`Переместить проект «${project?.title ?? id}» в корзину? Его можно будет восстановить.`)) return;
+    if (!window.confirm(`Окончательно удалить ролик «${project?.title ?? id}» и его локальные файлы? Место освободится после удаления. Восстановить ролик будет нельзя.`)) return;
     try {
-      await api.deleteProject(id);
+      const entry = await api.deleteProject(id);
+      await api.purgeTrashItem(entry.trashId);
       if (overlay?.projectId === id) setOverlay(null);
       await refresh();
     } catch (reason) {
-      setError(errorMessage(reason));
+      setError(`${errorMessage(reason)}. Если ролик уже исчез из списка, проверьте корзину: при сбое очистки файлы остаются там.`);
     }
   }
 

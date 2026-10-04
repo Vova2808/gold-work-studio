@@ -41,6 +41,28 @@ async function setup(text = "The red tractor works in a field. Its wheels grip t
   return { root, projects, project };
 }
 
+test("an unattended quota wait can be stopped without retrying the scene", async t => {
+  const {root,projects,project}=await setup();
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  let waiting!:()=>void;
+  const reachedWait=new Promise<void>(resolve=>{waiting=resolve;});
+  let selections=0;
+  const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,"workspace")),
+    new DocumentarySearch(),join(root,"Materials"),{download:async()=>{throw Error("not used");}},
+    progress=>{if(progress.message.includes("Источники ограничили поиск"))waiting();});
+  Object.assign(service,{selectAll:async()=>{
+    selections++;
+    return {project,total:project.scenes.length,selected:0,skipped:0,failed:1,
+      failures:[{sceneId:project.scenes[0]!.id,sceneNumber:1,category:"provider-temporary",message:"HTTP 429"}]};
+  }});
+  const running=service.autoSelect(project.id);
+  const stopped=assert.rejects(running,{name:"AbortError"});
+  await Promise.race([reachedWait,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error("quota wait did not start")),2_000))]);
+  await service.stop(project.id);
+  await stopped;
+  assert.equal(selections,1,"stop must not start another selection or paid inspection");
+});
+
 test("a searched scene with no verified material keeps a visible failure after restart", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));

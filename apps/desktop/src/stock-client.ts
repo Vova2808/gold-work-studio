@@ -320,6 +320,7 @@ export class StockClient {
   private cacheLoaded = false;
   private readonly apiQueues = new Map<StockProvider, Promise<unknown>>();
   private readonly apiCooldown = new Map<StockProvider, number>();
+  private readonly rateLimitFailures = new Map<StockProvider, number>();
 
   constructor(
     private readonly store: StockKeyStore,
@@ -531,7 +532,18 @@ export class StockClient {
         const now=this.now();
         const retryAfter = response.headers.get("retry-after");
         const requested = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - now;
-        const waitMs = Math.max(1000, Number.isFinite(requested) ? requested : 60000);
+        const failures = (this.rateLimitFailures.get(provider) ?? 0) + 1;
+        this.rateLimitFailures.set(provider, failures);
+        const reset = Number(response.headers.get("x-ratelimit-reset"));
+        const headerReset = response.headers.has("x-ratelimit-reset") && Number.isFinite(reset) && reset > 0
+          ? (provider === "pexels" ? reset * 1000 - now : reset * 1000) : 0;
+        // A proxy may return a short Retry-After even when the hourly quota is
+        // exhausted. Repeated 429s back off instead of probing every scene.
+        const fallback = Math.min(15 * 60_000, 60_000 * 2 ** Math.min(failures - 1, 4));
+        const waitMs = Math.max(1000, Number.isFinite(requested) ? requested : 0,
+          headerReset > 0 && headerReset <= 32 * 24 * 3600_000 ? headerReset : 0,
+          failures > 1 ? fallback : 0,
+          !Number.isFinite(requested) && !headerReset ? fallback : 0);
         // The last successful response may have announced a longer reset than
         // this 429's generic Retry-After. Keep the actual quota boundary.
         const until=Math.max(this.apiCooldown.get(provider)??0,now+waitMs);
@@ -548,6 +560,7 @@ export class StockClient {
       throw this.httpError(provider, response.status, response.headers.get("retry-after"), "api", url);
     }
     if (!response) throw new Error(`${providerLabel(provider)} не отвечает (host=${safeHost(url)})`);
+    this.rateLimitFailures.delete(provider);
     const remaining=Number(response.headers.get('x-ratelimit-remaining'));
     const reset=Number(response.headers.get('x-ratelimit-reset'));
     if(response.headers.has('x-ratelimit-remaining')&&Number.isFinite(remaining)&&remaining<=0
@@ -596,13 +609,15 @@ export class StockClient {
     this.cacheLoaded = true;
     if (!this.cachePath) return;
     try {
-      const parsed = JSON.parse(await readFile(this.cachePath, "utf8")) as { entries?: Array<[string, CachedSearch]>; cooldowns?: Partial<Record<StockProvider, number>> };
+      const parsed = JSON.parse(await readFile(this.cachePath, "utf8")) as { entries?: Array<[string, CachedSearch]>; cooldowns?: Partial<Record<StockProvider, number>>; rateLimitFailures?: Partial<Record<StockProvider, number>> };
       for (const [key, value] of parsed.entries ?? []) {
         if (value?.expiresAt > this.now() && value.value && Array.isArray(value.value.items)) this.cache.set(key, value);
       }
       for(const provider of ['pexels','pixabay'] as const){
         const until=parsed.cooldowns?.[provider];
         if(typeof until==='number'&&Number.isFinite(until)&&until>this.now())this.apiCooldown.set(provider,until);
+        const failures=parsed.rateLimitFailures?.[provider];
+        if(typeof failures==='number'&&Number.isInteger(failures)&&failures>0&&failures<=100)this.rateLimitFailures.set(provider,failures);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.cache.clear();
@@ -614,6 +629,7 @@ export class StockClient {
     const now = this.now();
     const entries = [...this.cache.entries()].filter(([, value]) => value.expiresAt > now).slice(-200);
     const cooldowns=Object.fromEntries([...this.apiCooldown].filter(([,until])=>until>now));
-    await atomicWrite(this.cachePath, JSON.stringify({ version: 1, entries, cooldowns }, null, 2));
+    const rateLimitFailures=Object.fromEntries([...this.rateLimitFailures].filter(([provider])=>this.apiCooldown.get(provider)!>now));
+    await atomicWrite(this.cachePath, JSON.stringify({ version: 1, entries, cooldowns, rateLimitFailures }, null, 2));
   }
 }

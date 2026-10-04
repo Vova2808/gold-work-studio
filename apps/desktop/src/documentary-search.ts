@@ -114,6 +114,14 @@ export class DocumentarySearch {
     private readonly cachePath?: string, private readonly local: (query: string) => Promise<DocumentaryCandidate[]> = async () => [],
     private readonly youtube?: Pick<DocumentaryYouTube, "search">) {}
 
+  /** Earliest known source recovery; used only by unattended production retries. */
+  nextRetryDelayMs(): number {
+    const now = Date.now();
+    const waits = [...this.cooldown.values(), ...this.quotaBlocked.values()]
+      .filter(until => until > now).map(until => until - now);
+    return Math.max(30_000, waits.length ? Math.min(...waits) : 60_000);
+  }
+
   async search(input: DocumentarySearchInput, licensedOnly = false): Promise<DocumentarySearchResult> {
     if (!input || typeof input.query !== "string" || input.query.trim().length < 2 || input.query.length > 240) throw new Error("Введите запрос от 2 до 240 символов");
     if (input.kind !== "image" && input.kind !== "video") throw new Error("Некорректный тип медиа");

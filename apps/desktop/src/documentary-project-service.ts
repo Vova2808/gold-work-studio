@@ -10,6 +10,7 @@ import {documentaryContinuityModelYear,documentaryContradictoryModelYear} from '
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectService } from "@gold-work/core";
 import type { AutoStockProgress, AutoStockSelectionOptions, AutoStockSelectionResult, DocumentaryApi, DocumentaryCandidate, DocumentaryRequirement, DocumentarySearchInput, EffectAsset, Project, Scene } from "@gold-work/shared";
 import { documentaryVideoCoverage } from "@gold-work/shared";
@@ -675,6 +676,7 @@ export class DocumentaryProjectService {
     this.downloadControllers.set(projectId, new AbortController());
     if (waitForNarration) this.narrationWaits.set(projectId, waitForNarration);
     const run = (async () => {
+      const selectCurrent = async () => {
       const attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>();
       const session=new DocumentarySelectionSession();
       await this.repairFailedIdentities(projectId, options.sceneIds);
@@ -708,6 +710,36 @@ export class DocumentaryProjectService {
       // Exactly one second pass. The persisted marker prevents repeated paid
       // rewrites on resume; source/inspection checkpoints still guard each call.
       return changed ? this.selectAll(projectId, options, false, attempts,session) : result;
+      };
+      let result = await selectCurrent();
+      // A temporary source refusal is not a verdict on the scene. Keep the
+      // user-started production alive and retry only those scenes after the
+      // provider window; completed media and paid checkpoints are preserved.
+      if (options.sceneIds) return result;
+      const deadline = Date.now() + 90 * 60_000;
+      for (let retry = 0; retry < 8; retry += 1) {
+        const temporary = result.failures.filter(failure => failure.category === "provider-temporary");
+        if (!temporary.length || this.stopRequested.has(projectId)) break;
+        const waitMs = Math.min(this.searcher.nextRetryDelayMs(), deadline - Date.now());
+        if (waitMs <= 0) break;
+        this.publish({ projectId, phase: "preparing", completed: result.total - result.failed,
+          total: result.total, selected: result.selected, skipped: result.skipped, failed: result.failed,
+          message: `Источники ограничили поиск для ${temporary.length} сцен. Сохранено готовое; повтор только этих сцен через ${Math.ceil(waitMs / 60_000)} мин. Можно остановить.` });
+        await delay(waitMs, undefined, { signal: this.downloadControllers.get(projectId)?.signal });
+        if (this.stopRequested.has(projectId)) break;
+        const ids = temporary.map(failure => failure.sceneId);
+        const retried = await this.selectAll(projectId, { sceneIds: ids }, false,
+          new Map(), new DocumentarySelectionSession());
+        const merged = new Map(result.failures.map(failure => [failure.sceneId, failure]));
+        for (const id of ids) merged.delete(id);
+        for (const failure of retried.failures) merged.set(failure.sceneId, failure);
+        for (const scene of retried.project.scenes) {
+          if (scene.documentary?.verified && (scene.documentary.layout !== "compare" || scene.documentary.comparison)) merged.delete(scene.id);
+        }
+        result = { ...result, project: retried.project, selected: result.selected + retried.selected,
+          skipped: result.skipped + retried.skipped, failed: merged.size, failures: [...merged.values()] };
+      }
+      return result;
     })(); this.autoRuns.set(projectId, run);
     try { return await run; }
     catch (error) {

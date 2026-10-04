@@ -189,14 +189,15 @@ function ChannelWorkspace(props: ChannelsPageProps & { profile: ChannelProfile; 
   );
 
   async function deleteVideo(project: Project) {
-    if (!window.confirm(`Переместить ролик «${project.title}» в корзину? Его можно будет восстановить.`)) return;
+    if (!window.confirm(`Окончательно удалить ролик «${project.title}» и его локальные файлы? Место освободится после удаления. Восстановить ролик будет нельзя.`)) return;
     setDeletingId(project.id);
     try {
-      await props.api.deleteProject(project.id);
+      const entry = await props.api.deleteProject(project.id);
+      await props.api.purgeTrashItem(entry.trashId);
       await (props.onProjectsChange?.() ?? Promise.resolve());
-      props.onNotice("Ролик перемещён в корзину.");
+      props.onNotice("Ролик и его локальные файлы удалены.");
     } catch (reason) {
-      props.onError(errorText(reason));
+      props.onError(`${errorText(reason)}. Если ролик уже исчез из списка, проверьте корзину: при сбое очистки файлы остаются там.`);
     } finally {
       setDeletingId(null);
     }

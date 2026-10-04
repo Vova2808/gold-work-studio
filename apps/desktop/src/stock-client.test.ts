@@ -323,6 +323,30 @@ test("stock errors do not expose API keys and explain rate limits", async () => 
   assert.equal(calls, 1, "Different scene queries respect the same provider cooldown");
 });
 
+test("429 respects the provider reset even when Retry-After is shorter", async () => {
+  const now=Date.parse("2026-10-04T14:00:00Z");
+  const client=new StockClient(new StubKeys({pexels:"private-key"}),async()=>
+    new Response("rate limited",{status:429,headers:{
+      "retry-after":"10", "x-ratelimit-reset":String(Math.floor(now/1000)+3600)
+    }}),undefined,()=>now);
+  await assert.rejects(client.search({provider:"pexels",mediaType:"video",query:"motorcycle race"}),
+    (error:Error)=>error instanceof StockApiRateLimitError&&error.retryAfterMs===3600_000);
+});
+
+test("repeated 429 without reset headers backs off instead of probing every few seconds", async () => {
+  let now=Date.parse("2026-10-04T14:00:00Z"), calls=0;
+  const client=new StockClient(new StubKeys({pixabay:"private-key"}),async()=>{
+    calls++;
+    return new Response("rate limited",{status:429,headers:{"retry-after":"10"}});
+  },undefined,()=>now);
+  await assert.rejects(client.search({provider:"pixabay",mediaType:"image",query:"motorcycle race"}),
+    (error:Error)=>error instanceof StockApiRateLimitError&&error.retryAfterMs===10_000);
+  now+=10_001;
+  await assert.rejects(client.search({provider:"pixabay",mediaType:"image",query:"motorcycle engine"}),
+    (error:Error)=>error instanceof StockApiRateLimitError&&error.retryAfterMs===120_000);
+  assert.equal(calls,2);
+});
+
 test("stock search honours provider quota reset headers before issuing another scene query", async () => {
   for (const provider of ["pexels", "pixabay"] as const) {
     const now=Date.parse("2026-10-04T14:00:00Z");
