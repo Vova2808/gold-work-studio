@@ -33,7 +33,7 @@ import {documentarySourceQualityIssue,documentaryQualityPresentation,documentary
 import { planDocumentaryMontage } from "./documentary-montage.js";
 import {prepareDocumentaryMaps} from './documentary-map.js';
 import { copyImmutableDocumentaryFile, documentaryAvailableBytes, ensureDocumentarySpace, DocumentaryStorageUnavailableError } from "./documentary-storage.js";
-import { DocumentaryYouTubeDefinitionError, type DocumentaryYouTube } from "./documentary-youtube.js";
+import { DocumentaryYouTubeDefinitionError, documentaryYouTubeFormatSelector, type DocumentaryYouTube } from "./documentary-youtube.js";
 import { DocumentaryMemoryUnavailableError } from "./documentary-resources.js";
 import {documentarySelectionResources,runDocumentarySelectionQueue} from './documentary-resources.js';
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
@@ -728,6 +728,15 @@ export class DocumentaryProjectService {
         const rejectionScope=createHash('sha256').update(JSON.stringify(['visual-rejection-v1',scope,project.aspectRatio,requirement.preferredKind,scene.documentary?.layout])).digest('hex');
         const rejectionPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'rejected-candidates.json');
         const rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
+        // A Creative Commons video's HD hint does not guarantee an MP4 format
+        // the editor can use. A failed yt-dlp format selection is deterministic
+        // for this selector; persist it across app restarts, but invalidate the
+        // refusal if the accepted format policy changes.
+        const formatScope=createHash('sha256').update(JSON.stringify(['youtube-format-v1',documentaryYouTubeFormatSelector(documentaryQualityPresentation(scene)!=='subject-card')])).digest('hex');
+        const formatPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'unavailable-formats.json');
+        const unavailableFormats=await readDocumentaryRejections(formatPath,formatScope);
+        const formatUnavailable=(candidate:DocumentaryCandidate)=>candidate.provider==='youtube'&&!candidate.localPath
+          &&unavailableFormats.has(rejectedCandidateFingerprint(candidate));
         // A paid inspection with an unknown outcome is not a visual rejection:
         // keep the source for manual review, but never download it again merely
         // to rediscover the same pending/partial completion on auto resume.
@@ -780,7 +789,7 @@ export class DocumentaryProjectService {
             }
             return result.candidates.filter(item => item.kind === kind && !tried.has(item.id)
               &&!rejectedCandidates.has(rejectedCandidateFingerprint(item))
-              &&!isUncertain(item));
+              &&!isUncertain(item)&&!formatUnavailable(item));
           };
           if (localOnly) {
             const current = (await this.projects.get(projectId,{omitCandidates:true}))!;
@@ -843,6 +852,7 @@ export class DocumentaryProjectService {
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
           const candidates = selectDocumentaryCandidates(pool.filter(candidate => !rejectedCandidates.has(rejectedCandidateFingerprint(candidate))
+            &&!formatUnavailable(candidate)
             &&!isUncertain(candidate)
             &&!recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
@@ -934,6 +944,12 @@ export class DocumentaryProjectService {
                 if(error instanceof DocumentaryAnalysisError&&error.kind!=='pending')throw error;
                 if(error instanceof DocumentaryAnalysisError&&error.kind==='pending')await rememberUncertain(candidate);
                 const message = error instanceof Error ? error.message : String(error);
+                if(candidate.provider==='youtube'&&!candidate.localPath&&/Requested format is not available/i.test(message)){
+                  unavailableFormats.add(rejectedCandidateFingerprint(candidate));
+                  await saveDocumentaryRejections(formatPath,formatScope,unavailableFormats).catch(()=>{
+                    recordDiagnosticEvent('warn','documentary.search.format-cache-write-failed',{projectId,sceneId:scene.id});
+                  });
+                }
                 if (candidate.provider === "youtube" && documentaryDownloadTimedOut(error)) youtubeTimedOut = true;
                 await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: message } }));
                 this.publish({ projectId, phase: "applying", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id, message: `Кандидат не загружен: ${candidate.title.slice(0, 90)}. ${message.replace(/https?:\/\/\S+/g, "[адрес источника]")}` });

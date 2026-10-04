@@ -471,6 +471,30 @@ test("a timed-out YouTube original does not start another long YouTube download 
   assert.equal(result.project.settings.stockVideoPercent, project.settings.stockVideoPercent);
 });
 
+test("an unavailable YouTube format is remembered across automatic scene retries",async t=>{
+  const {root,projects,project}=await setup();
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const scene=project.scenes[0]!;
+  const candidate:DocumentaryCandidate={id:'youtube:format-fixture',provider:'youtube',kind:'video',title:'Red tractor in a field',description:'Working tractor',
+    pageUrl:'https://example.test/format-fixture',downloadUrl:'https://example.test/format-fixture',author:'Fixture',license:'CC BY',licenseUrl:'https://example.test/license',
+    rights:'licensed',attribution:'Fixture',query:'red tractor',retrievedAt:'now',match:'exact-metadata',concerns:[],width:1280,height:720,durationSeconds:30};
+  const searcher=new DocumentarySearch();
+  searcher.search=async input=>({candidates:input.kind==='video'?[candidate]:[],sources:[]});
+  let downloads=0;
+  const makeService=()=>new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'workspace')),searcher,join(root,'Materials'),
+    {download:async()=>{throw Error('No stock download expected');}},()=>{}, {
+      available:async()=>true,
+      plan:async(_project,scenes)=>new Map(scenes.map(item=>[item.id,{...item.documentary!.requirement,entities:['red tractor'],queries:['red tractor'],plannedBy:'semantic' as const}])),
+      inspect:async()=>{throw Error('Unavailable format must not reach visual inspection');},
+    },undefined,{download:async()=>{downloads++;throw Error('ERROR: Requested format is not available');}});
+  await makeService().autoSelect(project.id,{sceneIds:[scene.id]});
+  assert.equal(downloads,1);
+  const marker=JSON.parse(await readFile(join(root,'workspace',project.id,'Documentary',scene.id,'unavailable-formats.json'),'utf8'));
+  assert.equal(marker.version,1);assert.equal(marker.keys.length,1);
+  await makeService().autoSelect(project.id,{sceneIds:[scene.id]});
+  assert.equal(downloads,1,'A restart must skip the unusable source before another network transfer');
+});
+
 test("an unavailable preview of a long YouTube source skips the original download", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));
