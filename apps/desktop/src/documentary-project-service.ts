@@ -167,6 +167,20 @@ export function documentaryStockQueries(requirement: DocumentaryRequirement): st
   }).filter(Boolean))].slice(0, 2);
 }
 
+/** A self-contained editorial line can use a broad stock subject when its
+ * descriptive/archival searches return nothing. Actual frames still decide. */
+export function documentaryBroadIllustrationStockQuery(requirement: DocumentaryRequirement): string | undefined {
+  if (requirement.identities?.length || requirement.years.length) return;
+  const first = documentaryStockQueries(requirement)[0];
+  if (!first) return;
+  const modifiers = new Set(['archive','archival','historic','historical','footage','video','photo','photograph',
+    'montage','film','reel','stock','clip','clips','shot','shots','dramatic','cinematic',
+    'архивный','архивные','исторический','исторические','кадры','видео','фото','монтаж']);
+  const words = (first.match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => !modifiers.has(word.toLowerCase())).slice(0, 3);
+  const broad = words.join(' ');
+  return words.length >= 2 && broad.toLowerCase() !== first.toLowerCase() ? broad : undefined;
+}
+
 export function documentaryCandidateAttempts(candidates: DocumentaryCandidate[], entities: string[] = []): DocumentaryCandidate[] {
   const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => !["the", "of", "and"].includes(word));
   const primary = words(entities[0] ?? "");
@@ -237,6 +251,24 @@ export function hasExactDocumentaryVideoCandidate(candidates: DocumentaryCandida
   return candidates.some(candidate => candidate.kind === "video" && candidate.match === "exact-metadata" && candidate.rights !== "unknown")
     && candidates.every(candidate => candidate.kind !== "video" || candidate.localPath || (candidate.durationSeconds ?? Infinity) <= 45
       || requirement && documentaryDetailScore(candidate, requirement) >= 6);
+}
+
+/** Only metadata ranking is skipped; original pixels and context are checked. */
+export function documentaryExactNamedStillProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement,narration:string):DocumentaryCandidate|undefined {
+  const identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
+  if(!identity||requirement.years.length||documentaryRequiredVisiblePart(narration)||documentaryGeneralActionIssue({narration}))return;
+  const normalize=(value:string)=>` ${value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
+  const name=normalize(identity.name);
+  if(name.trim().split(' ').length<2)return;
+  const personLike=/^\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){1,3}$/u.test(identity.name);
+  const ignored=new Set(['the','and','for','with','from','this','that','photo','photos','image','images','rider','race','racing',
+    'season','wins','winner','most','ever','record','history','documentary','previous','about']);
+  const nameWords=new Set(name.trim().split(' '));
+  const contextWords=personLike?[...new Set([...requirement.queries,narration].flatMap(value=>normalize(value).trim().split(' '))
+    .filter(word=>word.length>=4&&!nameWords.has(word)&&!ignored.has(word)&&!/^\d+$/.test(word)))]:[];
+  return candidates.find(candidate=>candidate.kind==='image'&&candidate.rights!=='unknown'
+    &&normalize(candidate.title).includes(name)&&!documentaryProjectionIssue(candidate)
+    &&(!personLike||contextWords.length>0&&contextWords.some(word=>normalize(candidate.title).includes(` ${word} `))));
 }
 
 /** For an establishing view of one named subject, the second YouTube query
@@ -859,6 +891,10 @@ export class DocumentaryProjectService {
             // Only a locally obvious candidate is eligible, never a paid rank
             // against an incomplete pool. Actual-frame inspection is unchanged.
             const quickQueries = [...new Set([...(kind === "video" ? documentaryStockQueries(requirement) : []), ...queries])].slice(0, 2);
+            const broad = kind === 'video' && documentaryGeneralIllustration(scene)
+              && !documentaryGeneralActionIssue(scene) && !documentaryRequiredVisiblePart(scene.narration)
+              ? documentaryBroadIllustrationStockQuery(requirement) : undefined;
+            if (broad && !quickQueries.includes(broad)) quickQueries.push(broad);
             for (const query of quickQueries) {
               if (fatal || this.stopRequested.has(projectId)) return;
               pool.push(...await discover(query, ["pexels", "pixabay"]));
@@ -907,13 +943,20 @@ export class DocumentaryProjectService {
               }
               return shared.candidates;
             }});
+          let retryDirectStill=false;
           try {
           while(!accepted&&session.canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
           waitingAt=Date.now();
           let batch:IteratorResult<DocumentaryCandidate[]>;
           try { batch=await batches.next(); }
           finally { session.accountSearch(scene.id,kind,Date.now()-waitingAt); }
-          if(batch.done)break;
+          if(batch.done){
+            if(!retryDirectStill)break;
+            // Reconsider the remaining pool normally when the exact still
+            // failed and no further search result will arrive.
+            retryDirectStill=false;
+            batch={done:false,value:[]};
+          }
           pool.push(...batch.value);
           if (batch.value.length) foundThisRun = true;
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
@@ -961,13 +1004,16 @@ export class DocumentaryProjectService {
               localOrder=catalogued;
             }
           }
-          let attempts = quick ? earlyCandidates : documentaryCandidateAttempts(localOrder, searchSubjects);
+          const directStill=!quick&&!localOnly&&kind==='image'&&this.intelligence!.rankCandidates
+            ?documentaryExactNamedStillProbe(localOrder,requirement,scene.narration):undefined;
+          retryDirectStill=Boolean(directStill);
+          let attempts = directStill?[directStill]:quick ? earlyCandidates : documentaryCandidateAttempts(localOrder, searchSubjects);
           // A local source's old exact-metadata flag belongs to its ORIGINAL
           // search. Screen its relevance to this scene before analysing more
           // ranges of a long, already-downloaded but unrelated source.
           const requiredVideoPart=kind==='video'&&documentaryGeneralDiagramScope(context,requirement.identities)
             ?documentaryRequiredVisiblePart(scene.narration):undefined;
-          if (!quick && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement, requiredVideoPart))) {
+          if (!quick && !directStill && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement, requiredVideoPart))) {
             if (fatal || this.stopRequested.has(projectId)) return;
             this.publish({ projectId, phase: "preparing", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id,
               message: `Кадр ${scene.order + 1}: отбираю подходящие источники по смыслу…` });

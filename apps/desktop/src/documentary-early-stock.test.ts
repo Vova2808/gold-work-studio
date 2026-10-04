@@ -12,7 +12,7 @@ import { LocalProjectStorage } from './local-project-storage.js';
 import { prepareDocumentaryScript } from './documentary-plan.js';
 import { effectFfmpeg } from './effect-media.js';
 
-async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | 'pending' | 'all-rejected' | 'ambiguous', kind: 'image' | 'video' = 'image', named = false, refinement = false, outage = false, unknownLocal = false) {
+async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | 'pending' | 'all-rejected' | 'ambiguous', kind: 'image' | 'video' = 'image', named = false, refinement = false, outage = false, unknownLocal = false, broadGeneral = false, namedEstablishing = false) {
   const root = await mkdtemp(join(tmpdir(), 'gws-early-stock-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const image = join(root, 'image.png');
@@ -29,20 +29,34 @@ async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | '
   scene.audioPath = 'preserved-paid-voice.mp3';
   scene.documentary!.requirement = { ...scene.documentary!.requirement, identities: [], entities: ['engine piston'], years: [], queries: ['engine piston detail'], preferredKind: kind, plannedBy: 'semantic' };
   if (named) Object.assign(scene.documentary!.requirement, {identities: [{name: 'Honda RC211V', aliases: []}], entities: ['Honda RC211V'], queries: ['Honda RC211V engine piston detail']});
+  if (broadGeneral) {
+    scene.narration = 'This channel covers motorcycle racing.';
+    Object.assign(scene.documentary!.requirement, {text:scene.narration,identityContextVersion:3,identities:[],entities:[],years:[],
+      queries:['archival motorcycle racing footage montage','historic motorcycle race film reel']});
+  }
+  if(namedEstablishing){
+    scene.narration='Honda RC211V had a rider-friendly design.';
+    Object.assign(scene.documentary!.requirement,{text:scene.narration,identities:[{name:'Honda RC211V',aliases:[]}],
+      entities:['Honda RC211V'],years:[],queries:['Honda RC211V motorcycle design']});
+  }
   p = await projects.update(p.id, { settings: { ...p.settings, stockVideoPercent: kind === 'video' ? 100 : 0 }, scenes: [scene] });
   const stock: DocumentaryCandidate = { id: 'stock', provider: 'pexels', kind, title: outcome === 'ambiguous' ? 'Workshop' : 'Engine piston detail', description: 'A piston inside an engine',
     pageUrl: 'https://example.test/stock', downloadUrl: '', localPath: kind === 'video' ? video : image, width: 1920, height: 1080, durationSeconds: kind === 'video' ? 5 : undefined, author: 'Fixture', license: 'CC0', licenseUrl: 'https://example.test/license',
     rights: 'public-domain', attribution: 'Fixture', query: 'engine piston detail', retrievedAt: 'now', match: 'unverified', concerns: [] };
   const fallback = { ...stock, id: 'archive', provider: 'commons' as const, title: 'Engine piston detail in a cylinder', localPath: archiveImage, downloadUrl: 'https://example.test/archive.png' };
   if (named) { stock.title = 'Honda RC211V engine piston detail'; fallback.title = 'Honda RC211V engine piston detail in a cylinder'; }
-  const inspections: string[] = [], searches: string[][] = [], rankedPools: string[][] = [];let refinements=0;
+  if (broadGeneral) stock.title = 'Motorcycle racing on track';
+  if (namedEstablishing) {stock.title='Honda RC211V on display';fallback.title='Honda RC211V museum motorcycle';}
+  const inspections: string[] = [], searches: string[][] = [], searchedQueries: string[] = [], rankedPools: string[][] = [];let refinements=0;
   const search = new DocumentarySearch();
   search.search = async input => {
-    searches.push(input.providers!);
+    searches.push(input.providers!);searchedQueries.push(input.query);
     if (input.kind !== kind) return { candidates: [], sources: [] };
+    if (outage) return {candidates:[],sources:[{provider:'commons',count:0,error:'HTTP 429: Источник ограничил доступ'}]};
+    if (broadGeneral && input.query !== 'motorcycle racing') return {candidates:[],sources:[]};
     return { candidates: unknownLocal ? input.providers!.includes('commons') ? [fallback] : []
       : input.providers!.includes('commons') ? [stock, fallback, { ...fallback, id: 'archive-extra', downloadUrl: 'https://example.test/archive-extra.png' }] : [stock],
-      sources: outage?[{provider:'commons',count:0,error:'HTTP 429: Источник ограничил доступ'}]:[] };
+      sources: [] };
   };
   const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, 'workspace')), search, join(root, 'Materials'),
     { download: async () => { throw new Error('Local fixtures only'); } }, () => {}, {
@@ -63,7 +77,7 @@ async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | '
   const result = await service.autoSelect(p.id, { sceneIds: [scene.id] });
   assert.equal(result.project.scenes[0]!.audioPath, scene.audioPath);
   assert.equal(result.project.scenes[0]!.narration, scene.narration);
-  return { result, inspections, searches, rankedPools, refinements };
+  return { result, inspections, searches, searchedQueries, rankedPools, refinements };
 }
 
 test('uncatalogued library footage remains eligible after the broad search starts',async t=>{
@@ -79,7 +93,7 @@ test('search refinement cannot inspect the same rejected sources again in one ru
   assert.equal(refinements,1);assert.equal(new Set(inspections).size,inspections.length);assert.ok(inspections.length>=2);
 });
 
-test('source rate limits do not trigger a paid semantic query rewrite',async t=>{
+test('source rate limits with no candidates do not trigger a paid semantic query rewrite',async t=>{
   const {refinements}=await runSelection(t,'all-rejected','image',false,true,true);
   assert.equal(refinements,0);
 });
@@ -102,6 +116,22 @@ test('early stock video preserves the selected video share and prepares a real r
   assert.equal(result.project.settings.stockVideoPercent, 100);
   assert.equal(searches.some(providers => providers.includes('internet-archive') || providers.includes('youtube')), false);
   assert.equal(rankedPools.length, 0);
+});
+
+test('an undated editorial scene tries a broad subject after two empty descriptive stock searches',async t=>{
+  const {result,inspections,searches,searchedQueries,rankedPools}=await runSelection(t,'accepted','video',false,false,false,false,true);
+  assert.equal(result.selected,1);
+  assert.deepEqual(inspections,['stock']);
+  assert.deepEqual(searchedQueries.slice(0,3),['motorcycle racing montage','historic motorcycle race film reel','motorcycle racing']);
+  assert.equal(searches.some(providers=>providers.includes('internet-archive')||providers.includes('youtube')),false);
+  assert.equal(rankedPools.length,0,'Actual frames still decide; no paid metadata ranking for an obvious stock title');
+});
+
+test('an exact named still goes straight to actual-image inspection without buying metadata ranking',async t=>{
+  const {result,inspections,rankedPools}=await runSelection(t,'accepted','image',false,false,false,false,false,true);
+  assert.equal(result.selected,1);
+  assert.deepEqual(inspections,['stock']);
+  assert.equal(rankedPools.length,0);
 });
 
 test('a visually rejected early candidate falls back to wider sources without accepting metadata as proof', async t => {

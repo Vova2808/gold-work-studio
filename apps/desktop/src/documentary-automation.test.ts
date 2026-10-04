@@ -14,7 +14,7 @@ import { DocumentaryAnalysisError } from "./documentary-analysis-error.js";
 import { ensureDocumentaryMemory, DOCUMENTARY_MEMORY_RESERVE, DocumentaryMemoryUnavailableError } from "./documentary-resources.js";
 import { DocumentaryStorageUnavailableError } from "./documentary-storage.js";
 import { prepareDocumentaryScript } from "./documentary-plan.js";
-import { DocumentaryProjectService, documentaryCandidateAttempts, documentaryFirstVideoBatchWorthInspecting, documentarySearchQueries, documentaryStockQueries, hasExactDocumentaryVideoCandidate, selectDocumentaryCandidates } from "./documentary-project-service.js";
+import { DocumentaryProjectService, documentaryBroadIllustrationStockQuery, documentaryCandidateAttempts, documentaryExactNamedStillProbe, documentaryFirstVideoBatchWorthInspecting, documentarySearchQueries, documentaryStockQueries, hasExactDocumentaryVideoCandidate, selectDocumentaryCandidates } from "./documentary-project-service.js";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { DocumentarySearch } from "./documentary-search.js";
 import { effectFfmpeg, probeEffectMedia } from "./effect-media.js";
@@ -1225,6 +1225,25 @@ test("generic stock queries admit unlabelled videos for inspection without appro
   assert.equal(selectDocumentaryCandidates([saved], ["Gatun Lake"], new Set(), [], true)[0]?.match, "unverified", "Saved footage reaches catalog ranking even when only an interior range names the lake");
   assert.equal(selectDocumentaryCandidates([{ ...saved, rights: "unknown" }], ["Gatun Lake"], new Set(), [], true).length, 0);
   assert.equal(selectDocumentaryCandidates([{ ...saved, title: "Panama Canal | 360º Video" }], ["Panama Canal"], new Set(), [], true).length, 0, "Spherical saved footage cannot bypass projection checks via local admission");
+});
+
+test('broad editorial stock search retains the subject, never strips a named identity or date',()=>{
+  const general={text:'Motorcycle racing is exciting.',entities:[],identities:[],years:[],queries:['archival motorcycle racing footage montage']};
+  assert.equal(documentaryBroadIllustrationStockQuery(general),'motorcycle racing');
+  assert.equal(documentaryBroadIllustrationStockQuery({...general,queries:['historic passenger steam ship film reel']}),'passenger steam ship');
+  assert.equal(documentaryBroadIllustrationStockQuery({...general,identities:[{name:'Honda RC211V',aliases:[]}]}),undefined);
+  assert.equal(documentaryBroadIllustrationStockQuery({...general,years:['2002']}),undefined);
+});
+
+test('an exact named still can skip only metadata ranking; ambiguous people, dates and mechanisms cannot',()=>{
+  const requirement={text:'Honda RC211V design.',entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:[]}],years:[],queries:['Honda RC211V design']};
+  const source={id:'honda',kind:'image',rights:'licensed',title:'Honda RC211V on display'} as DocumentaryCandidate;
+  assert.equal(documentaryExactNamedStillProbe([source],requirement,requirement.text),source);
+  assert.equal(documentaryExactNamedStillProbe([{...source,rights:'unknown'}],requirement,requirement.text),undefined);
+  assert.equal(documentaryExactNamedStillProbe([source],{...requirement,years:['2002']},requirement.text),undefined);
+  assert.equal(documentaryExactNamedStillProbe([source],requirement,'The crankshaft turns.'),undefined);
+  const person={...requirement,identities:[{name:'Valentino Rossi',aliases:[]}],queries:['Valentino Rossi Yamaha crew']};
+  assert.equal(documentaryExactNamedStillProbe([{...source,title:'Valentino Rossi portrait'}],person,'His crew moved to Yamaha.'),undefined);
 });
 
 test("abstract editorial queries keep the actual subjects and explicit dates without rewriting narration", async () => {
