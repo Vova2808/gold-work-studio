@@ -1116,7 +1116,10 @@ export class DocumentaryProjectService {
               // Metadata ranking is optional. Keep the bounded local shortlist;
               // actual-frame validation below is still mandatory for approval.
             }
-            if (!attempts.length) await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: "В найденных источниках не подтверждается нужный предмет; продолжаю поиск другого вида материала." } }));
+            if (!attempts.length) await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
+              autoError:sourceErrors.some(documentarySearchUnavailable)
+                ?"Поиск ограничен источниками; полный набор кандидатов ещё не проверен. Продолжите подбор после восстановления доступа."
+                :"В найденных источниках не подтверждается нужный предмет; продолжаю поиск другого вида материала." } }));
           }
           if(!quick&&!localOnly&&kind==='video'){
             const short=documentaryExactNamedShortVideoProbe(localOrder,requirement,scene.narration);
@@ -1268,9 +1271,12 @@ export class DocumentaryProjectService {
         }
         if (!accepted && upgradePhoto) skipped++;
         else if (!accepted) {
-          const message = "Не найден материал с подтверждённым объектом, качеством и правами. Проверьте кандидатов или уточните запрос."
+          const temporarilyUnavailable=sourceErrors.some(documentarySearchUnavailable);
+          const message=(temporarilyUnavailable
+            ?"Поисковые источники ограничили доступ; подбор этой сцены не завершён. Повторите после восстановления источников."
+            :"Не найден материал с подтверждённым объектом, качеством и правами. Проверьте кандидатов или уточните запрос.")
             + (sourceErrors.length ? ` Недоступные источники: ${sourceErrors.join("; ")}` : "");
-          failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: "no-results", message });
+          failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: temporarilyUnavailable?"provider-temporary":"no-results", message });
           // A failed scene has been processed, not queued. Persist the result
           // so gaps remain explainable after navigation or an app restart.
           await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,

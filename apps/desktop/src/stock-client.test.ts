@@ -323,6 +323,45 @@ test("stock errors do not expose API keys and explain rate limits", async () => 
   assert.equal(calls, 1, "Different scene queries respect the same provider cooldown");
 });
 
+test("stock search honours provider quota reset headers before issuing another scene query", async () => {
+  for (const provider of ["pexels", "pixabay"] as const) {
+    const now=Date.parse("2026-10-04T14:00:00Z");
+    let calls=0;
+    const client=new StockClient(new StubKeys({[provider]:"private-key"}),async()=>{
+      calls++;
+      return Response.json(provider==="pexels"?{photos:[],total_results:0}:{hits:[],total:0,totalHits:0},{headers:{
+        "x-ratelimit-remaining":"0",
+        "x-ratelimit-reset":provider==="pexels"?String(Math.floor(now/1000)+3600):"30"
+      }});
+    },undefined,()=>now);
+    await client.search({provider,mediaType:"image",query:"motorcycle race"});
+    await assert.rejects(client.search({provider,mediaType:"image",query:"motorcycle engine"}),
+      (error:Error)=>error instanceof StockApiRateLimitError
+        &&error.retryAfterMs===(provider==="pexels"?3600_000:30_000));
+    assert.equal(calls,1,`${provider} must wait for its announced reset`);
+  }
+});
+
+test("stock quota reset survives app restart without a new provider request", async t => {
+  const directory=await mkdtemp(join(tmpdir(),"gws-stock-quota-"));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const cachePath=join(directory,"search-cache.json");
+  const now=Date.parse("2026-10-04T14:00:00Z");
+  let calls=0;
+  const fetcher=async()=>{
+    calls++;
+    return Response.json({photos:[],total_results:0},{headers:{
+      "x-ratelimit-remaining":"0","x-ratelimit-reset":String(Math.floor(now/1000)+3600)
+    }});
+  };
+  await new StockClient(new StubKeys({pexels:"private-key"}),fetcher,cachePath,()=>now)
+    .search({provider:"pexels",mediaType:"image",query:"motorcycle race"});
+  const resumed=new StockClient(new StubKeys({pexels:"private-key"}),fetcher,cachePath,()=>now);
+  await assert.rejects(resumed.search({provider:"pexels",mediaType:"video",query:"motorcycle engine"}),
+    (error:Error)=>error instanceof StockApiRateLimitError&&error.retryAfterMs===3600_000);
+  assert.equal(calls,1);
+});
+
 test("stock search retries transient fetch errors and succeeds without exposing a URL key", async () => {
   let calls = 0;
   const client = new StockClient(

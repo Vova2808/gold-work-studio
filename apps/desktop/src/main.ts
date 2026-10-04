@@ -450,7 +450,13 @@ function registerIpc(): void {
             tasks, list: () => pipeline.list(), signal: controller.signal });
           const result = await documentaryService.autoSelect(projectId, {}, waitForNarration);
           controller.signal.throwIfAborted();
-          if (result.failed) throw new Error(`Не подтверждены сцены: ${[...new Set(result.failures.map(f=>f.sceneNumber).filter(n=>n>0))].map(n=>`№${n}`).join(', ') || 'проверьте долю видео'}. Причины сохранены в материалах. Остальные кадры готовы и будут сохранены при продолжении.`);
+          if (result.failed) {
+            const numbers=[...new Set(result.failures.map(f=>f.sceneNumber).filter(n=>n>0))];
+            const limited=new Set(result.failures.filter(f=>f.category==='provider-temporary').map(f=>f.sceneNumber)).size;
+            throw new Error(`Не подтверждены ${numbers.length} сцен: ${numbers.slice(0,12).map(n=>`№${n}`).join(', ')}${numbers.length>12?'…':''}.`
+              + (limited?` В ${limited} сценах поисковые источники временно ограничили доступ; продолжите подбор после восстановления лимитов.`:'')
+              + ' Подробные причины сохранены в материалах; готовые кадры сохранятся при продолжении.');
+          }
           await waitForNarration();
           controller.signal.throwIfAborted();
           return await mutateQueue(() => pipeline.start(projectId));

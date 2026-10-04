@@ -528,12 +528,18 @@ export class StockClient {
       }
       if (response.ok) break;
       if (response.status === 429) {
+        const now=this.now();
         const retryAfter = response.headers.get("retry-after");
-        const requested = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - this.now();
+        const requested = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter ?? "") - now;
         const waitMs = Math.max(1000, Number.isFinite(requested) ? requested : 60000);
-        this.apiCooldown.set(provider, this.now() + waitMs);
+        // The last successful response may have announced a longer reset than
+        // this 429's generic Retry-After. Keep the actual quota boundary.
+        const until=Math.max(this.apiCooldown.get(provider)??0,now+waitMs);
+        this.apiCooldown.set(provider,until);
         await response.body?.cancel();
-        throw new StockApiRateLimitError(this.httpError(provider, 429, retryAfter, "api", url).message, waitMs);
+        await this.persistCache().catch(()=>undefined);
+        const remaining=until-now;
+        throw new StockApiRateLimitError(`${providerLabel(provider)}: исчерпан лимит запросов, повторите через ${Math.ceil(remaining/1000)} сек. (host=${safeHost(url)}, status=429)`, remaining);
       }
       if (isRetryableStatus(response.status) && attempt < NETWORK_ATTEMPTS) {
         await this.sleep(retryDelay(attempt, response.headers.get("retry-after")));
@@ -542,6 +548,15 @@ export class StockClient {
       throw this.httpError(provider, response.status, response.headers.get("retry-after"), "api", url);
     }
     if (!response) throw new Error(`${providerLabel(provider)} не отвечает (host=${safeHost(url)})`);
+    const remaining=Number(response.headers.get('x-ratelimit-remaining'));
+    const reset=Number(response.headers.get('x-ratelimit-reset'));
+    if(response.headers.has('x-ratelimit-remaining')&&Number.isFinite(remaining)&&remaining<=0
+      &&Number.isFinite(reset)&&reset>0){
+      // Pexels sends a Unix timestamp; Pixabay sends seconds until reset.
+      const until=provider==='pexels'?reset*1000:this.now()+reset*1000;
+      if(until>this.now()&&until-this.now()<=32*24*3600_000)
+        this.apiCooldown.set(provider,Math.max(this.apiCooldown.get(provider)??0,until));
+    }
     try {
       return await response.json();
     } catch {
@@ -581,9 +596,13 @@ export class StockClient {
     this.cacheLoaded = true;
     if (!this.cachePath) return;
     try {
-      const parsed = JSON.parse(await readFile(this.cachePath, "utf8")) as { entries?: Array<[string, CachedSearch]> };
+      const parsed = JSON.parse(await readFile(this.cachePath, "utf8")) as { entries?: Array<[string, CachedSearch]>; cooldowns?: Partial<Record<StockProvider, number>> };
       for (const [key, value] of parsed.entries ?? []) {
         if (value?.expiresAt > this.now() && value.value && Array.isArray(value.value.items)) this.cache.set(key, value);
+      }
+      for(const provider of ['pexels','pixabay'] as const){
+        const until=parsed.cooldowns?.[provider];
+        if(typeof until==='number'&&Number.isFinite(until)&&until>this.now())this.apiCooldown.set(provider,until);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.cache.clear();
@@ -594,6 +613,7 @@ export class StockClient {
     if (!this.cachePath) return;
     const now = this.now();
     const entries = [...this.cache.entries()].filter(([, value]) => value.expiresAt > now).slice(-200);
-    await atomicWrite(this.cachePath, JSON.stringify({ version: 1, entries }, null, 2));
+    const cooldowns=Object.fromEntries([...this.apiCooldown].filter(([,until])=>until>now));
+    await atomicWrite(this.cachePath, JSON.stringify({ version: 1, entries, cooldowns }, null, 2));
   }
 }
