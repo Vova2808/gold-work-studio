@@ -87,7 +87,7 @@ app.whenReady().then(async()=>{
       const count=typeof d.totalCount==='number'?d.totalCount:0;tokens+=count;
       const row=sceneId?perScene.get(sceneId):undefined;if(row)row.tokens+=count;
       log(event,{sceneId,input:d.inputCount,output:d.outputCount,total:count,model:d.model});
-    }else if(event.startsWith('documentary.'))log(event,{sceneId,stage:d.stage,purpose:d.purpose,cache:d.cache,elapsedMs:d.elapsedMs,success:d.success,intervalId:d.intervalId,startedAt:d.startedAt,finishedAt:d.finishedAt,candidates:d.candidates,delayMs:d.delayMs,attempt:d.attempt,tier:d.tier,model:d.model,rejected:d.rejected,bytes:d.bytes,downloadedBytes:d.downloadedBytes,message:typeof d.message==='string'?d.message.replace(/https?:\/\/\S+/g,'[source]').slice(0,250):undefined});
+    }else if(event.startsWith('documentary.'))log(event,{sceneId,stage:d.stage,purpose:d.purpose,cache:d.cache,elapsedMs:d.elapsedMs,success:d.success,intervalId:d.intervalId,startedAt:d.startedAt,finishedAt:d.finishedAt,candidates:d.candidates,originalChars:d.originalChars,sentChars:d.sentChars,delayMs:d.delayMs,attempt:d.attempt,tier:d.tier,model:d.model,rejected:d.rejected,bytes:d.bytes,downloadedBytes:d.downloadedBytes,message:typeof d.message==='string'?d.message.replace(/https?:\/\/\S+/g,'[source]').slice(0,250):undefined});
   });
   const projects=new ProjectService(repo,new MockDirectorProvider());
   const storage=new LocalProjectStorage(join(workspace,'projects'));
@@ -106,7 +106,7 @@ app.whenReady().then(async()=>{
     if(init.method==='POST'&&path.includes('/chat/completions')){
       if(submissions>=maxSubmissions||Date.now()>deadline)throw new DocumentaryAnalysisError('Лимит малого теста достигнут','unavailable');
       submissions++;const sceneId=context.getStore(),row=sceneId?perScene.get(sceneId):undefined;if(row)row.submissions++;
-      const body=JSON.parse(String(init.body));log('paid.request',{sceneId,submissions,model:body.model});
+      const body=JSON.parse(String(init.body));log('paid.request',{sceneId,submissions,model:body.model,requestChars:String(init.body).length});
     }
     return transport(path,init,attempt);
   });

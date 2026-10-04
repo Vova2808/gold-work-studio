@@ -9,6 +9,7 @@ import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
+import {documentaryRankingExcerpt} from './documentary-ranking-excerpt.js';
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
@@ -1113,12 +1114,40 @@ export class DocumentaryIntelligence {
     // uncertainty guard so reducing the payload cannot replay a pending charge.
     const reducedInput=negatives.remainingCandidates.length<candidatesForRanking.length
       ?JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:negatives.remainingCandidates}):rankingInput;
-    const response = await this.complete(project.id, "candidate-relevance", currentRankingSystem, reducedInput, [],
-      [{system:currentRankingSystem,input:longRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyReducedInput},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:JSON.stringify({...fullRanking,narrativeContext})},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:rankingInput},...previousRankings,
+    const analysisRoot=join(this.rootFor(project.id),'Documentary','Analysis');
+    const oldKeys=[rankingInput,reducedInput].map(value=>documentaryCheckpointKey('candidate-relevance',currentRankingSystem,value,[]));
+    const oldRequestExists=(await Promise.all(oldKeys.map(key=>readAnalysisCheckpoint(join(analysisRoot,`${key}.json`)))))
+      .some(value=>value!==undefined);
+    const detailTerms=((scene.documentary!.requirement.detail??'').match(/[\p{L}\p{N}]{5,}/gu)??[]).slice(0,5);
+    const excerptTerms=[...(requiredIdentities??[]).flatMap(identity=>[identity.name,...identity.aliases]),
+      ...scene.documentary!.requirement.years,...detailTerms];
+    const compactCandidates=negatives.remainingCandidates.map(candidate=>{
+      const source=shortKeys.find(item=>item.shortKey===candidate.id)?.candidate;
+      return {...candidate,description:documentaryRankingExcerpt(source?.description??String(candidate.description??''),excerptTerms)};
+    });
+    const compactInput=JSON.stringify({...fullRanking,narrativeContext,...(generalDiagramScope?{generalDiagramScope}:{}),candidates:compactCandidates});
+    // Existing complete/pending requests retain their exact checkpoint key.
+    // Only a genuinely new shortlist uses excerpts; the old full request is
+    // still checked before any paid submission, including partial responses.
+    const useCompact=!oldRequestExists&&compactInput.length<reducedInput.length*.85;
+    const compactNegatives=useCompact?await documentaryNegativeRankingCache(this.rootFor(project.id),currentRankingSystem,compactInput):undefined;
+    if(compactNegatives?.allRejected){
+      recordDiagnosticEvent('info','documentary.ranking.negative-cache',{projectId:project.id,sceneId:scene.id,candidates:pool.length});
+      return [];
+    }
+    const sentCandidates=compactNegatives?.remainingCandidates??negatives.remainingCandidates;
+    const sentInput=useCompact&&compactNegatives
+      ?JSON.stringify({...JSON.parse(compactInput),candidates:sentCandidates}):reducedInput;
+    if(useCompact)recordDiagnosticEvent('info','documentary.ranking.excerpt',{
+      projectId:project.id,sceneId:scene.id,originalChars:reducedInput.length,sentChars:sentInput.length,
+      candidates:sentCandidates.length});
+    const response = await this.complete(project.id, "candidate-relevance", currentRankingSystem, sentInput, [],
+      [{system:currentRankingSystem,input:reducedInput},{system:currentRankingSystem,input:compactInput},
+        {system:currentRankingSystem,input:longRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyRankingInput},{system:rankingSystem+downloadPreference+activeItemPolicy,input:legacyReducedInput},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:JSON.stringify({...fullRanking,narrativeContext})},{system:rankingSystem+downloadPreference+activeItemPolicy+documentaryContinuityInstruction,input:rankingInput},...previousRankings,
         ...previousRankings.map(request => ({ ...request, system: request.system + downloadPreference }))]);
     if (!Array.isArray(response.ids) || response.ids.some(id => typeof id !== "string")) throw new Error("Некорректный ответ предварительного отбора материалов; ответ сохранён");
-    const unique = resolveDocumentaryCandidateKeys(response.ids as string[], negatives.remainingCandidates.map(item=>String(item.id)));
-    if(response.ids.length===0)await negatives.rememberEmpty();
+    const unique = resolveDocumentaryCandidateKeys(response.ids as string[], sentCandidates.map(item=>String(item.id)));
+    if(response.ids.length===0)await (compactNegatives??negatives).rememberEmpty();
     const grounded=filterDocumentaryRankingEra(response,narrativeContext,candidatesForRanking,unique);
     if(grounded.length!==unique.length)recordDiagnosticEvent('info','documentary.ranking.era-filter',{projectId:project.id,sceneId:scene.id,rejected:unique.length-grounded.length,remaining:grounded.length});
     return grounded.map(id => shortKeys.find(item => item.shortKey === id)!.candidate);
