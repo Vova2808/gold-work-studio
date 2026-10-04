@@ -98,7 +98,7 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
           const oldIds=new Set(deferred.map(candidate=>candidate.id));
           if(discovered.some(candidate=>!oldIds.has(candidate.id))){
             const combined=fresh([...deferred,...discovered]);deferred=[];
-            if(input.deferredBatchReady?.(combined)===false)deferred=combined;
+            if(!laterError&&input.deferredBatchReady?.(combined)===false)deferred=combined;
             else {combined.forEach(candidate=>yielded.add(candidate.id));if(combined.length)yield combined;}
           }
         }else {const novel=fresh(discovered);novel.forEach(candidate=>yielded.add(candidate.id));if(novel.length)yield novel;}

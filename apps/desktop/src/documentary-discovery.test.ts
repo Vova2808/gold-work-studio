@@ -82,7 +82,7 @@ test('near-simultaneous video sources share one shortlist without waiting for a 
 
 test('a simultaneous provider error does not hide a ready video before acceptance',async()=>{
   const make=()=>discoverDocumentarySourceBatches({kind:'video',queries:['precise'],stockQueries:['stock'],youtubeQueries:['precise'],
-    coalesceMs:20,stopped:()=>false,firstBatchReady:()=>false,
+    coalesceMs:20,stopped:()=>false,firstBatchReady:()=>false,deferredBatchReady:()=>false,
     discover:async(_query,providers)=>{
       if(providers.includes('internet-archive'))throw Error('Archive unavailable');
       return [{id:providers.includes('youtube')?'weak':'stock'}] as DocumentaryCandidate[];

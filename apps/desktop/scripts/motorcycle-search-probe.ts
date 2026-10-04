@@ -21,7 +21,8 @@ app.whenReady().then(async()=>{
   const kind=process.argv.includes('--image')?'image' as const:'video' as const;
   const providers=['youtube','commons','internet-archive','pexels','pixabay'] as const;
   if(query){
-    const selected=process.argv.includes('--youtube-only')?providers.filter(provider=>provider==='youtube'):
+    const selected=process.argv.includes('--stock-only')?providers.filter(provider=>provider==='pexels'||provider==='pixabay'):
+      process.argv.includes('--youtube-only')?providers.filter(provider=>provider==='youtube'):
       providers.filter(provider=>kind==='video'||provider!=='youtube');
     const results=await Promise.all(selected.map(async provider=>{
       const started=performance.now();
