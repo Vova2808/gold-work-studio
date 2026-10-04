@@ -110,6 +110,32 @@ test("known catalog without the requested detail is skipped, while unknown sourc
   assert.equal((await intelligence.rankLocalCandidates(project, statistics, [known]))[0]?.id, known.id);
 });
 
+test('an indexed montage about a different person is not an early paid shortcut for a named engineer',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-person-catalog-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const checksum='e'.repeat(64),directory=join(root,'catalog',checksum);await mkdir(directory,{recursive:true});
+  const segments=Array.from({length:24},(_,id)=>({id,start:id*8,end:id*8+8,sample:id*8+4,camera:true,usable:true,
+    entities:id%3===0?['Valentino Rossi']:[],description:'Yamaha motorcycle riders on track'}));
+  const catalog={version:1,checksum,duration:192,windows:segments,segments};
+  const path=join(directory,'catalog-v1.json');await writeFile(path,JSON.stringify(catalog));
+  const known={id:`local:${checksum}`,kind:'video',title:'Valentino Rossi best moments',description:'Rossi race montage'} as DocumentaryCandidate;
+  const unknown={...known,id:`local:${'f'.repeat(64)}`,title:'Masao Furusawa interview'};
+  const scene={id:'furusawa',durationSeconds:3,narration:'Everyone turned and looked at Furawa, the man who had thought of it.',documentary:{requirement:{
+    entities:['Masao Furusawa'],identities:[{name:'Masao Furusawa',aliases:['Furusawa']}],years:[],
+    queries:['Masao Furusawa Yamaha engineer'],detail:"Masao Furusawa, head of Yamaha's racing and technology development"}}} as unknown as Scene;
+  const project={id:'same',scenes:[scene]} as never;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{throw Error('No paid ranking');}},
+    id=>join(root,id),async()=>{},join(root,'catalog'));
+  assert.deepEqual((await intelligence.rankLocalCandidates(project,scene,[known,unknown])).map(item=>item.id),[unknown.id]);
+  catalog.segments=segments.slice(0,20);
+  await writeFile(path,JSON.stringify(catalog));
+  assert.equal((await intelligence.rankLocalCandidates(project,scene,[{...known,title:'MotoGP paddock coverage'}])).length,1,
+    'An untitled catalog may contain the person in unindexed frames');
+  segments[12]={...segments[12]!,entities:['Masao Furusawa'],description:'Masao Furusawa engineer speaking in Yamaha garage'};
+  catalog.segments=segments.slice(0,20);
+  await writeFile(path,JSON.stringify(catalog));
+  assert.equal((await intelligence.rankLocalCandidates(project,scene,[known])).length,1,'Actual indexed person evidence remains eligible');
+});
+
 test('a distributed non-camera catalog avoids paid reuse ranking but does not reject mixed or unknown sources',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-non-camera-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const checksum='c'.repeat(64),directory=join(root,'catalog',checksum);await mkdir(directory,{recursive:true});

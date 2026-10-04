@@ -34,7 +34,7 @@ import { documentaryComparisonSubjects } from "./documentary-comparison.js";
 import type { NarrationTiming } from "./narration-timing.js";
 import { documentaryCandidateKey, documentarySampleTimes, documentaryVarietyIssue, usedDocumentaryRanges, unavailableDocumentaryRanges, sameDocumentarySource } from "./documentary-reuse.js";
 import { availableVideoSegments, buildVideoCatalog, documentaryFrozenVideoRange, excludeVideoCatalogRange, readVideoFrames, DocumentaryBlackFrameError, type VideoCatalog } from "./documentary-video-catalog.js";
-import { directCatalogChoices, representativeCatalogChoices, documentaryDistraction, documentaryCatalogIdentityConflict, documentarySubjectPolicy, documentaryRangeEditorialPolicy, documentaryRangeEditorialIssue, documentaryIdentityReviewIssue, documentaryIdentityMatches, documentaryGeneralActionIssue, documentaryActionReviewIssue, documentaryProjectionIssue, documentaryListsNamedSubjects } from "./documentary-visual-relevance.js";
+import { directCatalogChoices, representativeCatalogChoices, documentaryDistraction, documentaryCatalogIdentityConflict, documentarySubjectPolicy, documentaryRangeEditorialPolicy, documentaryRangeEditorialIssue, documentaryIdentityReviewIssue, documentaryIdentityMatches, documentaryIdentityNames, documentaryGeneralActionIssue, documentaryActionReviewIssue, documentaryProjectionIssue, documentaryListsNamedSubjects } from "./documentary-visual-relevance.js";
 
 type Completion = Pick<AnyModelClient, "documentaryCompletion" | "configured"> & Partial<Pick<AnyModelClient,"probeDocumentaryConnection"|"documentaryAnalysisModel">>;
 type Review = NonNullable<DocumentaryScene["visualReview"]>;
@@ -313,6 +313,17 @@ export class DocumentaryIntelligence {
         if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw error;
       });
       if(!catalog)return {candidate,score:actionExcerpt};
+      const identity=scene.documentary?.requirement.identities?.length===1?scene.documentary.requirement.identities[0]:undefined;
+      const personContext=/\b(?:person|man|woman|engineer|boss|director|rider|pilot|captain|president|manager|architect|historian|filmmaker|crew)\b|человек|инженер|режисс[её]р|гонщик|руководител/iu.test(`${scene.narration} ${scene.documentary?.requirement.detail??''}`);
+      if(identity&&personContext&&/^\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){1,3}$/u.test(identity.name)&&catalog.segments.length>=16){
+        const normalize=(value:string)=>` ${value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ')} `;
+        const names=documentaryIdentityNames(scene.documentary!.requirement).filter(name=>name.length>=4);
+        const evidence=normalize([candidate.title,candidate.description,...catalog.segments.flatMap(segment=>[segment.description,...segment.entities])].join(' '));
+        const otherName=candidate.title.match(/(?:^|[^\p{L}])(\p{Lu}[\p{L}'’-]+\s+\p{Lu}[\p{L}'’-]+)(?=$|[^\p{L}])/u)?.[1];
+        const namedFrames=otherName?catalog.segments.filter(segment=>segment.entities.some(entity=>normalize(entity)===normalize(otherName))).length:0;
+        if(otherName&&namedFrames>=3&&names.length&&!names.some(name=>evidence.includes(normalize(name))))
+          return {candidate,score:-1};
+      }
       const subject={...scene,documentary:{...scene.documentary!,selected:candidate,checksum}};
       const desired=(scene.documentary?.timing?.durationInFrames??scene.durationSeconds*30)/30;
       const ranges=availableVideoSegments(catalog,desired,unavailableDocumentaryRanges(project,subject)).filter(range=>!documentaryDistraction(scene,range.description)&&!documentaryCatalogIdentityConflict(scene,range,catalog.segments)
