@@ -282,9 +282,31 @@ export function documentaryFirstVideoBatchWorthInspecting(candidates: Documentar
 export function documentaryDetailScore(candidate: DocumentaryCandidate, requirement: DocumentaryRequirement): number {
   const words = (value: string) => value.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
   const ignored = new Set([...requirement.entities.flatMap(words), "video", "footage", "photo", "view", "archive", "archival"]);
-  const details = [...new Set(words(`${requirement.detail ?? ""} ${requirement.queries.join(" ")}`))].filter(word => !ignored.has(word));
+  const namedModel=requirement.identities?.length===1?requirement.identities[0]!.name:undefined;
+  const modelCode=namedModel?.match(/\b[A-Za-z]+[A-Za-z0-9-]*\d[A-Za-z0-9-]*\b/u)?.[0];
+  const literalDetail=words(requirement.detail??'').filter(word=>!ignored.has(word));
+  // A precise model plus a specified view/action should rank by that detail.
+  // Broad discovery terms such as the sport or brand locate candidates, but
+  // are not evidence that a particular shot depicts the requested action.
+  const details=[...new Set(modelCode&&literalDetail.length?literalDetail
+    :words(`${requirement.detail ?? ""} ${requirement.queries.join(" ")}`).filter(word=>!ignored.has(word)))];
   const title = new Set(words(candidate.title)), description = new Set(words(candidate.description));
-  return details.reduce((score, word) => score + (title.has(word) ? 3 : description.has(word) ? 1 : 0), 0);
+  const years=new Set(candidate.description.match(/\b(?:19|20)\d{2}\b/g)??[]);
+  // A career-spanning source can mention the requested model and many search
+  // words only in a season-by-season table. Keep it eligible for visual review,
+  // but do not let that diffuse description outrank footage whose title names
+  // the relevant action. An indexed excerpt may still prove the long source.
+  const diffuseCatalogue=Boolean(candidate.kind==='video'&&(candidate.durationSeconds??0)>300
+    &&candidate.description.length>800&&years.size>=5&&modelCode
+    &&documentaryFuseModelSuffix(candidate.description).toLowerCase().includes(modelCode.toLowerCase())
+    &&!documentaryFuseModelSuffix(candidate.title).toLowerCase().includes(modelCode.toLowerCase()));
+  let descriptionMatches=0;
+  const titleScore=details.reduce((score,word)=>{
+    if(title.has(word))return score+3;
+    if(description.has(word))descriptionMatches++;
+    return score;
+  },0);
+  return titleScore+(diffuseCatalogue?Math.min(descriptionMatches,1):descriptionMatches);
 }
 
 /** A photo-first scene must not download a long review of a different model
