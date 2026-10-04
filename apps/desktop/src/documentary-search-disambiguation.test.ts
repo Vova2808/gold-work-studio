@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries} from './documentary-project-service.js';
+import {documentaryConflictingModelTitle,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries,selectDocumentaryCandidates} from './documentary-project-service.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import type {DocumentaryCandidate,DocumentaryRequirement} from '@gold-work/shared';
@@ -23,6 +23,23 @@ test('physical-detail footage queries do not spend source slots on an unobservab
   assert.ok(documentarySearchQueries(requirement,'image').every(query=>!/\bsound\b/i.test(query)));
   assert.ok(documentaryStockQueries(requirement).every(query=>!/\bsound\b/i.test(query)));
   assert.equal(requirement.queries[1],'Yamaha M1 uneven firing order engine sound');
+});
+
+test('photo-first selection avoids a same-brand review of another explicit model',()=>{
+  const requirement={text:'The engine had an uneven firing order.',entities:['Yamaha YZR-M1'],identities:[],years:[],
+    preferredKind:'image',queries:['Yamaha M1 engine'],detail:'uneven firing order'} as DocumentaryRequirement;
+  const candidate={kind:'video',provider:'youtube',title:'LOOK THIS !!!2018 Yamaha R1S Design Overview Price & Spec',
+    description:'The R1 crossplane engine was inspired by the Yamaha M1 MotoGP racer',durationSeconds:163} as DocumentaryCandidate;
+  assert.equal(documentaryConflictingModelTitle(candidate,requirement),true);
+  assert.equal(documentaryConflictingModelTitle({...candidate,title:'Yamaha YZR-M1 engine technical film'},requirement),false);
+  assert.equal(documentaryConflictingModelTitle({...candidate,title:'Yamaha R1S versus M1 engine comparison'},requirement),false);
+  assert.equal(documentaryConflictingModelTitle({...candidate,title:'MotoGP engine development archive'},requirement),false);
+  assert.equal(documentaryConflictingModelTitle({...candidate,provider:'commons'},requirement),false);
+  assert.equal(documentaryConflictingModelTitle({...candidate,durationSeconds:45},requirement),false);
+  assert.equal(documentaryConflictingModelTitle(candidate,{...requirement,preferredKind:'video'}),false);
+  const base={...candidate,id:'other-model',rights:'licensed',query:'Yamaha M1 engine',match:'unverified',concerns:[]} as DocumentaryCandidate;
+  const exact={...base,id:'exact-model',title:'Yamaha YZR-M1 engine technical film'};
+  assert.deepEqual(selectDocumentaryCandidates([base,exact],requirement.entities,new Set(),[],false,[],requirement).map(source=>source.id),['exact-model']);
 });
 
 test('one named motorcycle introduction searches the exact model before another verbose YouTube query',()=>{

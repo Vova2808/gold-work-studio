@@ -73,13 +73,13 @@ app.whenReady().then(async()=>{
   const started=Date.now(),context=new AsyncLocalStorage<string>();let submissions=0,tokens=0,lastProgress=0;
   const maxSubmissions=Number(process.argv.find(a=>a.startsWith('--max-calls='))?.slice(12)??20),deadline=started+20*60_000;
   assert.ok(Number.isInteger(maxSubmissions)&&maxSubmissions>=0&&maxSubmissions<=60);
-  const perScene=new Map(sample.map(s=>[s.id,{...s,wasVerified:Boolean(project.scenes.find(scene=>scene.id===s.id)?.documentary?.verified),startedAt:0,finishedAt:0,worked:false,submissions:0,tokens:0}]));
+  const perScene=new Map(sample.map(s=>[s.id,{...s,wasVerified:Boolean(project.scenes.find(scene=>scene.id===s.id)?.documentary?.verified),startedAt:0,finishedAt:0,acceptedAt:0,worked:false,submissions:0,tokens:0}]));
   const log=(event:string,details:Record<string,unknown>)=>appendFileSync(join(out,'events.jsonl'),JSON.stringify({at:new Date().toISOString(),event,...details})+'\n');
   setDiagnosticSink((_level,event,d)=>{
     const sceneId=context.getStore()??(typeof d.sceneId==='string'?d.sceneId:undefined);
     const measured=sceneId?perScene.get(sceneId):undefined;
     if(measured&&d.stage==='scene-selection'){
-      if(event==='documentary.stage.started')measured.startedAt=Date.parse(String(d.startedAt));
+      if(event==='documentary.stage.started'&&!measured.startedAt)measured.startedAt=Date.parse(String(d.startedAt));
       if(event==='documentary.stage.finished')measured.finishedAt=Date.parse(String(d.finishedAt));
     }
     if(measured&&event==='documentary.stage.started'&&['search','search-related','download','download-preview','analysis','media-preparation'].includes(String(d.stage)))measured.worked=true;
@@ -95,7 +95,7 @@ app.whenReady().then(async()=>{
   const originalMutate=repo.mutate.bind(repo);
   repo.mutate=async(id,update,options)=>{
     const current=await originalMutate(id,update,options);
-    for(const s of current.scenes){const row=perScene.get(s.id);if(row&&s.documentary?.verified&&!row.finishedAt){row.finishedAt=Date.now();log('scene.accepted',{sceneId:s.id,number:s.order+1,kind:s.documentary.selected?.kind,seconds:row.startedAt?(row.finishedAt-row.startedAt)/1000:undefined});}}
+    for(const s of current.scenes){const row=perScene.get(s.id);if(row&&s.documentary?.verified&&!row.acceptedAt){row.acceptedAt=Date.now();log('scene.accepted',{sceneId:s.id,number:s.order+1,kind:s.documentary.selected?.kind,seconds:row.startedAt?(row.acceptedAt-row.startedAt)/1000:undefined});}}
     return current;
   };
   const client=new AnyModelClient(new AnyModelStore(join(profile,'credentials/anymodel.json')));
@@ -142,7 +142,7 @@ app.whenReady().then(async()=>{
     const s=updated.scenes.find(s=>s.id===expected.id)!,row=perScene.get(s.id)!;
     const contextIssue=documentarySavedContextIssue(updated,s);
     const qualityVerified=Boolean(s.documentary?.verified&&!contextIssue);
-    return{...row,seconds:row.startedAt?((row.finishedAt||Date.now())-row.startedAt)/1000:undefined,verified:s.documentary?.verified,qualityVerified,
+    return{...row,seconds:row.startedAt?((row.acceptedAt||row.finishedAt||Date.now())-row.startedAt)/1000:undefined,verified:s.documentary?.verified,qualityVerified,
       contextIssue,attempted:row.worked,actualKind:s.documentary?.selected?.kind,
       matchesRequestedKind:qualityVerified&&s.documentary?.selected?.kind===expected.kind,narration:s.narration,title:s.documentary?.selected?.title,
       width:s.documentary?.selected?.width,height:s.documentary?.selected?.height,imagePath:s.imagePath,videoPath:s.videoPath,trimStart:s.trimStartSeconds,trimEnd:s.trimEndSeconds,review:s.documentary?.visualReview,error:s.documentary?.autoError};

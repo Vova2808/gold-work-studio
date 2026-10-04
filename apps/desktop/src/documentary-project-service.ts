@@ -287,6 +287,28 @@ export function documentaryDetailScore(candidate: DocumentaryCandidate, requirem
   return details.reduce((score, word) => score + (title.has(word) ? 3 : description.has(word) ? 1 : 0), 0);
 }
 
+/** A photo-first scene must not download a long review of a different model
+ * merely because its description mentions the narrated one. Only an explicit
+ * same-brand model code in the title is a cheap contradiction; ambiguous or
+ * comparative titles still proceed to actual-frame inspection. */
+export function documentaryConflictingModelTitle(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement):boolean {
+  if(candidate.kind!=='video'||candidate.provider!=='youtube'||candidate.localPath||(candidate.durationSeconds??0)<120
+    ||requirement.preferredKind!=='image')return false;
+  const titleWords=candidate.title.match(/[A-Za-z][A-Za-z0-9-]*/g)??[];
+  for(const entity of requirement.entities){
+    const match=/^([A-Za-z]{3,})\s+([A-Za-z][A-Za-z0-9-]*\d[A-Za-z0-9-]*)$/i.exec(entity.trim());
+    if(!match)continue;
+    const brandIndex=titleWords.findIndex(word=>word.toLowerCase()===match[1]!.toLowerCase());
+    if(brandIndex<0)continue;
+    const wanted=match[2]!.toLowerCase();
+    const alias=wanted.includes('-')?wanted.split('-').at(-1)!:wanted;
+    const codes=titleWords.slice(brandIndex+1,brandIndex+5).filter(word=>/[a-z]/i.test(word)&&/\d/.test(word)).map(word=>word.toLowerCase());
+    if(codes.some(code=>code===wanted||code===alias))continue;
+    if(codes.length)return true;
+  }
+  return false;
+}
+
 export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], entities: string[], used: Set<string>, years: string[] = [], allowUnlabelledStockVideos = false, refinedPhotoQueries: string[] = [], requirement?: DocumentaryRequirement): DocumentaryCandidate[] {
   const normalize = (text: string) => ` ${text.toLowerCase().normalize("NFKD").replace(/(?<=\p{L})\.(?=\p{L})/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
   const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => !["the", "of", "and", "inc"].includes(word));
@@ -299,6 +321,7 @@ export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], 
   };
   const unique = new Set<string>();
   return candidates.filter(candidate => {
+    if(requirement&&documentaryConflictingModelTitle(candidate,requirement))return false;
     if (documentaryProjectionIssue(candidate)) return false;
     if (candidate.bytes && candidate.bytes > 750 * 1024 * 1024) return false;
     if (candidate.width && candidate.height && (Math.max(candidate.width, candidate.height) < 640 || Math.min(candidate.width, candidate.height) < 350)) return false;
