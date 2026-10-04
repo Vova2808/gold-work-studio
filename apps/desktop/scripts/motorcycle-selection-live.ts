@@ -112,6 +112,21 @@ app.whenReady().then(async()=>{
   });
   const stock=new StockClient(new StockStore(join(profile,'credentials/stock.json')));
   const youtube=new DocumentaryYouTube(new YouTubeStore(join(profile,'credentials/youtube.json')));
+  let youtubeSearchCalls=0;
+  const originalYouTubeSearch=youtube.search.bind(youtube);
+  youtube.search=async query=>{
+    youtubeSearchCalls++;
+    const start=performance.now();
+    try{
+      const candidates=await originalYouTubeSearch(query);
+      log('youtube.search',{seconds:(performance.now()-start)/1000,candidates:candidates.length,success:true});
+      return candidates;
+    }catch(error){
+      log('youtube.search',{seconds:(performance.now()-start)/1000,success:false,
+        message:(error instanceof Error?error.message:String(error)).replace(/https?:\/\/\S+/g,'[source]').slice(0,200)});
+      throw error;
+    }
+  };
   const intelligence=new DocumentaryIntelligence(client,id=>storage.projectDirectory(id),async()=>{
     await ensureDocumentaryMemory();
     if(submissions>=maxSubmissions||Date.now()>deadline)throw new DocumentaryAnalysisError('Лимит небольшого живого теста достигнут; готовые ответы сохранены','unavailable');
@@ -151,7 +166,7 @@ app.whenReady().then(async()=>{
   // Always save its report; never write this test's snapshot back to that app.
   const finalRegistryHash=await registryHash();
   const stats=['image','video'].map(kind=>{const rows=results.filter(r=>r.kind===kind),attempted=rows.filter(r=>r.attempted),accepted=rows.filter(r=>r.matchesRequestedKind),fresh=accepted.filter(r=>!r.wasVerified&&r.attempted);return{kind,requested:rows.length,attempted:attempted.length,accepted:accepted.length,newlyAccepted:fresh.length,failedOrFallback:rows.length-accepted.length,meanAcceptedSeconds:fresh.length?fresh.reduce((n,r)=>n+(r.seconds??0),0)/fresh.length:null,meanAttemptSeconds:attempted.length?attempted.reduce((n,r)=>n+(r.seconds??0),0)/attempted.length:null,tokens:rows.reduce((n,r)=>n+r.tokens,0)};});
-  const result={at:new Date().toISOString(),round,repository:'FileProjectRepository isolated full registry',projectId:project.id,elapsedSeconds:(Date.now()-started)/1000,submissions,reportedTokens:tokens,failure,stats,peakRssMB:peakRss/1048576,peakHeapMB:peakHeap/1048576,minFreeMB:minFree/1048576,maxEventLoopDelayMs:lag,registryPreserved:finalRegistryHash===originalHash,registryStartHash:originalHash,registryFinalHash:finalRegistryHash,productionRegistryWrittenByHarness:false,results,note:'Real providers on unfinished existing scenes; prior cache/checkpoints retained. Means include contention and fallback. Not a cold full-film benchmark. Baseline used MemoryProjectRepository; memory/timing cannot be directly compared.'};
+  const result={at:new Date().toISOString(),round,repository:'FileProjectRepository isolated full registry',projectId:project.id,elapsedSeconds:(Date.now()-started)/1000,submissions,reportedTokens:tokens,youtubeSearchCalls,failure,stats,peakRssMB:peakRss/1048576,peakHeapMB:peakHeap/1048576,minFreeMB:minFree/1048576,maxEventLoopDelayMs:lag,registryPreserved:finalRegistryHash===originalHash,registryStartHash:originalHash,registryFinalHash:finalRegistryHash,productionRegistryWrittenByHarness:false,results,note:'Real providers on unfinished existing scenes; prior cache/checkpoints retained. Means include contention and fallback. Not a cold full-film benchmark. Baseline used MemoryProjectRepository; memory/timing cannot be directly compared.'};
   await atomicWrite(join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,results:undefined}));
   app.exit(failure?1:0);
 }).catch(error=>{console.error((error instanceof Error ? error.stack ?? error.message : String(error)).replace(/https?:\/\/\S+/g,'[source]'));app.exit(1);});
