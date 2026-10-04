@@ -29,6 +29,15 @@ export function documentaryGeneralIllustration(scene:Scene):boolean {
     &&!/(?:\b(?:1[0-9]|20)\d{2}\b|\b(?:he|she|they|his|her|their|it|its|that day|that year|this event|the same|later that year)\b|\b(?:он|она|они|его|её|их|тот же|в тот день|в том году)\b)/iu.test(scene.narration);
 }
 
+/** A vetted illustrative slice carries its own visual brief. Earlier names
+ * and dates remain in the story but are not requirements for this shot. */
+export function documentaryVisualReviewContext(project:Project,scene:Scene):DocumentarySceneContext {
+  if(scene.documentary?.requirement?.visualScope==='illustrative'&&documentaryGeneralIllustration(scene)
+    &&!documentaryCallToActionIllustration(scene))
+    return {current:{scene:scene.order+1,text:scene.narration},preceding:[],following:[],earlierTimeReferences:[]};
+  return documentarySceneContext(project,scene);
+}
+
 /** A self-contained audience prompt needs an on-topic background, not footage
  * of someone operating the platform UI. Named people and dated events stay
  * under their normal exact-evidence rules. */

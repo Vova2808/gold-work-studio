@@ -11,7 +11,7 @@ import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
 import {documentaryRankingExcerpt} from './documentary-ranking-excerpt.js';
-import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
+import {documentarySceneContext,documentaryVisualReviewContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryGeneralIllustrationInstruction,documentaryContinuityInstruction,documentaryContinuityEvidenceInstruction,documentaryEraProvenanceInstruction,documentaryLegacyEraProvenanceInstruction,documentarySourceEraReferences,documentaryNarrativeEvidenceIssue,type DocumentarySceneContext} from './documentary-scene-context.js';
 import {documentaryPreviewRejection,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope,documentaryGeneralDiagramPolicy,documentaryGeneralDiagramVerified} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
@@ -1233,7 +1233,7 @@ export class DocumentaryIntelligence {
     if(source&&documentaryContradictoryModelYear(source,scene.documentary!.requirement,documentarySceneContext(project,scene)))
       return {review:{status:'rejected',confidence:1,annotations:[],sampleSeconds:[],checkedAt:new Date().toISOString(),
         reason:'Год модели в заголовке источника противоречит году той же модели в исходном сценарии.',quality:''},usedNewAnalysis:false};
-    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, contextRecheck, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),callToActionTheme:documentaryCallToActionIllustration(scene)?scene.documentary!.requirement.queries.slice(0,2):undefined,sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
+    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, contextRecheck, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentaryVisualReviewContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),callToActionTheme:documentaryCallToActionIllustration(scene)?scene.documentary!.requirement.queries.slice(0,2):undefined,sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
       let review=await this.inspect(project,scene,progress);
       // An older or inconsistent completed review can say "accepted" without
       // current narrative evidence. Reusing its paid checkpoint is allowed;
@@ -1359,6 +1359,8 @@ export class DocumentaryIntelligence {
     const overviewInput = { ...contentRequest, source: { title: selected.title, description: selected.description, date: selected.capturedAt, page: selected.pageUrl }, width, height, duration: selected.kind === "video" ? duration : null, desiredSeconds, sampleSeconds: times,
       ...(usedRanges.length ? { alreadyUsedRanges: usedRanges, rangeInstruction: "Choose a different continuous range outside alreadyUsedRanges, supported by these actual samples. Never repeat a used excerpt merely because the source matches." } : {}) };
     const narrationContext = documentaryNarrationContext(project, scene);
+    const visualNarrationContext=scene.documentary!.requirement.visualScope==='illustrative'&&!documentaryCallToActionIllustration(scene)
+      ?scene.narration:narrationContext;
     const previousOverviewInput = { ...overviewInput, desiredSeconds: scene.durationSeconds };
     // Measured timing alone must not disguise an earlier uncertain paid request.
     // Different samples from unused ranges are a separate footage inspection.
@@ -1447,15 +1449,17 @@ export class DocumentaryIntelligence {
         const start=0,end=Math.min(duration,Math.max(1,desiredSeconds));
         const checked=[start+.1,start+(end-start)/2,Math.max(start,end-.15)];
         const rangeSystem=footageSystem+' This is the ONLY and FINAL check of this fixed short excerpt. All three actual frames must show a clean continuous real-camera view relevant to the general narration. Keep startSeconds and endSeconds unchanged. Reject if any sampled frame is a game, render, title card, unrelated object or unusable image; do not infer unsampled content.'+narrationContextInstruction;
-        const rangeInput={...contentRequest,startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext};
+        const rangeInput={...contentRequest,startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext:visualNarrationContext,
+          visualTask:scene.documentary!.requirement.illustrationQuery};
         const value=await this.complete(project.id,'visual-range',rangeSystem,JSON.stringify(rangeInput),await sample(checked));
         return finish(value,start,end,checked);
       }
     }
-    // A medium-length general clip otherwise buys a broad overview and then
-    // a second exact-range review. Inspect three distributed spoken-length
-    // excerpts together; the actual ordered frames of the winning excerpt
-    // still receive the normal identity, editorial and quality contract.
+    // A short stock result is only useful if its displayed excerpt matches.
+    // For an illustrative scene, inspect one actual spoken-length excerpt
+    // instead of paying to catalogue three regions of every 20-45s result.
+    // Named subjects, dates, explicit actions and saved paid overviews retain
+    // their existing stricter path.
     if(selected.kind==='video'&&scene.videoPath&&duration>12&&duration<=45&&desiredSeconds<=duration-.2
       &&!usedRanges.length&&documentaryGeneralIllustration(scene)&&!documentaryGeneralActionIssue(scene)){
       let oldOverviewAvailable=true;
@@ -1464,32 +1468,15 @@ export class DocumentaryIntelligence {
           footageSystem+narrationContextInstruction,JSON.stringify({...overviewInput,narrationContext}),overviewImages,earlierRequests,legacySampling?1:2));
       }catch(error){if(error instanceof DocumentaryCachedAnalysisMissing)oldOverviewAvailable=false;else throw error;}
       if(!oldOverviewAvailable){
-        const starts=[times[0],times[Math.floor(times.length/2)],times.at(-1)]
-          .filter((time):time is number=>time!==undefined)
-          .map(time=>Math.max(0,Math.min(duration-desiredSeconds,time-desiredSeconds/2)));
-        const unique=[...new Set(starts.map(start=>start.toFixed(3)))].map(Number);
-        const regions=unique.map((startSeconds,id)=>({id,startSeconds,endSeconds:startSeconds+desiredSeconds}));
-        progress(`Проверяю ${regions.length} коротких фрагмента одним анализом реальных кадров…`);
-        const reviews=await inspectDocumentaryRangeBatch({file:scene.videoPath,root,
-          request:{...contentRequest,narrationContext,desiredSeconds,
-            source:{title:selected.title,author:selected.author},
-            searchHints:documentaryAvailabilitySearchHints(scene)},
-          legacyRequest:{...contentRequest,narrationContext,desiredSeconds,
-            source:{title:selected.title,author:selected.author},
-            searchHints:{detail:scene.documentary!.requirement.detail,queries:scene.documentary!.requirement.queries}},
-          identities:scene.documentary!.requirement.identities,regions,samplesPerRegion:3,
-          availabilityIllustration:documentaryAvailabilityIllustration(scene),
-          complete:(purpose,system,input,images,previous)=>this.complete(project.id,purpose,system,input,images,previous)});
-        let result:Review|undefined;
-        for(const region of regions){
-          const value=reviews.get(documentaryRangeKey(region.startSeconds,region.endSeconds));
-          if(!value)continue;
-          const checked=[.03,.5,.97].map(fraction=>region.startSeconds+desiredSeconds*fraction);
-          result=finish(value,region.startSeconds,region.endSeconds,checked);
-          if(result.status==='accepted')return result;
-        }
-        return result??{status:'rejected',confidence:1,reason:'В проверенных коротких фрагментах нет подходящего чистого видео.',
-          checkedAt:new Date().toISOString(),sampleSeconds:[],quality:`${width}×${height}`};
+        const start=Math.max(0,(duration-desiredSeconds)/2),end=start+desiredSeconds;
+        const checked=[start+.1,start+desiredSeconds/2,Math.max(start,end-.15)];
+        progress('Проверяю выбранный фрагмент по трём реальным кадрам…');
+        const rangeSystem=footageSystem+' This is the ONLY and FINAL check of this fixed illustrative excerpt. Inspect the three ordered frames for the topic, any explicitly narrated visible part, real camera footage, technical quality and contradictory identity or era. Keep startSeconds and endSeconds unchanged. Reject an unrelated or unusable excerpt; do not infer unseen footage.'+narrationContextInstruction;
+        const rangeInput={...contentRequest,startSeconds:start,endSeconds:end,sampleSeconds:checked,narrationContext:visualNarrationContext,
+          visualTask:scene.documentary!.requirement.illustrationQuery,
+          source:{title:selected.title,description:selected.description}};
+        const value=await this.complete(project.id,'visual-range',rangeSystem,JSON.stringify(rangeInput),await sample(checked));
+        return finish(value,start,end,checked);
       }
     }
     const overviewSystem=footageSystem+narrationContextInstruction;

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {Project,Scene,DocumentaryRequirement,DocumentaryCandidate} from '@gold-work/shared';
 import {DocumentaryIntelligence,documentaryMetadataShortlist} from './documentary-intelligence.js';
-import {documentaryGeneralIllustration} from './documentary-scene-context.js';
+import {documentaryGeneralIllustration,documentaryVisualReviewContext} from './documentary-scene-context.js';
 import {documentarySearchQueries,documentaryThematicStockProbe} from './documentary-project-service.js';
 import {applyDocumentaryRequirement} from './documentary-visual-relevance.js';
 import {documentaryContextApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
@@ -52,6 +52,8 @@ test('only a grounded abstract slice becomes a thematic stock shot; exact and in
   assert.equal(generic.narrativeIdentities?.[0]?.name,'Valentino Rossi');
   assert.equal(documentarySearchQueries(generic,'video')[0],'motorcycle racing corner onboard');
   assert.equal(documentaryGeneralIllustration(applyDocumentaryRequirement(scenes[1]!,generic)),true);
+  assert.deepEqual(documentaryVisualReviewContext(project,applyDocumentaryRequirement(scenes[1]!,generic)).preceding,[]);
+  assert.ok(documentaryVisualReviewContext(project,scenes[2]!).preceding.length>0);
   assert.equal(documentaryGeneralIllustration({...applyDocumentaryRequirement(scenes[1]!,generic),narration:'Different words.'}),false);
 });
 
