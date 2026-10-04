@@ -416,19 +416,14 @@ export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], 
     || (allowUnlabelledStockVideos ? queryMatch(b) - queryMatch(a) : 0) || Number(used.has(a.id)) - Number(used.has(b.id)));
 }
 
-/** A model-year review in a search title is about the depicted motorcycle,
- * unlike a publication timestamp. Avoid downloading a plainly different
- * model year when the original script dates that same named model. */
-export function documentaryContradictoryModelYear(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement,context:DocumentarySceneContext):boolean{
-  if(candidate.provider!=='youtube'||candidate.kind!=='video'||requirement.identities?.length!==1)return false;
+/** Take a year from the original script only when it unambiguously refers to
+ * this one named model. An adjacent date is not generally inherited. */
+export function documentaryContinuityModelYear(requirement:DocumentaryRequirement,context:DocumentarySceneContext):string|undefined{
+  if(requirement.identities?.length!==1)return;
   const modelCodes=[requirement.identities[0]!.name,...requirement.identities[0]!.aliases]
     .flatMap(name=>name.match(/\b[A-Za-z]{2,8}[- ]?[A-Za-z]?\d{1,4}[A-Za-z0-9-]*\b/g)??[])
     .map(code=>code.toLowerCase().replace(/[^a-z0-9]/g,''));
   const compact=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,'');
-  const title=compact(candidate.title);
-  if(!modelCodes.some(code=>code.length>=4&&title.includes(code)))return false;
-  const titleYears=[...new Set(candidate.title.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
-  if(titleYears.length!==1)return false;
   const scriptYears=requirement.years.length===1?requirement.years
     :requirement.years.length?[]:[...new Set(context.current.text.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
   let required=scriptYears.length===1?scriptYears[0]:undefined;
@@ -438,6 +433,24 @@ export function documentaryContradictoryModelYear(candidate:DocumentaryCandidate
     if(next?.scene===context.current.scene+1&&nextYears.length===1
       &&modelCodes.some(code=>code.length>=4&&compact(next.text).includes(code)))required=nextYears[0];
   }
+  return modelCodes.some(code=>code.length>=4)?required:undefined;
+}
+
+/** A model-year review in a search title is about the depicted motorcycle,
+ * unlike a publication timestamp. Avoid downloading a plainly different
+ * model year when the original script dates that same named model. */
+export function documentaryContradictoryModelYear(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement,context:DocumentarySceneContext):boolean{
+  if(candidate.provider!=='youtube'||candidate.kind!=='video'||requirement.identities?.length!==1)return false;
+  const required=documentaryContinuityModelYear(requirement,context);
+  if(!required)return false;
+  const compact=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,'');
+  const title=compact(candidate.title);
+  const modelCodes=[requirement.identities[0]!.name,...requirement.identities[0]!.aliases]
+    .flatMap(name=>name.match(/\b[A-Za-z]{2,8}[- ]?[A-Za-z]?\d{1,4}[A-Za-z0-9-]*\b/g)??[])
+    .map(code=>compact(code));
+  if(!modelCodes.some(code=>code.length>=4&&title.includes(code)))return false;
+  const titleYears=[...new Set(candidate.title.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[])];
+  if(titleYears.length!==1)return false;
   return Boolean(required&&titleYears[0]!==required
     &&!new Set<string>(candidate.description.match(/\b(?:1[0-9]|20)\d{2}\b/g)??[]).has(required));
 }
@@ -903,8 +916,13 @@ export class DocumentaryProjectService {
           const searchStarted=Date.now();
           const context=documentarySceneContext(project,scene);
           const sourceQueries=documentarySearchQueries(requirement,kind,context);
-          const queries=documentaryGeneralIllustration(scene)||kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
+          const plannedQueries=documentaryGeneralIllustration(scene)||kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries
             :documentaryDatedSearchQueries(sourceQueries,documentaryNarrationContext(project,scene));
+          const linkedModelYear=kind==='video'?documentaryContinuityModelYear(requirement,context):undefined;
+          const datedModel=linkedModelYear&&requirement.years.length===0&&requirement.identities?.length===1
+            ?`${requirement.identities[0]!.name} ${linkedModelYear}`:undefined;
+          const queries=datedModel&&!plannedQueries.some(query=>query.toLowerCase()===datedModel.toLowerCase())
+            ?[datedModel,...plannedQueries].slice(0,4):plannedQueries;
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>) => {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
