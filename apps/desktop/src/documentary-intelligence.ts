@@ -6,7 +6,7 @@ import {documentaryReviewContract} from './documentary-review-contract.js';
 import {withDocumentaryFrameSlot} from './documentary-resources.js';
 import {documentaryLocalShortlist} from './documentary-local-shortlist.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
-import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
+import {documentaryNegativeRankingCache,documentaryPositiveRankingCache} from './documentary-ranking-cache.js';
 import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
 import {DocumentaryRankingBatch} from './documentary-ranking-batch.js';
@@ -1091,6 +1091,8 @@ export class DocumentaryIntelligence {
       const {generalDiagramScope:_,...legacyLong}=JSON.parse(longRankingInput);
       previousRankings.push({system:legacyContextSystem,input:legacyContextInput},{system:legacyContextSystem,input:JSON.stringify(legacyLong)});
     }
+    const positives=await documentaryPositiveRankingCache(this.rootFor(project.id),currentRankingSystem,rankingInput,
+      id=>shortKeys.find(item=>item.shortKey===id)?.key);
     const longRankingKey=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',currentRankingSystem,longRankingInput,[]])).digest('hex');
     const longRanking=await readAnalysisCheckpoint(join(this.rootFor(project.id),'Documentary','Analysis',`${longRankingKey}.json`));
     // The same request with long IDs is a protocol migration, not a new paid
@@ -1099,6 +1101,7 @@ export class DocumentaryIntelligence {
     if(longRanking?.state==='complete'&&Array.isArray(longRanking.result?.ids)&&longRanking.result.ids.every(id=>typeof id==='string')){
       const keys=resolveDocumentaryCandidateKeys(longRanking.result.ids as string[],shortKeys.map(item=>item.key));
       const grounded=filterDocumentaryRankingEra(longRanking.result,narrativeContext,shortKeys.map(item=>({id:item.key,title:item.candidate.title,description:item.candidate.description})),keys);
+      await positives.remember(grounded.flatMap(key=>shortKeys.find(item=>item.key===key)?.shortKey??[]));
       return grounded.map(key=>shortKeys.find(item=>item.key===key)!.candidate);
     }
     const negatives=await documentaryNegativeRankingCache(this.rootFor(project.id),currentRankingSystem,rankingInput);
@@ -1109,6 +1112,11 @@ export class DocumentaryIntelligence {
     if(negatives.allRejected){
       recordDiagnosticEvent('info','documentary.ranking.negative-cache',{projectId:project.id,sceneId:scene.id,candidates:pool.length});
       return [];
+    }
+    const reused=positives.selected.filter(id=>negatives.remainingCandidates.some(candidate=>candidate.id===id));
+    if(reused.length){
+      recordDiagnosticEvent('info','documentary.ranking.positive-cache',{projectId:project.id,sceneId:scene.id,candidates:reused.length});
+      return reused.map(id=>shortKeys.find(item=>item.shortKey===id)!.candidate);
     }
     // An explicit completed rejection is still valid when another source joins
     // the pool. Send only new metadata, retaining the exact old request as an
@@ -1151,6 +1159,7 @@ export class DocumentaryIntelligence {
     if(response.ids.length===0)await (compactNegatives??negatives).rememberEmpty();
     const grounded=filterDocumentaryRankingEra(response,narrativeContext,candidatesForRanking,unique);
     if(grounded.length!==unique.length)recordDiagnosticEvent('info','documentary.ranking.era-filter',{projectId:project.id,sceneId:scene.id,rejected:unique.length-grounded.length,remaining:grounded.length});
+    await positives.remember(grounded);
     return grounded.map(id => shortKeys.find(item => item.shortKey === id)!.candidate);
   }
 

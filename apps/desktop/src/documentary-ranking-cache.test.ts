@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {documentaryCandidateKey} from './documentary-reuse.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
+import {documentaryNegativeRankingCache,documentaryPositiveRankingCache} from './documentary-ranking-cache.js';
 import {DocumentaryIntelligence,documentaryNamedShortVideoRankingPool} from './documentary-intelligence.js';
 import {documentaryRankingResponseInstruction} from './documentary-ranking-batch.js';
 import type {Project,Scene,DocumentaryCandidate} from '@gold-work/shared';
@@ -91,6 +91,35 @@ test('completed negative rankings reuse subsets but never hide unknown sources o
   assert.equal((await documentaryNegativeRankingCache(root,'new policy',input([a]))).allRejected,false);
   assert.equal((await documentaryNegativeRankingCache(root,'policy',input([a],'Different scene'))).allRejected,false);
   assert.equal((await documentaryNegativeRankingCache(root,'policy',input([{...a,title:'New proven subject'}]))).allRejected,false);
+});
+
+test('a completed positive ranking survives an expanded pool but not a changed scene, policy or source',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-positive-ranking-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const input=(candidates:unknown[],narration='Exact named object')=>JSON.stringify({narration,candidates});
+  const a={id:'a',title:'Promising original'},b={id:'b',title:'New candidate'};
+  const source=(id:string)=>`source:${id}`;
+  await (await documentaryPositiveRankingCache(root,'policy',input([a]),source)).remember(['a']);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'policy',input([b,a]),source)).selected,['a']);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'policy',input([b]),source)).selected,[]);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'policy',input([{...a,title:'Mislabelled source'}]),source)).selected,[]);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'policy',input([a],'Different narration'),source)).selected,[]);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'new policy',input([a]),source)).selected,[]);
+  assert.deepEqual((await documentaryPositiveRankingCache(root,'policy',input([a]),id=>`replaced:${id}`)).selected,[]);
+});
+
+test('expanding a completed positive shortlist reuses it without another paid ranking',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-positive-integration-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const scene={id:'s',order:0,narration:'An exact named vessel.',documentary:{requirement:{entities:['Exact Vessel'],identities:[{name:'Exact Vessel',aliases:[]}],years:[],queries:[]}}} as unknown as Scene;
+  const project={id:'p',scenes:[scene]} as Project;
+  const pool=['a','b'].map(id=>({id,provider:'commons',kind:'image',title:`Ambiguous archive ${id}`,description:'Vessel at sea',downloadUrl:`https://example.test/${id}.jpg`,pageUrl:`https://example.test/${id}`})) as DocumentaryCandidate[];
+  let calls=0;const client={configured:async()=>true,documentaryCompletion:async(_system:string,input:string)=>{
+    calls++;return JSON.stringify({ids:[JSON.parse(input).candidates[0].id]});
+  }};
+  assert.deepEqual(await new DocumentaryIntelligence(client,()=>root).rankCandidates(project,scene,pool.slice(0,1)),[pool[0]]);
+  assert.deepEqual(await new DocumentaryIntelligence(client,()=>root).rankCandidates(project,scene,pool),[pool[0]]);
+  assert.equal(calls,1);
+  assert.deepEqual(await new DocumentaryIntelligence(client,()=>root).rankCandidates(project,scene,pool.slice(1)),[pool[1]]);
+  assert.equal(calls,2,'The old positive source is absent, so the new source needs its own ranking');
 });
 
 test('mixed ranking sends only newly seen candidates and cannot bypass an old pending mixed pool',async t=>{

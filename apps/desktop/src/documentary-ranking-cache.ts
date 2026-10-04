@@ -27,3 +27,41 @@ export async function documentaryNegativeRankingCache(root:string,system:string,
     }
   };
 }
+
+/** A completed positive shortlist remains worth an actual-frame inspection
+ * when a search wave adds other candidates. Store only hashes of the exact
+ * source and metadata under the unchanged scene context and ranking policy.
+ * An inspected/rejected source is removed by the caller's normal tried set. */
+export async function documentaryPositiveRankingCache(root:string,system:string,input:string,sourceKey:(id:string)=>string|undefined){
+  const request=JSON.parse(input),candidates=request.candidates as Array<Record<string,unknown>>;
+  const {candidates:_,...context}=request;
+  const directory=join(root,'Documentary','RankingPositives'),path=join(directory,hash([1,system,context])+'.json');
+  const fingerprints=new Map<string,string>();
+  for(const candidate of candidates){
+    const id=typeof candidate.id==='string'?candidate.id:undefined;
+    const key=id?sourceKey(id):undefined;
+    if(!id||!key)continue;
+    const {id:__,...metadata}=candidate;
+    fingerprints.set(id,hash([key,metadata]));
+  }
+  const read=async():Promise<string[]>=>{
+    try{
+      const value=JSON.parse(await readFile(path,'utf8'));
+      return value.version===1&&Array.isArray(value.selected)
+        ?value.selected.filter((item:unknown):item is string=>typeof item==='string'&&/^[a-f0-9]{64}$/.test(item)):[];
+    }catch{return [];}
+  };
+  const saved=await read();
+  const selected=saved.flatMap(fingerprint=>{
+    const match=[...fingerprints].find(([,value])=>value===fingerprint);
+    return match?[match[0]]:[];
+  }).slice(0,6);
+  return {selected,
+    async remember(ids:string[]){
+      const current=ids.flatMap(id=>fingerprints.has(id)?[fingerprints.get(id)!]:[]);
+      if(!current.length)return;
+      await mkdir(directory,{recursive:true});
+      const merged=[...new Set([...current,...await read()])].slice(0,24);
+      await atomicWrite(path,JSON.stringify({version:1,selected:merged}));
+    }};
+}
