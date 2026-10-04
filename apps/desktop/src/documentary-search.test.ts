@@ -7,7 +7,16 @@ import type {DocumentaryCandidate} from '@gold-work/shared';
 import { commonsCandidates, DocumentarySearch, rankDocumentaryCandidates, documentaryExactQuery, documentaryLicense } from "./documentary-search.js";
 import {documentaryRetryAfter} from "./documentary-download.js";
 import {StockApiRateLimitError} from "./stock-client.js";
-import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, documentaryYouTubeFormatSelector, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
+import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, documentaryLikelyPortraitShort, documentaryYouTubeFormatSelector, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
+
+test('a YouTube HD-labelled vertical Short is skipped before horizontal auto selection',()=>{
+  const source={id:'youtube:C7BQcBG7ndo',provider:'youtube',kind:'video',videoDefinition:'hd',
+    title:'Yamaha YZR M1 Quartararo MotoGP 2019 #short',durationSeconds:27} as DocumentaryCandidate;
+  assert.equal(documentaryLikelyPortraitShort(source),true);
+  assert.equal(documentaryLikelyPortraitShort({...source,title:'Yamaha YZR M1 short documentary'}),false);
+  assert.equal(documentaryLikelyPortraitShort({...source,localPath:'D:/saved.mp4'}),false,
+    'A saved/manual source remains available for frame inspection');
+});
 
 test('a split model suffix in an archive title matches the same machine, not a neighbouring code',()=>{
   const source={kind:'video',provider:'youtube',description:'Race motorcycle review',concerns:[],rights:'licensed'} as unknown as DocumentaryCandidate;

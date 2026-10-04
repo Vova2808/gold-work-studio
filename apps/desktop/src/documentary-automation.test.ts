@@ -496,6 +496,30 @@ test("an unavailable YouTube format is remembered across automatic scene retries
   assert.equal(downloads,1,'A restart must skip the unusable source before another network transfer');
 });
 
+test("automatic full-frame selection skips an HD-labelled #short before paid ranking or download",async t=>{
+  const {root,projects,project}=await setup();
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const scene=project.scenes[0]!;
+  const candidate:DocumentaryCandidate={id:'youtube:portrait-fixture',provider:'youtube',kind:'video',
+    title:'Red tractor in a field #short',description:'Working tractor',pageUrl:'https://example.test/portrait-fixture',
+    downloadUrl:'https://example.test/portrait-fixture',author:'Fixture',license:'CC BY',licenseUrl:'https://example.test/license',
+    rights:'licensed',attribution:'Fixture',query:'red tractor',retrievedAt:'now',match:'exact-metadata',concerns:[],
+    videoDefinition:'hd',durationSeconds:27};
+  const searcher=new DocumentarySearch();
+  searcher.search=async input=>({candidates:input.kind==='video'?[candidate]:[],sources:[]});
+  let downloads=0,rankings=0;
+  const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'workspace')),searcher,join(root,'Materials'),
+    {download:async()=>{throw Error('No stock download expected');}},()=>{}, {
+      available:async()=>true,
+      plan:async(_project,scenes)=>new Map(scenes.map(item=>[item.id,{...item.documentary!.requirement,entities:['red tractor'],queries:['red tractor'],plannedBy:'semantic' as const}])),
+      rankCandidates:async()=>{rankings++;return [candidate];},
+      inspect:async()=>{throw Error('Portrait Short must not reach visual inspection');},
+    },undefined,{download:async()=>{downloads++;throw Error('Portrait Short must not be downloaded');}});
+  await service.autoSelect(project.id,{sceneIds:[scene.id]});
+  assert.equal(rankings,0);
+  assert.equal(downloads,0);
+});
+
 test("an unavailable preview of a long YouTube source skips the original download", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));

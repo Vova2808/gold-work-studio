@@ -200,6 +200,16 @@ export function documentaryYouTubeFormatSelector(requireHd:boolean):string{
   return `bestvideo[ext=mp4][height<=1080]${minimumWidth}/best[ext=mp4][height<=1080]${minimumWidth}`;
 }
 
+/** The YouTube API can label a vertical Short as HD even when every MP4
+ * version below 1080 pixels high is too narrow for a horizontal full-frame
+ * documentary shot. This is only an automatic discovery hint: the manual
+ * picker can still offer the source, and unlabelled videos keep their normal
+ * actual-format check. */
+export function documentaryLikelyPortraitShort(candidate:DocumentaryCandidate):boolean{
+  return candidate.provider==='youtube'&&candidate.kind==='video'&&!candidate.localPath
+    &&/(?:^|\s)#shorts?\b/iu.test(candidate.title);
+}
+
 export async function downloadWithYtDlp(args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string,maxBytes=maximumBytes): Promise<void> {
   const bundled = join(process.resourcesPath || "", "bin", process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp");
   const commands = [

@@ -34,7 +34,7 @@ import {documentarySourceQualityIssue,documentaryQualityPresentation,documentary
 import { planDocumentaryMontage } from "./documentary-montage.js";
 import {prepareDocumentaryMaps} from './documentary-map.js';
 import { copyImmutableDocumentaryFile, documentaryAvailableBytes, ensureDocumentarySpace, DocumentaryStorageUnavailableError } from "./documentary-storage.js";
-import { DocumentaryYouTubeDefinitionError, documentaryYouTubeFormatSelector, type DocumentaryYouTube } from "./documentary-youtube.js";
+import { DocumentaryYouTubeDefinitionError, documentaryLikelyPortraitShort, documentaryYouTubeFormatSelector, type DocumentaryYouTube } from "./documentary-youtube.js";
 import { DocumentaryMemoryUnavailableError } from "./documentary-resources.js";
 import {documentarySelectionResources,runDocumentarySelectionQueue} from './documentary-resources.js';
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
@@ -832,11 +832,13 @@ export class DocumentaryProjectService {
         // the editor can use. A failed yt-dlp format selection is deterministic
         // for this selector; persist it across app restarts, but invalidate the
         // refusal if the accepted format policy changes.
-        const formatScope=createHash('sha256').update(JSON.stringify(['youtube-format-v1',documentaryYouTubeFormatSelector(documentaryQualityPresentation(scene)!=='subject-card')])).digest('hex');
+        const requiresWideVideo=documentaryQualityPresentation(scene)!=='subject-card';
+        const formatScope=createHash('sha256').update(JSON.stringify(['youtube-format-v1',documentaryYouTubeFormatSelector(requiresWideVideo)])).digest('hex');
         const formatPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'unavailable-formats.json');
         const unavailableFormats=await readDocumentaryRejections(formatPath,formatScope);
         const formatUnavailable=(candidate:DocumentaryCandidate)=>candidate.provider==='youtube'&&!candidate.localPath
-          &&(unavailableFormats.has(rejectedCandidateFingerprint(candidate))
+          &&((requiresWideVideo&&documentaryLikelyPortraitShort(candidate))
+            ||unavailableFormats.has(rejectedCandidateFingerprint(candidate))
             ||session.isUnavailableFormat(formatScope,rejectedCandidateFingerprint(candidate)));
         // A paid inspection with an unknown outcome is not a visual rejection:
         // keep the source for manual review, but never download it again merely
@@ -952,9 +954,10 @@ export class DocumentaryProjectService {
                 ||documentaryFirstVideoBatchWorthInspecting(first,requirement,scene.narration):undefined,
             deferredBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
               ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart)
+              // Concrete names and dates should not buy separate rankings for
+              // each weak result while the other source searches are in flight.
               :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
-                &&requirement.identities?.length===1&&!requirement.years.length
-                &&!documentaryRequiredVisiblePart(scene.narration)
+                &&(Boolean(requirement.identities?.length)||Boolean(requirement.years.length))
               ?batch=>Date.now()-searchStarted>=8000||documentaryFirstVideoBatchWorthInspecting(batch,requirement,scene.narration):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);
