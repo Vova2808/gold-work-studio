@@ -309,12 +309,13 @@ export function documentaryDetailScore(candidate: DocumentaryCandidate, requirem
   return titleScore+(diffuseCatalogue?Math.min(descriptionMatches,1):descriptionMatches);
 }
 
-/** A photo-first scene must not download a long review of a different model
- * merely because its description mentions the narrated one. Only an explicit
- * same-brand model code in the title is a cheap contradiction; ambiguous or
- * comparative titles still proceed to actual-frame inspection. */
+/** A photo-first scene must not inspect a long review of a different model
+ * merely because its description mentions the narrated one. This also applies
+ * to a downloaded copy of that YouTube source: its local path does not change
+ * the model named in the title. Comparative titles still reach frame review. */
 export function documentaryConflictingModelTitle(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement):boolean {
-  if(candidate.kind!=='video'||candidate.provider!=='youtube'||candidate.localPath||(candidate.durationSeconds??0)<120
+  const youtubeSource=candidate.provider==='youtube'||candidate.provider==='local'&&/^https:\/\/www\.youtube\.com\/watch\?v=/.test(candidate.pageUrl);
+  if(candidate.kind!=='video'||!youtubeSource||(candidate.durationSeconds??0)<120
     ||requirement.preferredKind!=='image')return false;
   const titleWords=documentaryFuseModelSuffix(candidate.title).match(/[A-Za-z][A-Za-z0-9-]*/g)??[];
   for(const entity of requirement.entities){

@@ -39,6 +39,12 @@ test('photo-first selection avoids a same-brand review of another explicit model
   assert.equal(documentaryConflictingModelTitle({...candidate,title:'Yamaha R1S versus M1 engine comparison'},requirement),false);
   assert.equal(documentaryConflictingModelTitle({...candidate,title:'MotoGP engine development archive'},requirement),false);
   assert.equal(documentaryConflictingModelTitle({...candidate,provider:'commons'},requirement),false);
+  const savedYouTube={...candidate,provider:'local',pageUrl:'https://www.youtube.com/watch?v=a82Cr-v3c78',localPath:'D:\\saved.mp4'} as DocumentaryCandidate;
+  assert.equal(documentaryConflictingModelTitle(savedYouTube,requirement),true,
+    'A downloaded copy of the wrong-model review must not consume another paid catalogue check');
+  assert.equal(documentaryConflictingModelTitle({...savedYouTube,title:'Yamaha R1S versus M1 engine comparison'},requirement),false);
+  assert.equal(documentaryConflictingModelTitle({...savedYouTube,pageUrl:'file:///D:/saved.mp4'},requirement),false,
+    'Manually imported local footage remains available for frame inspection');
   assert.equal(documentaryConflictingModelTitle({...candidate,durationSeconds:45},requirement),false);
   assert.equal(documentaryConflictingModelTitle(candidate,{...requirement,preferredKind:'video'}),false);
   const base={...candidate,id:'other-model',rights:'licensed',query:'Yamaha M1 engine',match:'unverified',concerns:[]} as DocumentaryCandidate;
