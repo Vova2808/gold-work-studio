@@ -263,10 +263,15 @@ export function documentaryFirstImageBatchWorthInspecting(candidates:Documentary
 
 /** Only a concise, well-labelled clip merits an AI shortlist before other
  * source families return. Weak YouTube captions remain in the broad pool. */
-export function documentaryFirstVideoBatchWorthInspecting(candidates: DocumentaryCandidate[], requirement: DocumentaryRequirement): boolean {
+export function documentaryFirstVideoBatchWorthInspecting(candidates: DocumentaryCandidate[], requirement: DocumentaryRequirement,narration=requirement.text): boolean {
   const identities=requirement.identities??[];
   return candidates.some(candidate=>{
     if(candidate.kind!=='video'||candidate.rights==='unknown'||(candidate.durationSeconds??Infinity)>120)return false;
+    // If the first wave only contains a named person in a different sport or
+    // role, wait for the already-running broader searches before paying to
+    // rank this weak batch. The same source remains eligible later.
+    if(identities.length===1&&/^\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){1,3}$/u.test(identities[0]!.name)
+      &&documentaryExactNamedShortVideoProbe([candidate],requirement,narration)!==candidate)return false;
     const metadata=`${candidate.title} ${candidate.description}`.toLowerCase();
     if(identities.some(identity=>![identity.name,...identity.aliases].some(name=>name&&metadata.includes(name.toLowerCase()))))return false;
     if(requirement.years.length&&!requirement.years.some(year=>metadata.includes(year)))return false;
@@ -811,13 +816,13 @@ export class DocumentaryProjectService {
               ?first=>documentaryFirstImageBatchWorthInspecting(first,requiredImagePart)
               :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
               ?first=>session.searchRemaining(scene.id,kind)-(Date.now()-waitingAt)<10_000
-                ||documentaryFirstVideoBatchWorthInspecting(first,requirement):undefined,
+                ||documentaryFirstVideoBatchWorthInspecting(first,requirement,scene.narration):undefined,
             deferredBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
               ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart)
               :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
                 &&requirement.identities?.length===1&&!requirement.years.length
                 &&!documentaryRequiredVisiblePart(scene.narration)
-              ?batch=>Date.now()-searchStarted>=8000||documentaryFirstVideoBatchWorthInspecting(batch,requirement):undefined,
+              ?batch=>Date.now()-searchStarted>=8000||documentaryFirstVideoBatchWorthInspecting(batch,requirement,scene.narration):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);
               for(const source of shared.sources.filter(source=>source.error)){

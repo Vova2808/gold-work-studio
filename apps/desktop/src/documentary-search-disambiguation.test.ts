@@ -80,4 +80,6 @@ test('a named person in an unrelated sport does not get the early download short
   const relevant={...unrelated,title:'Valentino Rossi Yamaha MotoGP 2004 highlights'};
   assert.equal(documentaryExactNamedShortVideoProbe([unrelated],requirement,requirement.text),undefined);
   assert.equal(documentaryExactNamedShortVideoProbe([unrelated,relevant],requirement,requirement.text),relevant);
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([unrelated],requirement),false,'A weak first wave must wait for other providers before another paid ranking');
+  assert.equal(documentaryFirstVideoBatchWorthInspecting([relevant],requirement),true);
 });
