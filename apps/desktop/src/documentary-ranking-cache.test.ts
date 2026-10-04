@@ -31,10 +31,11 @@ test('a concise exact-model video survives a crowded shortlist without replaying
   const key=createHash('sha256').update(JSON.stringify([2,'candidate-relevance',oldSystem,oldInput,[]])).digest('hex');
   await writeFile(join(guarded,'Documentary','Analysis',`${key}.json`),JSON.stringify({state:'pending',purpose:'candidate-relevance'}));
   let newCalls=0;
-  await assert.rejects(new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+  const selected=await new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
     newCalls++;return '{"ids":[]}';
-  }},()=>guarded).rankCandidates(project,scene,[...long,short]),/неизвестный результат|Автоповтор/);
-  assert.equal(newCalls,0,'Adding a source cannot resend an unknown paid selection');
+  }},()=>guarded).rankCandidates(project,scene,[...long,short]);
+  assert.deepEqual(selected,[short],'The exact short source gets a real-frame chance before paid metadata ranking');
+  assert.equal(newCalls,0,'The old unknown ranking must not be resent');
 });
 
 test('named scenes do not pay to rank unrelated generic stock; a real named source remains eligible',async t=>{

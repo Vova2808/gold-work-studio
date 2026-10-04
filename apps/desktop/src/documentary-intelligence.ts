@@ -4,6 +4,7 @@ import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
 import {documentaryReviewContract} from './documentary-review-contract.js';
 import {withDocumentaryFrameSlot} from './documentary-resources.js';
 import {documentaryLocalShortlist} from './documentary-local-shortlist.js';
+import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {documentaryNegativeRankingCache} from './documentary-ranking-cache.js';
 import {filterDocumentaryRankingEra} from './documentary-ranking-era.js';
 import {documentaryAnalysisTier} from './documentary-analysis-routing.js';
@@ -49,10 +50,13 @@ export function documentaryMetadataShortlist(scene: Scene, candidates: Documenta
   const matches=(term:string,title:Set<string>)=>title.has(term)||term.endsWith('ing')&&
     (title.has(term.slice(0,-3))||title.has(`${term.slice(0,-3)}e`));
   const queries=requirement.queries.map(words).filter(q=>q.length>=2);
-  // A proper name alone says nothing about the requested view/action. In the
-  // live run “Faster” matched Windows tutorials and Rossi matched any Yamaha
-  // compilation. Resolve named subjects semantically before downloading.
-  if (requirement.identities.length) return [];
+  // A proper name alone says nothing about a requested view or action. Only
+  // one concise exact-title source gets a frame-review chance without paid
+  // metadata ranking; dated, detail and action scenes remain strict.
+  if (requirement.identities.length) {
+    const exactShort=documentaryExactNamedShortVideoProbe(candidates,requirement,scene.narration);
+    return exactShort?[exactShort]:[];
+  }
   const obvious=documentaryRankingPool(candidates).filter(candidate=>{
     if(documentaryProjectionIssue(candidate))return false;
     const title=` ${normalize(candidate.title)} `;

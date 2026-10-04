@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {documentaryExactNamedShortVideoProbe,documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries} from './documentary-project-service.js';
+import {documentaryFirstVideoBatchWorthInspecting,documentarySearchQueries,documentaryStockQueries,documentaryYouTubeQueries} from './documentary-project-service.js';
+import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import type {DocumentaryCandidate,DocumentaryRequirement} from '@gold-work/shared';
 

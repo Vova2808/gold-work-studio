@@ -5,6 +5,7 @@ import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
+import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {documentarySceneContext,documentaryGeneralIllustration,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -263,21 +264,6 @@ export function documentaryFirstVideoBatchWorthInspecting(candidates: Documentar
     if(requirement.years.length&&!requirement.years.some(year=>metadata.includes(year)))return false;
     return !requirement.detail?.trim()||documentaryDetailScore(candidate,requirement)>=3;
   });
-}
-
-/** Metadata can be a false negative in a crowded pool. An exact named short
- * source gets one real-frame chance when semantic ranking picked only long
- * compilations. This is never an approval or a license/quality bypass. */
-export function documentaryExactNamedShortVideoProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement,narration:string):DocumentaryCandidate|undefined{
-  const identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
-  if(!identity||requirement.years.length||documentaryRequiredVisiblePart(narration)||documentaryGeneralActionIssue({narration}))return;
-  const normalize=(value:string)=>` ${value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
-  const name=normalize(identity.name);
-  if(name.trim().split(' ').length<2)return;
-  return candidates.find(candidate=>candidate.kind==='video'&&candidate.rights!=='unknown'
-    &&(candidate.durationSeconds??0)>=8&&(candidate.durationSeconds??Infinity)<=90
-    &&candidate.videoDefinition!=='sd'&&normalize(candidate.title).includes(name)
-    &&!documentaryProjectionIssue(candidate));
 }
 
 export function documentaryDetailScore(candidate: DocumentaryCandidate, requirement: DocumentaryRequirement): number {
