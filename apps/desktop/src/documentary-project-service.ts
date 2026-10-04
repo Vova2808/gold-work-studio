@@ -278,7 +278,20 @@ export function documentaryExactNamedStillProbe(candidates:DocumentaryCandidate[
  * discovery; ranking, rights and actual-frame approval remain mandatory. */
 export function documentaryYouTubeQueries(requirement:DocumentaryRequirement,queries:string[],narration:string):string[] {
   const planned=queries.slice(0,2),identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
-  if(!identity||!planned.length||requirement.years.length||documentaryRequiredVisiblePart(narration)
+  if(!identity||!planned.length)return planned;
+  // The planner can put a related commentator or generic stock angle second,
+  // while a third query still names the actual required subject and year.
+  // Keep the same two YouTube requests, but spend the second on that subject.
+  const normalize=(value:string)=>` ${value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
+  const names=[identity.name,...identity.aliases].filter(name=>normalize(name).trim().length>=4);
+  const namesSubject=(query:string)=>names.some(name=>normalize(query).includes(normalize(name)));
+  const firstYears=[...new Set(planned[0]!.match(/\b(?:1[89]|20)\d{2}\b/g)??[])];
+  if(planned.length===2&&namesSubject(planned[0]!)&&!namesSubject(planned[1]!)){
+    const alternative=queries.slice(2).find(query=>namesSubject(query)
+      &&(!firstYears.length||firstYears.some(year=>query.includes(year))));
+    if(alternative){planned[1]=alternative;return planned;}
+  }
+  if(requirement.years.length||documentaryRequiredVisiblePart(narration)
     ||documentaryGeneralActionIssue({narration}))return planned;
   const qualified=identity.aliases.find(alias=>alias.toLowerCase().startsWith(identity.name.toLowerCase()+' (')&&/\([^)]{3,}\)/.test(alias));
   const name=(qualified??identity.name).trim();
@@ -499,7 +512,7 @@ export class DocumentaryProjectService {
   constructor(private readonly projects: Pick<ProjectService, "get" | "mutate"> & Partial<Pick<ProjectService, "list">>, private readonly storage: LocalProjectStorage,
     private readonly searcher: DocumentarySearch, private readonly materialRoot: string, private readonly stock: Pick<StockClient, "download"> & Partial<Pick<StockClient, "downloadToFile">>,
     private readonly publish: (progress: AutoStockProgress) => void = () => {},
-    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "inspectPreviewForScene" | "resolveIdentities" | "prepareSource" | "refineQueries">>,
+    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "inspectPreviewForScene" | "resolveIdentities" | "resolveVisualScopes" | "prepareSource" | "refineQueries">>,
     private readonly library?: EffectLibrary,
     private readonly youtube?: Pick<DocumentaryYouTube, "download"> & Partial<Pick<DocumentaryYouTube, "downloadAvailable"|"preview">>) {}
 
@@ -713,6 +726,26 @@ export class DocumentaryProjectService {
     const waitForNarration = this.narrationWaits.get(projectId);
     let project = waitForNarration ? (await this.projects.get(projectId,{omitCandidates:true}))! : await this.planSearch(projectId, options.sceneIds);
     if (!project || waitForNarration && project.scenes.some(scene => scene.includeInAssembly !== false && scene.documentary?.requirement.plannedBy !== "semantic")) throw new Error("Сначала подготовьте поисковой план");
+    const visualScopeScenes=project.scenes.filter(scene=>(!options.sceneIds||options.sceneIds.includes(scene.id))
+      &&scene.includeInAssembly!==false&&scene.documentary?.requirement.identityContextVersion===3
+      &&scene.documentary.requirement.identities?.length&&!scene.documentary.requirement.visualScope
+      &&!scene.documentary.verified&&!scene.documentary.pinned);
+    if(visualScopeScenes.length&&this.intelligence?.resolveVisualScopes){
+      const readyScript=project.videoBrief?.readyScript;
+      await this.intelligence.resolveVisualScopes(project,visualScopeScenes,async plan=>{
+        project=await this.projects.mutate(projectId,current=>{
+          if(current.videoBrief?.readyScript!==readyScript)throw new Error('Сценарий изменился во время определения вида кадра');
+          return {scenes:current.scenes.map(scene=>{
+            const requirement=plan.get(scene.id);
+            const original=visualScopeScenes.find(item=>item.id===scene.id);
+            return requirement&&original&&scene.narration===original.narration
+              &&JSON.stringify(scene.documentary?.requirement)===JSON.stringify(original.documentary?.requirement)
+              &&!scene.documentary?.verified&&!scene.documentary?.pinned
+              ?applyDocumentaryRequirement(scene,requirement):scene;
+          })};
+        },{candidateSceneIds:[]});
+      },{shouldStop:()=>this.stopRequested.has(projectId),progress:message=>this.publish({projectId,phase:'preparing',completed:0,total:visualScopeScenes.length,selected:0,skipped:0,failed:0,message})});
+    }
     const changeScene = (sceneId: string, change: (scene: Scene) => Scene) => this.changeScene(projectId, sceneId, change, Boolean(waitForNarration));
     project = await this.projects.mutate(projectId, current => ({ scenes: current.scenes.map(scene => {
       const issue = documentarySavedQualityIssue(current,scene)||documentarySavedIdentityIssue(scene)||documentarySavedContextIssue(current,scene);
@@ -810,7 +843,12 @@ export class DocumentaryProjectService {
         const remoteStages = (kind: "video" | "image") => [
           { kind, localOnly: false, quick: true }, { kind, localOnly: false, quick: false }
         ];
-        const videos = [{ kind: "video" as const, localOnly: true, quick: false }, ...remoteStages("video")];
+        // General illustrations can be filled by short stock first. A long
+        // already-downloaded documentary can require a costly new range index
+        // for this unrelated scene; keep it as a fallback after stock search.
+        const localVideo={kind:"video" as const,localOnly:true,quick:false};
+        const videos=documentaryGeneralIllustration(scene)
+          ?[...remoteStages('video'),localVideo]:[localVideo,...remoteStages('video')];
         const photos = remoteStages("image");
         const stages = videoOnly ? videos : photoFirst.has(scene.id)||documentaryPhotoFirstScenes(project).has(scene.id) ? [...photos, ...videos] : [...videos, ...photos];
         // Search rewrites change where we look, not what already-inspected
@@ -954,10 +992,9 @@ export class DocumentaryProjectService {
                 ||documentaryFirstVideoBatchWorthInspecting(first,requirement,scene.narration):undefined,
             deferredBatchReady:requiredImagePart&&this.intelligence!.rankCandidates
               ?batch=>documentaryFirstImageBatchWorthInspecting(batch,requiredImagePart)
-              // Concrete names and dates should not buy separate rankings for
-              // each weak result while the other source searches are in flight.
               :kind==='video'&&this.youtube&&this.intelligence!.rankCandidates
-                &&(Boolean(requirement.identities?.length)||Boolean(requirement.years.length))
+                &&requirement.identities?.length===1&&!requirement.years.length
+                &&!documentaryRequiredVisiblePart(scene.narration)
               ?batch=>Date.now()-searchStarted>=8000||documentaryFirstVideoBatchWorthInspecting(batch,requirement,scene.narration):undefined,
             supplement:async()=>{
               const shared=await relatedSources(scene,kind);

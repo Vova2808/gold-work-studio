@@ -13,7 +13,8 @@ function fingerprint(project:Project,scene:Scene):string {
   const doc=scene.documentary!,req=doc.requirement,source=doc.selected;
   return createHash('sha256').update(JSON.stringify({version:1,
     context:documentarySceneContext(project,scene),
-    requirement:{text:req.text,entities:req.entities,identities:req.identities,years:req.years,detail:req.detail},
+    requirement:{text:req.text,entities:req.entities,identities:req.identities,years:req.years,detail:req.detail,
+      ...(req.visualScope==='illustrative'?{visualScope:req.visualScope,visualScopeQuote:req.visualScopeQuote,illustrationQuery:req.illustrationQuery}: {})},
     source:{id:source?.id,provider:source?.provider,kind:source?.kind,...sourceEvidence(scene)},
     checksum:doc.checksum,diagramWhite:scene.imagePath?.endsWith('-diagram.png')===true,
     interval:source?.kind==='video'?[scene.trimStartSeconds??0,scene.trimEndSeconds??null]:null,

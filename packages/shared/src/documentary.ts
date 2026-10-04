@@ -56,6 +56,15 @@ export interface DocumentaryRequirement {
   identities?: Array<{ name: string; aliases: string[] }>;
   /** Version 2 resolves the named subject through the surrounding script, including its unnamed parts. */
   identityContextVersion?: 2 | 3;
+  /** A thematic stock illustration is allowed only after a grounded scope decision.
+   * The original story referent is retained separately for audit and re-planning. */
+  visualScope?: "exact" | "illustrative";
+  visualScopeQuote?: string;
+  illustrationQuery?: string;
+  narrativeEntities?: string[];
+  narrativeIdentities?: Array<{ name: string; aliases: string[] }>;
+  narrativeDetail?: string;
+  narrativeQueries?: string[];
   years: string[];
   queries: string[];
   /** One bounded search revision per semantic plan; resumes must not buy it again. */

@@ -100,6 +100,14 @@ test('one named motorcycle introduction searches the exact model before another 
   assert.deepEqual(documentaryYouTubeQueries({...requirement,years:['2002']},requirement.queries,requirement.text),requirement.queries);
   assert.deepEqual(documentaryYouTubeQueries({...requirement,text:'The crankshaft turns.'},requirement.queries,'The crankshaft turns.'),requirement.queries);
   assert.deepEqual(documentaryYouTubeQueries({...requirement,identities:[{name:'Faster',aliases:['Faster']}]},requirement.queries,requirement.text),requirement.queries);
+  const dated={...requirement,text:'The Yamaha braking problem could make riders crash.',
+    identities:[{name:'Yamaha YZR-M1',aliases:['YZR-M1']}],
+    queries:['Yamaha YZR-M1 2003 MotoGP racing footage','MotoGP journalist Matt Oxley interview','Yamaha YZR-M1 crash compilation 2003']};
+  assert.deepEqual(documentaryYouTubeQueries(dated,dated.queries,dated.text),
+    ['Yamaha YZR-M1 2003 MotoGP racing footage','Yamaha YZR-M1 crash compilation 2003']);
+  assert.deepEqual(documentaryYouTubeQueries({...dated,queries:[...dated.queries.slice(0,2),'Yamaha YZR-M1 2019']},
+    [...dated.queries.slice(0,2),'Yamaha YZR-M1 2019'],dated.text),[dated.queries[0],'Yamaha YZR-M1'],
+    'A later query from a contradictory year must not replace the current scene search');
 });
 
 test('a short exact-model result joins a weak first wave before paid ranking',async()=>{
