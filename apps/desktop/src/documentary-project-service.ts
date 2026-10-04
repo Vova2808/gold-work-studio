@@ -607,7 +607,7 @@ export class DocumentaryProjectService {
     this.downloadControllers.set(projectId, new AbortController());
     if (waitForNarration) this.narrationWaits.set(projectId, waitForNarration);
     const run = (async () => {
-      const attempts = new Map<string,{scope:string;keys:Set<string>}>();
+      const attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>();
       const session=new DocumentarySelectionSession();
       await this.repairFailedIdentities(projectId, options.sceneIds);
       let result = await this.selectAll(projectId, options, false, attempts,session);
@@ -621,8 +621,7 @@ export class DocumentaryProjectService {
         // With no candidates, wait for the unavailable source instead of
         // spending a paid refinement on an outage.
         && (!documentarySearchUnavailable(scene.documentary.searchError)
-          || scene.documentary.candidates.some(candidate => candidate.rights !== 'unknown')
-            && !documentarySearchUnavailable(scene.documentary.autoError))
+          || attempts.get(scene.id)?.found)
         && (session.canAttempt(scene.id,'video')||session.canAttempt(scene.id,'image'))
         && !/pending|partial|неопредел|оплачен|ожидает ответа/i.test(scene.documentary.autoError ?? '')).slice(0, 24);
       if (!failed.length) return result;
@@ -676,7 +675,7 @@ export class DocumentaryProjectService {
     return changed;
   }
 
-  private async selectAll(projectId: string, options: AutoStockSelectionOptions, videoOnly = false, attempts = new Map<string,{scope:string;keys:Set<string>}>(),session=new DocumentarySelectionSession()): Promise<AutoStockSelectionResult> {
+  private async selectAll(projectId: string, options: AutoStockSelectionOptions, videoOnly = false, attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>(),session=new DocumentarySelectionSession()): Promise<AutoStockSelectionResult> {
     this.publish({ projectId, phase: "preparing", completed: 0, total: 0, selected: 0, skipped: 0, failed: 0, message: "Подготавливаю поиск и проверку материалов…" });
     const waitForNarration = this.narrationWaits.get(projectId);
     let project = waitForNarration ? (await this.projects.get(projectId,{omitCandidates:true}))! : await this.planSearch(projectId, options.sceneIds);
@@ -807,7 +806,8 @@ export class DocumentaryProjectService {
         };
         const previousAttempts=attempts.get(scene.id);
         const tried=previousAttempts?.scope===scope?previousAttempts.keys:new Set<string>();
-        attempts.set(scene.id,{scope,keys:tried});
+        const attemptState={scope,keys:tried,found:previousAttempts?.scope===scope&&previousAttempts.found||false};
+        attempts.set(scene.id,attemptState);
         // The early stock attempt shares the existing remote review budget.
         // It must not add another set of paid checks before the broad fallback.
         const inspectionCounts = new Map<string, number>();
@@ -925,9 +925,17 @@ export class DocumentaryProjectService {
             && (candidate.kind !== "image" || !documentaryReuseIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined } }))
             && !documentaryVarietyIssue(latestProject, { ...scene, documentary: { ...scene.documentary!, selected: candidate, checksum: undefined, visualHash: undefined, visualReview: undefined } })), searchSubjects, used, requirement.years, Boolean(this.intelligence!.rankCandidates),
             kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)?sourceQueries:requirement.queries, requirement);
+          if(candidates.length)attemptState.found=true;
           const earlyCandidates = quick ? documentaryMetadataShortlist(scene, candidates).slice(0, 1) : [];
           if (quick && !earlyCandidates.length) continue;
-          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, candidates, searchError: sourceErrors.join("\n") || undefined } }));
+          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
+            // A refined query may return only sources already tried in this
+            // pass. Keep the previous shortlist available for manual review
+            // when the narrative target has not changed.
+            candidates:candidates.length?candidates:attemptState.found&&current.narration===scene.narration
+              &&JSON.stringify(current.documentary?.requirement)===JSON.stringify(requirement)
+              ?current.documentary?.candidates??[]:[],
+            searchError: sourceErrors.join("\n") || undefined } }));
           let localOrder = localOnly ? [...candidates].sort((a, b) => documentaryDetailScore(b, requirement) - documentaryDetailScore(a, requirement)) : candidates;
           if (localOnly && this.intelligence!.rankLocalCandidates) {
             const ranked = await this.intelligence!.rankLocalCandidates(latestProject, scene, localOrder);
@@ -1127,7 +1135,8 @@ export class DocumentaryProjectService {
           // so gaps remain explainable after navigation or an app restart.
           await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
             searchError: sourceErrors.join("\n") || undefined,
-            autoError: !foundThisRun && sourceErrors.length ? message : current.documentary?.autoError || message } }));
+            autoError: !foundThisRun && sourceErrors.length && !attemptState.found
+              ?message:current.documentary?.autoError||message } }));
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
