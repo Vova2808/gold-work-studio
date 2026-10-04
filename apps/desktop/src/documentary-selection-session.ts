@@ -1,10 +1,11 @@
-import type {DocumentaryRequirement,DocumentarySearchResult} from '@gold-work/shared';
+import type {DocumentaryCandidate,DocumentaryRequirement,DocumentarySearchResult} from '@gold-work/shared';
 import {documentaryCandidateKey} from './documentary-reuse.js';
 
 /** Only discovery is shared. Identity, quality, trim and reuse are checked per scene. */
 export class DocumentarySelectionSession {
   private searches=new Map<string,Promise<DocumentarySearchResult>>();
   private completedSearches=new Map<string,DocumentarySearchResult>();
+  private completedVideos=new Map<string,DocumentaryCandidate[]>();
   private budgets=new Map<string,{started:number;attempts:number;searchMs:number}>();
   constructor(private readonly now=Date.now) {}
   group(requirement:DocumentaryRequirement,kind:'image'|'video') {
@@ -30,12 +31,36 @@ export class DocumentarySelectionSession {
     // Callers must not mutate another scene's provenance/concerns/approval.
     return job.then(result=>structuredClone(result));
   }
+  /** A completed scene search may already contain a short exact source for a
+   * later scene about the same named subject. No search is started here. */
+  rememberVideos(requirement:DocumentaryRequirement,candidates:DocumentaryCandidate[]) {
+    if(!requirement.identities?.length)return;
+    const group=this.group(requirement,'video');
+    if(!group)return;
+    const previous=this.completedVideos.get(group.key)??[];
+    const seen=new Set(previous.map(documentaryCandidateKey));
+    const next=[...previous];
+    for(const candidate of candidates){
+      if(next.length>=24)break;
+      if(candidate.kind!=='video'||candidate.provider!=='youtube'||candidate.rights==='unknown')continue;
+      const key=documentaryCandidateKey(candidate);
+      if(seen.has(key))continue;
+      seen.add(key);next.push(structuredClone(candidate));
+    }
+    if(next.length)this.completedVideos.set(group.key,next);
+  }
   /** Reuse a completed shared search before spending another provider query.
    * An in-flight search never delays the current scene. */
   completedRelated(requirement:DocumentaryRequirement,kind:'image'|'video'):DocumentarySearchResult|undefined {
     const group=this.group(requirement,kind);
     const result=group&&this.completedSearches.get(group.key);
-    return result?structuredClone(result):undefined;
+    const videos=kind==='video'&&group?this.completedVideos.get(group.key):undefined;
+    if(!result&&!videos?.length)return undefined;
+    const seen=new Set<string>();
+    const candidates=[...(videos??[]),...(result?.candidates??[])].filter(candidate=>{
+      const key=documentaryCandidateKey(candidate);if(seen.has(key))return false;seen.add(key);return true;
+    }).slice(0,64);
+    return structuredClone({candidates,sources:result?.sources??[]});
   }
   budget(sceneId:string,kind:'image'|'video') {
     const key=`${sceneId}:${kind}`;

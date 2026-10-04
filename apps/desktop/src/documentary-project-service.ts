@@ -837,6 +837,7 @@ export class DocumentaryProjectService {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
             const result = await measureDocumentaryStage("search", { projectId, sceneId: scene.id, providers }, () => this.searcher.search({ query, kind, providers, entities: searchSubjects, years: requirement.years },true));
+            if(kind==='video'&&providers.includes('youtube'))session.rememberVideos(requirement,result.candidates);
             for (const source of result.sources.filter(source => source.error)) {
               const message = `${source.provider}: ${source.error}`;
               if (!sourceErrors.includes(message)) sourceErrors.push(message);

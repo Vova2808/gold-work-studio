@@ -26,6 +26,24 @@ test('related scenes share discovery, but not mutable evidence or a different er
   assert.equal(calls,2,'Reading completed discovery cannot start another provider query');
 });
 
+test('a completed licensed video search is available to later matching scenes without another provider call',()=>{
+  const session=new DocumentarySelectionSession();
+  const requirement={text:'Yamaha M1',entities:['Yamaha YZR-M1'],queries:['Yamaha M1 engine closeup'],years:['2003'],
+    identities:[{name:'Yamaha YZR-M1',aliases:['M1']}]} as DocumentaryRequirement;
+  const exact:DocumentaryCandidate={id:'youtube:video-one',provider:'youtube',kind:'video',rights:'licensed',title:'Yamaha YZR-M1 2003',
+    description:'Race footage',pageUrl:'https://example.test/one',downloadUrl:'https://example.test/one',author:'Source',
+    license:'CC BY',licenseUrl:'https://example.test/license',attribution:'Source',query:'Yamaha 2003',retrievedAt:'2026-10-04T00:00:00Z',
+    match:'unverified',concerns:[]};
+  const unrelated={...exact,id:'youtube:video-two',title:'Other motorcycle',pageUrl:'https://example.test/two',downloadUrl:'https://example.test/two'};
+  session.rememberVideos(requirement,[exact,{...exact},unrelated,{...exact,id:'photo',kind:'image'}]);
+  const reused=session.completedRelated({...requirement,queries:['Yamaha M1 on track']},'video');
+  assert.deepEqual(reused?.candidates.map(item=>item.id),['youtube:video-one','youtube:video-two']);
+  reused!.candidates[0]!.concerns.push('scene-specific rejection');
+  assert.deepEqual(session.completedRelated(requirement,'video')?.candidates[0]?.concerns,[]);
+  assert.equal(session.completedRelated({...requirement,years:['2004']},'video'),undefined);
+  assert.equal(session.completedRelated({...requirement,identities:[{name:'Honda RC211V',aliases:[]}]},'video'),undefined);
+});
+
 test('an unfinished shared search never blocks a scene waiting for its own source',async()=>{
   const session=new DocumentarySelectionSession();
   const requirement={text:'Yamaha engine',entities:['Yamaha'],queries:['Yamaha engine'],years:[],identities:[{name:'Yamaha',aliases:[]}]} as DocumentaryRequirement;
