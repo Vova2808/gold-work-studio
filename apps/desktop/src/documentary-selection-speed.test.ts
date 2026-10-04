@@ -44,6 +44,14 @@ test('a completed licensed video search is available to later matching scenes wi
   assert.equal(session.completedRelated({...requirement,identities:[{name:'Honda RC211V',aliases:[]}]},'video'),undefined);
 });
 
+test('a failed YouTube format is skipped by later scenes only under the same selector',()=>{
+  const session=new DocumentarySelectionSession();
+  session.rememberUnavailableFormat('full-frame-mp4','youtube:bad-format');
+  assert.equal(session.isUnavailableFormat('full-frame-mp4','youtube:bad-format'),true);
+  assert.equal(session.isUnavailableFormat('small-card-mp4','youtube:bad-format'),false);
+  assert.equal(session.isUnavailableFormat('full-frame-mp4','youtube:other-video'),false);
+});
+
 test('an unfinished shared search never blocks a scene waiting for its own source',async()=>{
   const session=new DocumentarySelectionSession();
   const requirement={text:'Yamaha engine',entities:['Yamaha'],queries:['Yamaha engine'],years:[],identities:[{name:'Yamaha',aliases:[]}]} as DocumentaryRequirement;

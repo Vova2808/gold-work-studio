@@ -6,6 +6,7 @@ export class DocumentarySelectionSession {
   private searches=new Map<string,Promise<DocumentarySearchResult>>();
   private completedSearches=new Map<string,DocumentarySearchResult>();
   private completedVideos=new Map<string,DocumentaryCandidate[]>();
+  private unavailableFormats=new Map<string,Set<string>>();
   private budgets=new Map<string,{started:number;attempts:number;searchMs:number}>();
   constructor(private readonly now=Date.now) {}
   group(requirement:DocumentaryRequirement,kind:'image'|'video') {
@@ -61,6 +62,14 @@ export class DocumentarySelectionSession {
       const key=documentaryCandidateKey(candidate);if(seen.has(key))return false;seen.add(key);return true;
     }).slice(0,64);
     return structuredClone({candidates,sources:result?.sources??[]});
+  }
+  rememberUnavailableFormat(selectorScope:string,candidateKey:string) {
+    let keys=this.unavailableFormats.get(selectorScope);
+    if(!keys){keys=new Set();this.unavailableFormats.set(selectorScope,keys);}
+    keys.add(candidateKey);
+  }
+  isUnavailableFormat(selectorScope:string,candidateKey:string) {
+    return this.unavailableFormats.get(selectorScope)?.has(candidateKey)??false;
   }
   budget(sceneId:string,kind:'image'|'video') {
     const key=`${sceneId}:${kind}`;

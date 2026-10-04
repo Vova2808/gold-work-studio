@@ -789,7 +789,8 @@ export class DocumentaryProjectService {
         const formatPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'unavailable-formats.json');
         const unavailableFormats=await readDocumentaryRejections(formatPath,formatScope);
         const formatUnavailable=(candidate:DocumentaryCandidate)=>candidate.provider==='youtube'&&!candidate.localPath
-          &&unavailableFormats.has(rejectedCandidateFingerprint(candidate));
+          &&(unavailableFormats.has(rejectedCandidateFingerprint(candidate))
+            ||session.isUnavailableFormat(formatScope,rejectedCandidateFingerprint(candidate)));
         // A paid inspection with an unknown outcome is not a visual rejection:
         // keep the source for manual review, but never download it again merely
         // to rediscover the same pending/partial completion on auto resume.
@@ -1019,7 +1020,9 @@ export class DocumentaryProjectService {
                 if(error instanceof DocumentaryAnalysisError&&error.kind==='pending')await rememberUncertain(candidate);
                 const message = error instanceof Error ? error.message : String(error);
                 if(candidate.provider==='youtube'&&!candidate.localPath&&/Requested format is not available/i.test(message)){
-                  unavailableFormats.add(rejectedCandidateFingerprint(candidate));
+                  const key=rejectedCandidateFingerprint(candidate);
+                  unavailableFormats.add(key);
+                  session.rememberUnavailableFormat(formatScope,key);
                   await saveDocumentaryRejections(formatPath,formatScope,unavailableFormats).catch(()=>{
                     recordDiagnosticEvent('warn','documentary.search.format-cache-write-failed',{projectId,sceneId:scene.id});
                   });
