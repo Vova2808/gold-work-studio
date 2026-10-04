@@ -202,7 +202,7 @@ export class DocumentaryIntelligence {
   private analysisPauseRemainingMs = 0;
   private analysisPauseRevision = 0;
   private analysisWaiters = new Set<()=>void>();
-  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;generalIllustration?:boolean;callToActionTheme?:string[];sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean }>();
+  private inspection = new AsyncLocalStorage<{ submissions: number; shouldStop: () => boolean; progress?: (message:string)=>void; comparisonSubjects: string[]; identities: DocumentaryRequirement["identities"]; graphic?:DocumentaryScene['motionGraphic'];narrativeContext?:DocumentarySceneContext;generalIllustration?:boolean;callToActionTheme?:string[];sourceEra?:Record<string,unknown>;legacyImageSamples?:string[];cacheOnly?:boolean;contextRecheck?:boolean }>();
   constructor(private readonly client: Completion, private readonly rootFor: (id: string) => string, private readonly beforePaidRequest: () => Promise<void> = async () => {}, private readonly sharedVideoCatalogRoot?: string,
     private readonly retryWait:(ms:number)=>Promise<void>=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {}
   async available() { return this.client.configured(); }
@@ -1153,9 +1153,9 @@ export class DocumentaryIntelligence {
     return grounded.map(id => shortKeys.find(item => item.shortKey === id)!.candidate);
   }
 
-  async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
+  async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false, contextRecheck=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
     const source=scene.documentary?.selected;
-    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),callToActionTheme:documentaryCallToActionIllustration(scene)?scene.documentary!.requirement.queries.slice(0,2):undefined,sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
+    return this.inspection.run({ submissions: 0, shouldStop, progress, cacheOnly, contextRecheck, comparisonSubjects: documentaryComparisonSubjects(scene.documentary!.requirement), identities: scene.documentary!.requirement.identities,graphic:scene.documentary?.motionGraphic,narrativeContext:documentarySceneContext(project,scene),generalIllustration:documentaryGeneralIllustration(scene),callToActionTheme:documentaryCallToActionIllustration(scene)?scene.documentary!.requirement.queries.slice(0,2):undefined,sourceEra:{title:source?.title,description:source?.description,date:source?.capturedAt} }, async () => {
       let review=await this.inspect(project,scene,progress);
       // An older or inconsistent completed review can say "accepted" without
       // current narrative evidence. Reusing its paid checkpoint is allowed;
@@ -1386,7 +1386,22 @@ export class DocumentaryIntelligence {
           checkedAt:new Date().toISOString(),sampleSeconds:[],quality:`${width}×${height}`};
       }
     }
-    let value = await this.complete(project.id, "visual-overview", footageSystem + narrationContextInstruction, JSON.stringify({ ...overviewInput, narrationContext }), overviewImages, earlierRequests, legacySampling ? 1 : 2);
+    const overviewSystem=footageSystem+narrationContextInstruction;
+    const recheck=selected.kind==='image'&&this.inspection.getStore()?.contextRecheck;
+    // Reinspect the already downloaded original when an old completed verdict
+    // lacks current scene evidence. Keep the former exact request in the paid
+    // guard; pending/partial responses can never be hidden by this new prompt.
+    const contextSystem=recheck?overviewSystem+' This is a NEW scene-context review of an already saved original image. Return narrativeEvidence for the CURRENT supplied narrationContext: quote the exact relevant original words, identify the visible subject and any required detail, and cite only visible or source-supported era evidence. An old accepted verdict without this evidence is not approval. If subject, era or detail remains unclear, return uncertain.':overviewSystem;
+    const valueInput=JSON.stringify({ ...overviewInput, narrationContext });
+    if(recheck){
+      // Reconstruct the entire former request, including all policy rewrites,
+      // before changing its system text. An unresolved paid result stops here.
+      try { await this.inspection.run({...this.inspection.getStore()!,cacheOnly:true,contextRecheck:false},()=>
+        this.complete(project.id,'visual-overview',overviewSystem,valueInput,overviewImages,earlierRequests,legacySampling?1:2)); }
+      catch(error){if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error;}
+    }
+    let value = await this.complete(project.id, "visual-overview", contextSystem, valueInput, overviewImages,
+      recheck?[{system:overviewSystem,input:valueInput},...earlierRequests]:earlierRequests, legacySampling ? 1 : 2);
     let start = Math.max(0, Math.min(duration - 1, Number(value.startSeconds) || 0));
     let end = Math.min(duration, start + Math.max(1, desiredSeconds), Math.max(start + 1, Number(value.endSeconds) || start + desiredSeconds));
     const overviewAction = value.actionMatch === true;

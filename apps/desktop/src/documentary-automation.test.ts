@@ -909,23 +909,23 @@ test("cached rejected sources do not consume the allowance for new visual checks
 test("photo verification passes explicit media kind without a fake clip duration", async () => {
   const { root, project } = await setup();
   const photo = join(root, "photo.png");
-  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=640x360", "-frames:v", "1", photo]);
+  await effectFfmpeg(["-y", "-f", "lavfi", "-i", "color=c=red:s=1920x1080", "-frames:v", "1", photo]);
   const scene = project.scenes[0]!;
   scene.imagePath = photo;
-  scene.documentary = { ...scene.documentary!, checksum: "photo-fixture", requirement: { ...scene.documentary!.requirement, preferredKind: "video" }, selected: { kind: "image", title: "Fixture", description: "Synthetic test", width: 640, height: 360, durationSeconds: .04 } as never };
+  scene.documentary = { ...scene.documentary!, checksum: "photo-fixture", requirement: { ...scene.documentary!.requirement, preferredKind: "video" }, selected: { kind: "image", title: "Fixture", description: "Synthetic test", width: 1920, height: 1080, durationSeconds: .04 } as never };
   let requests = 0;
-  let legacyKey = "";
   const intelligence = new DocumentaryIntelligence({ configured: async () => true, documentaryCompletion: async (system, input, images) => {
     requests++; const data = JSON.parse(input);
     assert.equal(data.mediaKind, "image"); assert.equal(data.duration, null);
     assert.equal(data.requirement, undefined, "Generated search suggestions must not become extra acceptance restrictions"); assert.equal(images!.length, 1);
     assert.equal(data.narration, scene.narration); assert.deepEqual(data.entities, scene.documentary!.requirement.entities);
     assert.equal(data.narrationContext, documentaryNarrationContext(project, scene));
-    const { narrationContext: _context, ...legacyInput } = data;
-    const legacySystem = system.split(" The narration field is an exact short editing slice,")[0]!;
-    legacyKey = createHash("sha256").update(JSON.stringify([2, "visual-overview", legacySystem, JSON.stringify(legacyInput), images])).digest("hex");
     assert.match(system, /photograph is an allowed fallback/);
-    return JSON.stringify({ status: "accepted", confidence: .99, reason: "Fixture only", quality: "fixture" });
+    return JSON.stringify({ status: "accepted", confidence: .99, reason: "Fixture only", quality: "fixture",
+      ...(system.includes('NEW scene-context review') ? { technicalQuality: {
+        detail: 'clear', compression: 'clean', pixelated: false, evidence: 'Edges are clear without compression blocks.' }, narrativeEvidence: {
+        subjectMatch: true, eraMatch: true, detailMatch: true, requiredEra: 'none', observedEra: '',
+        evidence: 'The original photo shows the subject of this scene.' } } : {}) });
   } }, () => root);
   const inspection = await intelligence.inspectForSelection(project, scene);
   const { review } = inspection;
@@ -933,15 +933,30 @@ test("photo verification passes explicit media kind without a fake clip duration
   const cached = await intelligence.inspectForSelection(project, scene);
   assert.equal(cached.usedNewAnalysis, false);
   assert.deepEqual({ ...cached.review, checkedAt: undefined }, { ...review, checkedAt: undefined });
-  assert.equal(review.status, "accepted"); assert.equal(requests, 1);
+  assert.equal(review.status, "uncertain", 'An old answer without scene evidence is not auto-approved'); assert.equal(requests, 1);
   assert.equal(review.trimEndSeconds, undefined);
+  assert.equal(review.contextApproval, undefined, 'Old completed verdict alone cannot approve current context');
+  const rechecked = await intelligence.inspectForSelection(project, scene, undefined, undefined, false, true);
+  assert.equal(requests, 2, 'One new request inspects the saved original with current context');
+  assert.equal(rechecked.review.status, 'accepted', JSON.stringify(rechecked.review));
+  assert.equal(rechecked.review.contextApproval?.version, 1);
+  const replayedRecheck = await intelligence.inspectForSelection(project, scene, undefined, undefined, false, true);
+  assert.equal(replayedRecheck.usedNewAnalysis, false);
+  assert.equal(requests, 2, 'Completed context recheck is reused without paying twice');
   const legacyRoot = join(root, "legacy"); await mkdir(join(legacyRoot, "Documentary", "Analysis"), { recursive: true });
-  const checkpoint = join(legacyRoot, "Documentary", "Analysis", `${legacyKey}.json`);
+  const analysisRoot=join(root, 'Documentary', 'Analysis');
+  const oldCheckpoint=(await Promise.all((await readdir(analysisRoot)).filter(name=>name.endsWith('.json')).map(async name=>({
+    name, data:JSON.parse(await readFile(join(analysisRoot,name),'utf8')) as {purpose?:string;result?:{narrativeEvidence?:unknown}}
+  })))).find(entry=>entry.data.purpose==='visual-overview'&&entry.data.result&&!entry.data.result.narrativeEvidence)?.name;
+  assert.ok(oldCheckpoint, 'Find the exact completed old request that lacked current context evidence');
+  const checkpoint = join(legacyRoot, "Documentary", "Analysis", oldCheckpoint);
   await writeFile(checkpoint, JSON.stringify({ state: "pending", purpose: "visual-overview" }));
   let repeated = 0;
   const guarded = new DocumentaryIntelligence({ configured: async () => true, documentaryCompletion: async () => { repeated++; throw new Error("Must not be submitted"); } }, () => legacyRoot);
-  await assert.rejects(guarded.inspect(project, scene), /неизвестный результат/);
+  await assert.rejects(guarded.inspect(project, scene), /Автоповтор отключён|неизвестный результат/);
   assert.equal(repeated, 0, "Adding context does not bypass a previous uncertain paid inspection");
+  await assert.rejects(guarded.inspectForSelection(project, scene, undefined, undefined, false, true), /Автоповтор отключён|неизвестный результат/);
+  assert.equal(repeated, 0, 'A new context recheck cannot bypass the pending old image request');
   await writeFile(checkpoint, '{"state":');
   await assert.rejects(guarded.inspect(project, scene), /повреждена/);
   assert.equal(repeated, 0, "A damaged checkpoint cannot silently order the analysis again");

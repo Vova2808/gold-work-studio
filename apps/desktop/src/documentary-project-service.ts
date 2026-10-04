@@ -23,7 +23,7 @@ import { measureDocumentaryStage } from "./documentary-metrics.js";
 import {recordDiagnosticEvent} from './diagnostics.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import { documentaryVisualHash, visualHashDistance } from "./documentary-visual-hash.js";
-import type { DocumentaryIntelligence } from "./documentary-intelligence.js";
+import { DocumentaryCachedAnalysisMissing, type DocumentaryIntelligence } from "./documentary-intelligence.js";
 import {documentaryNarrationContext,documentaryMetadataShortlist} from './documentary-intelligence.js';
 import type { EffectLibrary } from "./effect-library.js";
 import { planDocumentaryEffects } from "./documentary-effects.js";
@@ -758,7 +758,16 @@ export class DocumentaryProjectService {
         try{
           this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,
             message:`Кадр ${scene.order+1}: проверяю сохранённый анализ без нового платного запроса…`});
-          const {review}=await this.intelligence.inspectForSelection(project,scene,undefined,()=>Boolean(fatal)||this.stopRequested.has(projectId),true);
+          let review:Awaited<ReturnType<DocumentaryIntelligence['inspectForSelection']>>['review']|undefined;
+          try { review=(await this.intelligence.inspectForSelection(project,scene,undefined,()=>Boolean(fatal)||this.stopRequested.has(projectId),true)).review; }
+          catch(error){ if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error; }
+          if(scene.documentary.selected.kind==='image'&&scene.imagePath&&!scene.documentary.visualReview.contextApproval
+            &&(!review||review.status==='uncertain')&&!this.stopRequested.has(projectId)){
+            this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,
+              message:`Кадр ${scene.order+1}: проверяю сохранённый оригинал по текущему тексту…`});
+            review=(await this.intelligence.inspectForSelection(project,scene,undefined,()=>Boolean(fatal)||this.stopRequested.has(projectId),false,true)).review;
+          }
+          if(!review)throw new DocumentaryCachedAnalysisMissing('Готовой проверки сохранённого оригинала нет');
           const restored={...scene,trimStartSeconds:review.trimStartSeconds??0,trimEndSeconds:review.trimEndSeconds,
             documentary:{...scene.documentary,verified:review.status==='accepted',visualReview:review}};
           if(restored.documentary.verified&&review.contextApproval&&!documentarySavedContextIssue(project,restored)
