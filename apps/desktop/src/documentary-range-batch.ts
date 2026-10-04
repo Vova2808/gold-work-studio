@@ -1,6 +1,6 @@
 import type { DocumentaryRequirement } from "@gold-work/shared";
 import { documentaryRangeEditorialPolicy, documentarySubjectPolicy } from "./documentary-visual-relevance.js";
-import { DocumentaryBlackFrameError, readVideoFrames } from "./documentary-video-catalog.js";
+import { DocumentaryBlackFrameError, documentaryFrozenVideoRange, readVideoFrames } from "./documentary-video-catalog.js";
 
 type Region = { id: number; startSeconds: number; endSeconds: number };
 type Complete = (purpose: string, system: string, input: string, images: string[]) => Promise<Record<string, unknown>>;
@@ -16,6 +16,11 @@ export async function inspectDocumentaryRangeBatch(input: {
   const reviews = new Map<string, Record<string, unknown>>();
   for (const region of input.regions.slice(0,3)) {
     const key = documentaryRangeKey(region.startSeconds, region.endSeconds);
+    if(await documentaryFrozenVideoRange(input.file,region.startSeconds,region.endSeconds)){
+      reviews.set(key,{status:'rejected',confidence:1,isCameraFootage:false,mediaType:'still',
+        reason:'Этот участок почти неподвижен: фотография внутри видео не засчитывается как движущийся футаж.'});
+      continue;
+    }
     const times = [.03,.25,.5,.75,.97].map(fraction => region.startSeconds + (region.endSeconds-region.startSeconds)*fraction);
     try { images.push(...await readVideoFrames(input.file,input.root,times,true)); }
     catch (error) {

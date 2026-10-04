@@ -62,6 +62,25 @@ export function availableVideoSegments(catalog: VideoCatalog, desired: number, u
 
 export class DocumentaryBlackFrameError extends Error {}
 
+/** A video container can hold a still image for the entire proposed shot.
+ * Check the actual decoded interval before paying to review it as moving
+ * footage. Brief pauses are allowed; only a freeze covering most of the shot
+ * is rejected. */
+export async function documentaryFrozenVideoRange(file:string,start:number,end:number):Promise<boolean>{
+  const duration=end-start;
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||duration<1.5)return false;
+  const log=await withDocumentaryFrameSlot(()=>effectFfmpeg(['-loglevel','info','-ss',String(start),'-i',file,'-t',String(duration),
+    '-an','-vf','scale=160:90,format=gray,freezedetect=n=-40dB:d=0.75','-f','null','-'],undefined,false,12000));
+  let freezeStart:number|undefined,longest=0;
+  for(const match of log.matchAll(/lavfi\.freezedetect\.freeze_(start|end):\s*([\d.]+)/g)){
+    const at=Number(match[2]);if(!Number.isFinite(at))continue;
+    if(match[1]==='start')freezeStart=at;
+    else if(freezeStart!==undefined){longest=Math.max(longest,at-freezeStart);freezeStart=undefined;}
+  }
+  if(freezeStart!==undefined)longest=Math.max(longest,duration-freezeStart);
+  return longest>=duration*.8;
+}
+
 export async function readVideoFrames(file: string, root: string, times: number[], rejectBlack = false): Promise<string[]> {
   await mkdir(root, { recursive: true });
   const images: string[] = new Array(times.length);

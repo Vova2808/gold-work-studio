@@ -33,7 +33,7 @@ import { effectFfmpeg } from "./effect-media.js";
 import { documentaryComparisonSubjects } from "./documentary-comparison.js";
 import type { NarrationTiming } from "./narration-timing.js";
 import { documentaryCandidateKey, documentarySampleTimes, documentaryVarietyIssue, usedDocumentaryRanges, unavailableDocumentaryRanges, sameDocumentarySource } from "./documentary-reuse.js";
-import { availableVideoSegments, buildVideoCatalog, excludeVideoCatalogRange, readVideoFrames, DocumentaryBlackFrameError, type VideoCatalog } from "./documentary-video-catalog.js";
+import { availableVideoSegments, buildVideoCatalog, documentaryFrozenVideoRange, excludeVideoCatalogRange, readVideoFrames, DocumentaryBlackFrameError, type VideoCatalog } from "./documentary-video-catalog.js";
 import { directCatalogChoices, representativeCatalogChoices, documentaryDistraction, documentaryCatalogIdentityConflict, documentarySubjectPolicy, documentaryRangeEditorialPolicy, documentaryRangeEditorialIssue, documentaryIdentityReviewIssue, documentaryIdentityMatches, documentaryGeneralActionIssue, documentaryActionReviewIssue, documentaryProjectionIssue, documentaryListsNamedSubjects } from "./documentary-visual-relevance.js";
 
 type Completion = Pick<AnyModelClient, "documentaryCompletion" | "configured"> & Partial<Pick<AnyModelClient,"probeDocumentaryConnection"|"documentaryAnalysisModel">>;
@@ -1398,6 +1398,11 @@ export class DocumentaryIntelligence {
         if (!Number.isInteger(id) || tried.has(key) || !segment || !Number.isFinite(start) || start < segment.start - .01 || end > segment.end + .01) return;
         tried.add(key);
         checkedRanges.add(documentaryRangeKey(start,end));
+        if(await documentaryFrozenVideoRange(scene.videoPath!,start,end)){
+          const reason='Этот участок почти неподвижен: фотография внутри видео не засчитывается как движущийся футаж.';
+          await excludeVideoCatalogRange(root,{start,end,reason});
+          return rejected(reason);
+        }
         const times = [0.03, .25, .5, .75, .97].map(fraction => start + desired * fraction);
         const neighbors = catalog.segments.filter(other => Math.abs(other.id - segment.id) <= 1);
         progress(`Проверяю видеофрагмент ${start.toFixed(1)}–${end.toFixed(1)} с: объект, качество и движение…`);
@@ -1415,7 +1420,7 @@ const review = await complete("catalog-range-check", `Inspect the five ACTUAL fr
         // A completed CGI/promo verdict concerns the source pixels, not this
         // narration. Do not offer that same interval to every subsequent scene.
         // Keep uninspected time and scene-specific relevance failures eligible.
-        if (review.mediaType === "render" || review.presentation === "promo") {
+        if (review.mediaType === "render" || review.mediaType === "still" || review.presentation === "promo") {
           catalog.excludedRanges ??= [];
           if (!catalog.excludedRanges.some(range => range.start === start && range.end === end)) {
             catalog.excludedRanges.push({ start, end, reason: editorialIssue! });
