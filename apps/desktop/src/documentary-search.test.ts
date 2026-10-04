@@ -88,6 +88,7 @@ test("documentary downloads still bound connection startup, total time and actua
   for (let minute = 1; minute < 15; minute++) assert.equal(growing.observe(minute * 1024 * 1024, minute * 60_000), undefined);
   assert.match(growing.observe(15 * 1024 * 1024, 900_000)!, /15 минут/);
   assert.match(new DocumentaryDownloadWatchdog(0).observe(750 * 1024 * 1024 + 1, 1000)!, /750 МБ/);
+  assert.match(new DocumentaryDownloadWatchdog(0,160*1024*1024).observe(160*1024*1024+1,1000)!,/160 МБ/);
 });
 
 test("YouTube discovery verifies public CC licenses and never turns upload dates into capture dates", async () => {

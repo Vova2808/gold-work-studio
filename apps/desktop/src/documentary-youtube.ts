@@ -11,8 +11,9 @@ import ffmpegPath from 'ffmpeg-static';
 import {documentaryPreviewRanges,readDocumentaryPreview,saveDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 
 type Video = { id?: string; snippet?: { title?: string; description?: string; channelTitle?: string; liveBroadcastContent?: string; thumbnails?: Record<string, { url?: string }> }; status?: { license?: string; privacyStatus?: string; uploadStatus?: string }; contentDetails?: { duration?: string; definition?: "hd" | "sd" } };
-type Runner = (args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string) => Promise<void>;
+type Runner = (args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string, maxBytes?:number) => Promise<void>;
 const maximumBytes = 750 * 1024 * 1024;
+const maximumSectionBytes = 160 * 1024 * 1024;
 const maximumDownloadMs = 15 * 60_000;
 
 export class DocumentaryYouTubeDefinitionError extends Error {}
@@ -50,9 +51,9 @@ export async function documentaryDownloadBytes(destination: string, partialDirec
 export class DocumentaryDownloadWatchdog {
   private bytes = 0;
   private lastProgress: number;
-  constructor(private readonly startedAt = Date.now()) { this.lastProgress = startedAt; }
+  constructor(private readonly startedAt = Date.now(),private readonly maxBytes=maximumBytes) { this.lastProgress = startedAt; }
   observe(bytes: number, now = Date.now()): string | undefined {
-    if (bytes > maximumBytes) return "Видео превышает 750 МБ";
+    if (bytes > this.maxBytes) return `Видео превышает ${Math.round(this.maxBytes/1024/1024)} МБ`;
     if (now - this.startedAt >= maximumDownloadMs) return "Загрузка YouTube превысила 15 минут; проверьте соединение";
     if (bytes > this.bytes) { this.bytes = bytes; this.lastProgress = now; }
     if (!this.bytes && now - this.startedAt >= 180_000) return "YouTube не начал передачу видео за 3 минуты; проверьте соединение или вход";
@@ -117,7 +118,9 @@ export class DocumentaryYouTube {
     requireHighDefinition(videos, id, requireHd);
     if(range&&(!Number.isFinite(range.start)||!Number.isFinite(range.end)||range.start<0||range.end<=range.start
       ||range.end>(candidate.durationSeconds??0)+.1))throw Error('Некорректный диапазон YouTube-видео');
-    await ensureDocumentarySpace(dirname(destination), maximumBytes);
+    // A checked 10–18 second section cannot justify reserving space for the
+    // entire 750 MB original; retain the global 512 MB safety reserve.
+    await ensureDocumentarySpace(dirname(destination), range ? maximumSectionBytes : maximumBytes);
     const cookies = await this.store.resolveValidatedCookies();
     const proxyUrl = await this.store.proxyUrl?.();
     const route = await this.store.downloadRoute?.() ?? (proxyUrl ? "proxy" : "system");
@@ -134,7 +137,7 @@ export class DocumentaryYouTube {
       "--restrict-filenames", "--no-simulate", "--print-to-file", "before_dl:%(filename)j", join(partialDirectory, "active.json"),
       "--print-to-file", "after_move:%(filepath)j", join(partialDirectory, "complete.json"),
       ...(bridge ? ["--proxy", bridge.proxyUrl] : []), ...(cookies ? ["--cookies", cookies] : []),
-      "-o", join(partialDirectory, "%(format_id)s.%(ext)s"), "--", candidate.pageUrl], destination, signal, onProgress, partialDirectory); }
+      "-o", join(partialDirectory, "%(format_id)s.%(ext)s"), "--", candidate.pageUrl], destination, signal, onProgress, partialDirectory,range?maximumSectionBytes:undefined); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/getaddrinfo|failed to resolve|name resolution|connection.{0,30}(?:timed out|refused)|sign in to confirm/i.test(message)) this.downloadBlockedUntil = Date.now() + 5 * 60000;
@@ -197,7 +200,7 @@ export function documentaryYouTubeFormatSelector(requireHd:boolean):string{
   return `bestvideo[ext=mp4][height<=1080]${minimumWidth}/best[ext=mp4][height<=1080]${minimumWidth}`;
 }
 
-export async function downloadWithYtDlp(args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string): Promise<void> {
+export async function downloadWithYtDlp(args: string[], destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, partialDirectory?: string,maxBytes=maximumBytes): Promise<void> {
   const bundled = join(process.resourcesPath || "", "bin", process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp");
   const commands = [
     ...(process.env.YT_DLP_PATH ? [{ executable: process.env.YT_DLP_PATH, prefix: [] as string[] }] : []),
@@ -227,7 +230,7 @@ export async function downloadWithYtDlp(args: string[], destination: string, sig
         const abort = () => stop("Загрузка остановлена пользователем");
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) abort();
-        const watchdog = new DocumentaryDownloadWatchdog();
+        const watchdog = new DocumentaryDownloadWatchdog(Date.now(),maxBytes);
         let lastReportedAt = 0;
         const timeout = setTimeout(() => stop("Загрузка YouTube превысила 15 минут; проверьте соединение"), maximumDownloadMs);
         const budget = setInterval(() => {
