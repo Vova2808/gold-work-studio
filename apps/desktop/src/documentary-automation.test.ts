@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { MemoryProjectRepository, MockDirectorProvider, ProjectService } from "@gold-work/core";
 import { createVoiceCalibration, type DocumentaryCandidate, type DocumentaryRequirement } from "@gold-work/shared";
 import { DocumentaryIntelligence, documentaryJson, documentaryNarrationContext, resolveDocumentaryCandidateKeys, documentaryRankingPool } from "./documentary-intelligence.js";
+import { documentaryRankingResponseInstruction } from "./documentary-ranking-batch.js";
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
 import { AnyModelProviderResponseError } from "./anymodel-client.js";
 import { DocumentaryAnalysisError } from "./documentary-analysis-error.js";
@@ -757,7 +758,7 @@ test("an uncertain paid analysis submission is not retried after service restart
   const { root, project } = await setup(); let submissions = 0;
   const client = { configured: async () => true, documentaryCompletion: async () => { submissions++; throw new Error("Connection lost after submission"); } };
   await assert.rejects(new DocumentaryIntelligence(client, () => root).plan(project, project.scenes), /Connection lost/);
-  await assert.rejects(new DocumentaryIntelligence(client, () => root).plan(project, project.scenes), /Автоповтор отключён/);
+  await assert.rejects(new DocumentaryIntelligence(client, () => root).plan(project, project.scenes), /неопределённый результат.*не отправлены повторно/);
   assert.equal(submissions, 1);
   const checkpoint = (await readdir(join(root, "Documentary", "Analysis")))[0]!;
   assert.equal(JSON.parse(await readFile(join(root, "Documentary", "Analysis", checkpoint), "utf8")).state, "pending");
@@ -1107,7 +1108,9 @@ test("semantic candidate ranking keeps stable paid checkpoints and cannot invent
   assert.equal(scene.documentary!.verified, false);
   const legacyInput = JSON.parse(rankingRequest!.input);
   for (const item of legacyInput.candidates) item.id = createHash("sha256").update([unrelated, relevant].find(candidate => candidate.title === item.title)!.downloadUrl!).digest("hex");
-  const legacyKey = createHash("sha256").update(JSON.stringify([2, "candidate-relevance", rankingRequest!.system, JSON.stringify(legacyInput), []])).digest("hex");
+  assert.ok(rankingRequest!.system.endsWith(documentaryRankingResponseInstruction));
+  const checkpointSystem=rankingRequest!.system.slice(0,-documentaryRankingResponseInstruction.length);
+  const legacyKey = createHash("sha256").update(JSON.stringify([2, "candidate-relevance", checkpointSystem, JSON.stringify(legacyInput), []])).digest("hex");
   const legacyRoot = join(root, "long-id-checkpoint"), legacyPath = join(legacyRoot, "Documentary", "Analysis", `${legacyKey}.json`);
   await mkdir(join(legacyRoot, "Documentary", "Analysis"), { recursive: true });
   let migrationCalls = 0;
