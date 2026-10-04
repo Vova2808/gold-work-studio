@@ -754,7 +754,8 @@ export class DocumentaryProjectService {
       // An old approval needs current evidence, not another search/download.
       // Replay a completed actual-frame check first, with POSTs disabled.
       if(!scene.documentary?.verified&&!scene.documentary?.pinned&&scene.documentary?.visualReview?.status==='accepted'
-        &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force){
+        &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force
+        &&!documentarySavedIdentityIssue({...scene,documentary:{...scene.documentary,verified:true}})){
         try{
           this.publish({projectId,phase:'applying',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,
             message:`Кадр ${scene.order+1}: проверяю сохранённый анализ без нового платного запроса…`});
