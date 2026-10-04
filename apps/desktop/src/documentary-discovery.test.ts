@@ -42,6 +42,34 @@ test('a weak precise video batch waits for broad results instead of requiring tw
   assert.equal((await batches.next()).done,true);
 });
 
+test('near-simultaneous video sources share one shortlist without waiting for a slow archive',async()=>{
+  const fast=discoverDocumentarySourceBatches({kind:'video',queries:['precise','broad'],stockQueries:['stock'],youtubeQueries:['precise'],
+    coalesceMs:30,stopped:()=>false,firstBatchReady:()=>false,
+    discover:async(query,providers)=>[{id:providers.includes('youtube')?'weak':query==='stock'?'stock':'archive'}] as DocumentaryCandidate[]});
+  assert.deepEqual((await fast.next()).value?.map(candidate=>candidate.id),['weak','stock','archive']);
+  assert.equal((await fast.next()).done,true);
+
+  let release!:()=>void;const slow=new Promise<void>(resolve=>{release=resolve;});const calls:string[]=[];
+  const batches=discoverDocumentarySourceBatches({kind:'video',queries:['precise','slow','later'],stockQueries:['stock'],youtubeQueries:['precise'],
+    coalesceMs:20,stopped:()=>false,firstBatchReady:()=>false,
+    discover:async(query,providers)=>{calls.push(query);if(query==='slow')await slow;return [{id:providers.includes('youtube')?'weak':query}] as DocumentaryCandidate[];}});
+  assert.deepEqual((await batches.next()).value?.map(candidate=>candidate.id),['weak','stock']);
+  await batches.return(undefined);release();await tick();
+  assert.equal(calls.includes('later'),false,'Accepting the fast batch must not dispatch another query wave');
+});
+
+test('a simultaneous provider error does not hide a ready video before acceptance',async()=>{
+  const make=()=>discoverDocumentarySourceBatches({kind:'video',queries:['precise'],stockQueries:['stock'],youtubeQueries:['precise'],
+    coalesceMs:20,stopped:()=>false,firstBatchReady:()=>false,
+    discover:async(_query,providers)=>{
+      if(providers.includes('internet-archive'))throw Error('Archive unavailable');
+      return [{id:providers.includes('youtube')?'weak':'stock'}] as DocumentaryCandidate[];
+    }});
+  const accepted=make();assert.deepEqual((await accepted.next()).value?.map(candidate=>candidate.id),['weak','stock']);
+  await accepted.return(undefined);
+  const rejected=make();await rejected.next();await assert.rejects(rejected.next(),/Archive unavailable/);
+});
+
 test('a technical photo search waits for the actual named part before paying to rank exteriors',async()=>{
   const exterior={id:'exterior',kind:'image',title:'Yamaha racing motorcycle',description:'Whole bike at a race'} as DocumentaryCandidate;
   const secondExterior={id:'second-exterior',kind:'image',title:'Yamaha YZR-M1 race',description:'Racing motorcycle on track'} as DocumentaryCandidate;

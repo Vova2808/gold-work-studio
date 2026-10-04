@@ -15,6 +15,8 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   /** For a detail-critical image, keep accumulating instead of paying to rank
    * successive batches that still contain no plausible depiction. */
   deferredBatchReady?:(candidates:DocumentaryCandidate[])=>boolean;
+  /** Briefly combine already-running source families before paid ranking. */
+  coalesceMs?:number;
 }):AsyncGenerator<DocumentaryCandidate[],void>{
   if(input.stopped())return;
   const youtube=input.kind==='video'&&input.youtubeQueries.length>0;
@@ -68,18 +70,36 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   try{
     while(pending.size&&!stopped()){
       const batch=await Promise.race(pending.values());pending.delete(batch.index);
+      const wave=[batch],until=Date.now()+Math.min(500,Math.max(0,input.coalesceMs??0));
+      // Do not dispatch the next query wave until the consumer rejects this
+      // one. Only combine requests that were already in flight; a slow archive
+      // can delay a ready stock clip by at most this small window.
+      while(pending.size&&!stopped()&&Date.now()<until){
+        let timer:ReturnType<typeof setTimeout>|undefined;
+        const timeout=new Promise<undefined>(resolve=>{timer=setTimeout(()=>resolve(undefined),until-Date.now());});
+        const next=await Promise.race<Batch|undefined>([...pending.values(),timeout]);
+        if(timer)clearTimeout(timer);
+        if(!next)break;
+        pending.delete(next.index);wave.push(next);
+      }
       if(batch.error)throw batch.error;
-      if(batch.candidates.length){
+      const laterError=wave.slice(1).find(part=>part.error)?.error;
+      const discovered=wave.flatMap(part=>part.candidates);
+      if(discovered.length){
         if(deferred.length){
           const oldIds=new Set(deferred.map(candidate=>candidate.id));
-          if(batch.candidates.some(candidate=>!oldIds.has(candidate.id))){
-            const combined=fresh([...deferred,...batch.candidates]);deferred=[];
+          if(discovered.some(candidate=>!oldIds.has(candidate.id))){
+            const combined=fresh([...deferred,...discovered]);deferred=[];
             if(input.deferredBatchReady?.(combined)===false)deferred=combined;
             else {combined.forEach(candidate=>yielded.add(candidate.id));if(combined.length)yield combined;}
           }
-        }else {const novel=fresh(batch.candidates);novel.forEach(candidate=>yielded.add(candidate.id));if(novel.length)yield novel;}
+        }else {const novel=fresh(discovered);novel.forEach(candidate=>yielded.add(candidate.id));if(novel.length)yield novel;}
       }
-      schedule(batch.index);
+      // A simultaneous provider failure must not hide a ready usable source.
+      // Surface the error only if the consumer rejects that source and asks
+      // for another wave; accepting it closes the iterator before this line.
+      if(laterError)throw laterError;
+      for(const part of wave)schedule(part.index);
     }
     if(deferred.length&&!stopped()){const batch=fresh(deferred);if(batch.length)yield batch;}
   }finally{cancelled=true;}

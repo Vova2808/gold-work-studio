@@ -806,6 +806,7 @@ export class DocumentaryProjectService {
           const requiredImagePart=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)
             ?documentaryRequiredVisiblePart(scene.narration):undefined;
           const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
+            coalesceMs:kind==='video'?200:0,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
             // Preserve two precise searches for part/action/date scenes. A
             // single named establishing view may use its exact subject as the
