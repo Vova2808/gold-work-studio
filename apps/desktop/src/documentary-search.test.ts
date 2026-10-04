@@ -135,6 +135,10 @@ test('full-frame YouTube download excludes narrow portrait formats before transf
   assert.match(selector,/bestvideo\[ext=mp4\]\[height<=1080\]\[width>=640\]/);
   assert.match(selector,/\/best\[ext=mp4\]\[height<=1080\]\[width>=640\]/);
   assert.doesNotMatch(documentaryYouTubeFormatSelector(false),/width>=640/);
+  await assert.rejects(youtube.download(candidate,join(root,'range.download'),undefined,undefined,true,{start:10,end:20}),/format-only fixture/);
+  assert.equal(launched[launched.indexOf('--download-sections')+1],'*10-20');
+  assert.ok(launched.includes('--force-keyframes-at-cuts'));
+  await assert.rejects(youtube.download(candidate,join(root,'invalid.download'),undefined,undefined,true,{start:10,end:70}),/Некорректный диапазон/);
 });
 
 test("YouTube download rechecks licensing and blocks injected source URLs before launching a downloader", async () => {

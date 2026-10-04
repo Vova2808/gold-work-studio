@@ -51,9 +51,12 @@ test("raw excerpts preserve edits and narration; original is deleted only after 
   await writeFile(join(materialRoot, "Catalog", `${checksum}.json`), JSON.stringify({ ...source, id: "manual:import", provider: "local" }));
   assert.equal((await prepareDocumentaryExcerpts({ ...project, scenes: [scenes[1]!] }, join(root, "one"), undefined, undefined, materialRoot)).count, 0, "Cached imports are not compacted");
   await writeFile(join(materialRoot, "Catalog", `${checksum}.json`), JSON.stringify(source));
-  const retained = await planDocumentaryCleanup({ materialRoot, projectDirectory, projects: [compact, { id: "other", scenes: [scenes[0]] } as Project] });
+  // Cleanup protects downloads touched within the last day. Advance only the
+  // fixture clock so this test checks the reference rules after that window.
+  const afterRetention=Date.now()+25*3600_000;
+  const retained = await planDocumentaryCleanup({ materialRoot, projectDirectory, projects: [compact, { id: "other", scenes: [scenes[0]] } as Project],now:afterRetention });
   assert.ok(!retained.files.some(file => file.path === original));
-  const plan = await planDocumentaryCleanup({ materialRoot, projectDirectory, projects: [compact] });
+  const plan = await planDocumentaryCleanup({ materialRoot, projectDirectory, projects: [compact],now:afterRetention });
   assert.ok(plan.files.some(file => file.path === original));
   const removed = await executeDocumentaryCleanup(plan); assert.equal(removed.bytes, originalBytes);
   for (const scene of compact.scenes) assert.ok((await stat(scene.videoPath!)).size > 0);

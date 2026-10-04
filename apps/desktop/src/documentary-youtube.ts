@@ -106,7 +106,8 @@ export class DocumentaryYouTube {
     return ids.length ? youtubeDocumentaryCandidates(await this.api("videos", { part: "snippet,status,contentDetails", id: ids.join(",") }), query) : [];
   }
 
-  async download(candidate: DocumentaryCandidate, destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, requireHd = false): Promise<void> {
+  async download(candidate: DocumentaryCandidate, destination: string, signal?: AbortSignal, onProgress?: (bytes: number) => void, requireHd = false,
+    range?:{start:number;end:number}): Promise<void> {
     signal?.throwIfAborted();
     const id = candidate.id.replace(/^youtube:/, "");
     if (candidate.provider !== "youtube" || !validId(id) || candidate.pageUrl !== `https://www.youtube.com/watch?v=${id}`) throw new Error("Некорректный источник YouTube");
@@ -114,6 +115,8 @@ export class DocumentaryYouTube {
     const videos = await this.api("videos", { part: "snippet,status,contentDetails", id }, signal);
     if (!youtubeDocumentaryCandidates(videos, candidate.query).some(video => video.id === candidate.id)) throw new Error("YouTube больше не подтверждает публичное видео с лицензией Creative Commons; загрузка отменена");
     requireHighDefinition(videos, id, requireHd);
+    if(range&&(!Number.isFinite(range.start)||!Number.isFinite(range.end)||range.start<0||range.end<=range.start
+      ||range.end>(candidate.durationSeconds??0)+.1))throw Error('Некорректный диапазон YouTube-видео');
     await ensureDocumentarySpace(dirname(destination), maximumBytes);
     const cookies = await this.store.resolveValidatedCookies();
     const proxyUrl = await this.store.proxyUrl?.();
@@ -127,6 +130,7 @@ export class DocumentaryYouTube {
     const bridge = route === "public-dns" ? await createYouTubeDnsBridge() : route === "proxy" ? await createAuthenticatedProxyBridge(proxyUrl!, { host: "www.youtube.com", port: 443 }) : undefined;
     try { await this.runner(["--ignore-config", "--no-playlist", "--part", "--continue", "--no-mtime", "--no-progress", "--socket-timeout", "15", "--retries", "1", "--fragment-retries", "1", "--extractor-retries", "1",
       "--concurrent-fragments", "4", "--js-runtimes", "node", "--max-filesize", String(maximumBytes), "-f", documentaryYouTubeFormatSelector(requireHd),
+      ...(range?["--ffmpeg-location",ffmpegPath!.replace('app.asar','app.asar.unpacked'),"--force-keyframes-at-cuts","--download-sections",`*${range.start}-${range.end}`]:[]),
       "--restrict-filenames", "--no-simulate", "--print-to-file", "before_dl:%(filename)j", join(partialDirectory, "active.json"),
       "--print-to-file", "after_move:%(filepath)j", join(partialDirectory, "complete.json"),
       ...(bridge ? ["--proxy", bridge.proxyUrl] : []), ...(cookies ? ["--cookies", cookies] : []),

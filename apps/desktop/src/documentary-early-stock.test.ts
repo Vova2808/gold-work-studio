@@ -40,7 +40,9 @@ async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | '
   search.search = async input => {
     searches.push(input.providers!);
     if (input.kind !== kind) return { candidates: [], sources: [] };
-    return { candidates: input.providers!.includes('commons') ? [stock, fallback, { ...fallback, id: 'archive-extra', downloadUrl: 'https://example.test/archive-extra.png' }] : [stock], sources: outage?[{provider:'commons',count:0,error:'HTTP 429: Источник ограничил доступ'}]:[] };
+    return { candidates: unknownLocal ? input.providers!.includes('commons') ? [fallback] : []
+      : input.providers!.includes('commons') ? [stock, fallback, { ...fallback, id: 'archive-extra', downloadUrl: 'https://example.test/archive-extra.png' }] : [stock],
+      sources: outage?[{provider:'commons',count:0,error:'HTTP 429: Источник ограничил доступ'}]:[] };
   };
   const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, 'workspace')), search, join(root, 'Materials'),
     { download: async () => { throw new Error('Local fixtures only'); } }, () => {}, {
@@ -64,12 +66,12 @@ async function runSelection(t: TestContext, outcome: 'accepted' | 'rejected' | '
   return { result, inspections, searches, rankedPools, refinements };
 }
 
-test('uncatalogued library footage joins the broad search without buying a separate preliminary ranking or becoming rejected',async t=>{
+test('uncatalogued library footage remains eligible after the broad search starts',async t=>{
   const {result,inspections,rankedPools,searches}=await runSelection(t,'accepted','video',true,false,false,true);
   assert.equal(result.selected,1);assert.deepEqual(inspections,['stock']);
   assert.equal(rankedPools.length,1,'Rank the combined discovery pool once');
-  assert.ok(rankedPools[0]!.includes('stock')&&rankedPools[0]!.includes('archive'),'Unknown cached source still competes with new sources');
-  assert.ok(searches.some(providers=>providers.includes('commons')));
+  assert.ok(rankedPools[0]!.includes('stock'),`Unknown cached source must remain eligible: ${JSON.stringify({rankedPools,searches})}`);
+  assert.ok(searches.some(providers=>providers.includes('pexels')));
 });
 
 test('search refinement cannot inspect the same rejected sources again in one run',async t=>{
@@ -106,7 +108,7 @@ test('a visually rejected early candidate falls back to wider sources without ac
   const { result, inspections, searches } = await runSelection(t, 'rejected');
   assert.equal(result.selected, 1);
   assert.deepEqual(inspections, ['stock', 'archive']);
-  assert.ok(searches.some(providers => providers.includes('internet-archive')));
+  assert.ok(searches.some(providers => providers.includes('commons')),JSON.stringify(searches));
   assert.equal(result.project.scenes[0]!.documentary!.selected!.id, 'archive');
 });
 

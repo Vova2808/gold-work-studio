@@ -5,7 +5,7 @@ import {mkdtemp,readFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {effectFfmpeg,probeEffectMedia} from './effect-media.js';
-import {documentaryPreviewRanges,documentaryPreviewRejection,withDocumentaryPreviewRelay} from './documentary-preview.js';
+import {documentaryPreviewRanges,documentaryPreviewDownloadRange,documentaryPreviewRejection,withDocumentaryPreviewRelay} from './documentary-preview.js';
 import {documentarySceneContext,documentaryNarrativeEvidenceIssue} from './documentary-scene-context.js';
 import type {Project,Scene} from '@gold-work/shared';
 
@@ -15,6 +15,14 @@ test('separated samples cover beginning, middle and end without crossing the sou
     assert.ok(ranges.every((range,index)=>range.start>=0&&range.end<=duration&&range.end-range.start<=4.001&&(!index||range.start>ranges[index-1]!.end)));
   }
   assert.deepEqual(documentaryPreviewRanges(NaN),[]);
+});
+
+test('a scene-confirmed long-video sample downloads only a short editable HD range',()=>{
+  const preview={segments:[{path:'a',start:23,end:27},{path:'b',start:138,end:142},{path:'c',start:248,end:252}],bytes:1000};
+  assert.deepEqual(documentaryPreviewDownloadRange(preview,0,288,7),{start:20,end:30});
+  assert.deepEqual(documentaryPreviewDownloadRange(preview,2,288,16),{start:241,end:259});
+  assert.equal(documentaryPreviewDownloadRange(preview,-1,288,7),undefined);
+  assert.equal(documentaryPreviewDownloadRange(preview,0,90,7),undefined);
 });
 
 test('preview never approves footage and rejects gameplay only with consistent confident evidence',()=>{

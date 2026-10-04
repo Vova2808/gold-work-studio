@@ -24,6 +24,17 @@ export function documentaryPreviewRanges(duration:number):Array<{start:number;en
   });
 }
 
+/** Preserve the inspected interval and enough handles for one documentary shot.
+ * This is only used after a scene-specific preview has identified the interval. */
+export function documentaryPreviewDownloadRange(preview:DocumentaryPreview,index:number,sourceDuration:number,sceneDuration:number):{start:number;end:number}|undefined{
+  const sample=preview.segments[index];
+  if(!Number.isInteger(index)||index<0||!sample||!Number.isFinite(sourceDuration)||sourceDuration<180
+    ||!Number.isFinite(sceneDuration)||sceneDuration<=0||sample.start<0||sample.end>sourceDuration||sample.end<=sample.start)return;
+  const length=Math.min(18,Math.max(10,sceneDuration+3,sample.end-sample.start+4));
+  const start=Math.max(0,Math.min(sourceDuration-length,(sample.start+sample.end-length)/2));
+  return {start:Math.round(start*1000)/1000,end:Math.round((start+length)*1000)/1000};
+}
+
 export function documentaryPreviewKey(candidate:DocumentaryCandidate) {
   return createHash('sha256').update(JSON.stringify([1,candidate.provider,candidate.id,candidate.downloadUrl,candidate.durationSeconds])).digest('hex');
 }

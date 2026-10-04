@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {documentaryDatedSearchQueries} from './documentary-dated-search.js';
 import {documentarySavedContextIssue,revalidateDocumentaryContext} from './documentary-context-approval.js';
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
-import {documentaryPreviewKey,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
+import {documentaryPreviewKey,documentaryPreviewDownloadRange,downloadDirectDocumentaryPreview,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
@@ -722,6 +722,7 @@ export class DocumentaryProjectService {
         // It must not add another set of paid checks before the broad fallback.
         const inspectionCounts = new Map<string, number>();
         const attemptCounts = new Map<string, number>();
+        const deferredLocal = new Map<'image'|'video',DocumentaryCandidate[]>();
         // A successful photo search must not erase a video provider's outage.
         const sourceErrors: string[] = [];
         for (const { kind, localOnly, quick } of stages) {
@@ -736,7 +737,7 @@ export class DocumentaryProjectService {
           const inspectionLimit = upgradePhoto ? 1 : kind === "video" ? 4 : 2;
           let inspections = inspectionCounts.get(inspectionKey) ?? 0;
           if (inspections >= inspectionLimit) continue;
-          const pool: DocumentaryCandidate[] = [];
+          const pool: DocumentaryCandidate[] = !localOnly&&!quick?[...(deferredLocal.get(kind)??[])]:[];
           const searchStarted=Date.now();
           const context=documentarySceneContext(project,scene);
           const sourceQueries=documentarySearchQueries(requirement,kind,context);
@@ -838,7 +839,12 @@ export class DocumentaryProjectService {
             // old downloads can consume the entire video-search budget before
             // discovery even starts. Unknown sources remain untried and can
             // compete with internet results in the normal local+remote search.
-            if(this.intelligence!.cataloguedCandidates)localOrder=this.intelligence!.cataloguedCandidates(latestProject,scene,localOrder);
+            if(this.intelligence!.cataloguedCandidates){
+              const catalogued=this.intelligence!.cataloguedCandidates(latestProject,scene,localOrder);
+              const known=new Set(catalogued.map(documentaryCandidateKey));
+              deferredLocal.set(kind,localOrder.filter(candidate=>!known.has(documentaryCandidateKey(candidate))));
+              localOrder=catalogued;
+            }
           }
           let attempts = quick ? earlyCandidates : documentaryCandidateAttempts(localOrder, searchSubjects);
           // A local source's old exact-metadata flag belongs to its ORIGINAL
@@ -1168,6 +1174,7 @@ export class DocumentaryProjectService {
       for (const copy of [candidate.localPath, projectOriginal, previousSource?.localPath, catalogOriginal, existingCopy]) {
         if (copy && await stat(copy).then(info => info.isFile(), () => false)) { localCopy = copy; break; }
       }
+      let sourceRange:{start:number;end:number}|undefined;
       // For a short clip, three independently sought previews plus their paid
       // classification can cost more than downloading the original once.
       // Actual-frame, quality and identity checks still run on that original.
@@ -1211,7 +1218,7 @@ export class DocumentaryProjectService {
             const screening=await this.intelligence.inspectPreview(projectId,documentaryPreviewKey(candidate),preview);
             recordDiagnosticEvent('info','documentary.preview.checked',{projectId,sceneId,provider:candidate.provider,rejected:screening.rejected,bytes:preview.bytes,downloadedBytes:preview.downloadedBytes});
             if(screening.rejected)throw new Error(screening.reason);
-            if(!commit&&candidate.provider==='youtube'&&(candidate.durationSeconds??0)>=600
+            if(!commit&&candidate.provider==='youtube'&&(candidate.durationSeconds??0)>=180
               &&(scene.documentary?.requirement.identities?.length||scene.documentary?.requirement.years.length)
               &&this.intelligence.inspectPreviewForScene){
               onPreview?.('Сверяю пробные кадры длинного видео с этой сценой до загрузки оригинала…');
@@ -1219,6 +1226,8 @@ export class DocumentaryProjectService {
               recordDiagnosticEvent('info','documentary.preview.scene-checked',{projectId,sceneId,provider:candidate.provider,
                 selectedIndex:match.selectedIndex,sourceDurationSeconds:candidate.durationSeconds});
               if(match.selectedIndex<0)throw new Error(`В пробных кадрах длинного источника не подтверждён нужный предмет; проверяю другой источник. ${match.reason}`);
+              const sceneDuration=Math.max(scene.durationOverrideSeconds??0,(scene.documentary?.timing?.durationInFrames??scene.durationSeconds*30)/30);
+              sourceRange=documentaryPreviewDownloadRange(preview,match.selectedIndex,candidate.durationSeconds!,sceneDuration);
             }
           }
         }
@@ -1239,8 +1248,8 @@ export class DocumentaryProjectService {
           // download lock and a stable path, not a fresh scene-local UUID.
           const downloads = join(this.materialRoot, "Downloads");
           await mkdir(downloads, { recursive: true });
-          temporary = join(downloads, `youtube-${createHash("sha256").update(candidate.id).digest("hex")}.download`);
-          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, onDownloadProgress, requireHd));
+          temporary = join(downloads, `youtube-${createHash("sha256").update(JSON.stringify([candidate.id,sourceRange])).digest("hex")}.download`);
+          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, onDownloadProgress, requireHd,sourceRange));
           extension = ".mp4";
         } else if (candidate.provider === "pexels" || candidate.provider === "pixabay") {
           const asset = { provider: candidate.provider, id: candidate.id.replace(/^[^:]+:/, ""), mediaType: candidate.kind, query: candidate.query,
@@ -1273,10 +1282,15 @@ export class DocumentaryProjectService {
         automatic: false, review: "pending", rights: "unknown", rightsNote: "", file: originalName, bytes: (await stat(path)).size, origins: [], state: "copied",
         defaults: { blend: "normal", opacity: 100, volume: 0, sourceAudio: false, trimStartSeconds: 0, fadeInSeconds: 0, fadeOutSeconds: 0 },
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      // The full remote original is intentionally not transferred for a verified
+      // preview range. Its stable provider ID fingerprints reuse across clips;
+      // the local file checksum above still protects the bytes we actually keep.
+      const sourceCandidate:DocumentaryCandidate=sourceRange?{...candidate,excerpt:{sourceChecksum:createHash('sha256').update(candidate.id).digest('hex'),
+        startSeconds:sourceRange.start,endSeconds:sourceRange.end,sourceDurationSeconds:candidate.durationSeconds!}}:candidate;
       const prepared = await measureDocumentaryStage("media-preparation", { projectId, sceneId, sourceCacheHit: Boolean(localCopy), checksum }, async () =>
-        prepareDocumentaryDiagram(root,mediaAsset,candidate,await prepareDocumentaryMedia(root, mediaAsset, this.materialRoot, project.scenes, join(this.storage.projectDirectory(projectId), "Documentary"))));
+        prepareDocumentaryDiagram(root,mediaAsset,sourceCandidate,await prepareDocumentaryMedia(root, mediaAsset, this.materialRoot, project.scenes, join(this.storage.projectDirectory(projectId), "Documentary"))));
       if (candidate.kind === "video" && !prepared.metadata?.videoCodec || candidate.kind === "image" && !prepared.metadata?.width) throw new Error("Оригинал не соответствует выбранному типу медиа");
-      const selected = { ...candidate, localPath: path, bytes: mediaAsset.bytes, width: prepared.metadata?.width, height: prepared.metadata?.height, durationSeconds: prepared.metadata?.durationSeconds };
+      const selected = { ...sourceCandidate, localPath: path, bytes: mediaAsset.bytes, width: prepared.metadata?.width, height: prepared.metadata?.height, durationSeconds: prepared.metadata?.durationSeconds };
       const visualHash = prepared.poster ? await documentaryVisualHash(join(root, prepared.poster)) : undefined;
       const similar = project.scenes.filter(other => other.id !== sceneId && (other.documentary?.checksum === checksum || visualHash && other.documentary?.visualHash && visualHashDistance(visualHash, other.documentary.visualHash) <= 6));
       if (similar.length) selected.concerns = [...selected.concerns, `Похожий или повторный материал уже есть в кадрах: ${similar.map(other => other.order + 1).join(", ")}. Проверьте разнообразие и выбранный диапазон.`];
