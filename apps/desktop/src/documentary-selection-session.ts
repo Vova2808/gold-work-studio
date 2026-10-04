@@ -4,6 +4,7 @@ import {documentaryCandidateKey} from './documentary-reuse.js';
 /** Only discovery is shared. Identity, quality, trim and reuse are checked per scene. */
 export class DocumentarySelectionSession {
   private searches=new Map<string,Promise<DocumentarySearchResult>>();
+  private completedSearches=new Map<string,DocumentarySearchResult>();
   private budgets=new Map<string,{started:number;attempts:number;searchMs:number}>();
   constructor(private readonly now=Date.now) {}
   group(requirement:DocumentaryRequirement,kind:'image'|'video') {
@@ -18,14 +19,23 @@ export class DocumentarySelectionSession {
     if(!job){
       job=search(group.query).then(result=>{
         const seen=new Set<string>();
-        return {...result,candidates:result.candidates.filter(candidate=>{
+        const completed={...result,candidates:result.candidates.filter(candidate=>{
           const key=documentaryCandidateKey(candidate);if(seen.has(key))return false;seen.add(key);return true;
         }).slice(0,64)};
+        this.completedSearches.set(group.key,completed);
+        return completed;
       });
       this.searches.set(group.key,job);
     }
     // Callers must not mutate another scene's provenance/concerns/approval.
     return job.then(result=>structuredClone(result));
+  }
+  /** Reuse a completed shared search before spending another provider query.
+   * An in-flight search never delays the current scene. */
+  completedRelated(requirement:DocumentaryRequirement,kind:'image'|'video'):DocumentarySearchResult|undefined {
+    const group=this.group(requirement,kind);
+    const result=group&&this.completedSearches.get(group.key);
+    return result?structuredClone(result):undefined;
   }
   budget(sceneId:string,kind:'image'|'video') {
     const key=`${sceneId}:${kind}`;

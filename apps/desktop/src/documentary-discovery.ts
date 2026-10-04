@@ -10,6 +10,8 @@ type DiscoveryInput={
  * Accepting a source never starts unused archive queries or background jobs. */
 export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
   kind:'image'|'video';supplement?:()=>Promise<DocumentaryCandidate[]>;
+  /** Previously completed discovery can be inspected before a fresh query. */
+  reused?:DocumentaryCandidate[];
   /** Defer a weak precise batch until the broader pool is available. */
   firstBatchReady?:(candidates:DocumentaryCandidate[])=>boolean;
   /** For a detail-critical image, keep accumulating instead of paying to rank
@@ -27,11 +29,17 @@ export async function* discoverDocumentarySourceBatches(input:DiscoveryInput&{
     const seen=new Set(yielded);
     return candidates.filter(candidate=>!seen.has(candidate.id)&&(seen.add(candidate.id),true));
   };
+  if(input.reused?.length){
+    if(input.firstBatchReady?.(input.reused)===false)deferred=input.reused;
+    else {const batch=fresh(input.reused);batch.forEach(candidate=>yielded.add(candidate.id));if(batch.length)yield batch;}
+  }
+  if(input.stopped())return;
   if(query){
     const first=await input.discover(query,youtube?['youtube']:input.kind==='image'?['commons']:['pexels','pixabay']);
     if(first.length){
-      if(input.firstBatchReady?.(first)===false)deferred=first;
-      else {const batch=fresh(first);batch.forEach(candidate=>yielded.add(candidate.id));if(batch.length)yield batch;}
+      const combined=[...deferred,...first];
+      if(input.firstBatchReady?.(combined)===false)deferred=combined;
+      else {deferred=[];const batch=fresh(combined);batch.forEach(candidate=>yielded.add(candidate.id));if(batch.length)yield batch;}
     }
   }
   if(input.stopped())return;

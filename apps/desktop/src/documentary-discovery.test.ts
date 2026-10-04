@@ -17,6 +17,28 @@ test('a precise ready source can be inspected and accepted without starting arch
   assert.deepEqual(calls,['exact subject:commons']);
 });
 
+test('a completed related video is inspected before spending another YouTube search',async()=>{
+  const calls:string[]=[];
+  const make=()=>discoverDocumentarySourceBatches({kind:'video',queries:['new precise'],stockQueries:[],youtubeQueries:['new precise'],
+    reused:[{id:'previous',kind:'video',title:'Named subject'}] as DocumentaryCandidate[],stopped:()=>false,
+    discover:async(query,providers)=>{calls.push(`${query}:${providers.join(',')}`);return [{id:'fresh'}] as DocumentaryCandidate[];}});
+  const accepted=make();assert.deepEqual((await accepted.next()).value?.map(candidate=>candidate.id),['previous']);
+  await accepted.return(undefined);assert.deepEqual(calls,[]);
+  const rejected=make();await rejected.next();
+  assert.deepEqual((await rejected.next()).value?.map(candidate=>candidate.id),['fresh']);
+  assert.deepEqual(calls,['new precise:youtube']);
+  await rejected.return(undefined);
+});
+
+test('weak reused videos wait for exact search and keep both candidates',async()=>{
+  const calls:string[]=[];
+  const batches=discoverDocumentarySourceBatches({kind:'video',queries:['exact'],stockQueries:[],youtubeQueries:['exact'],
+    reused:[{id:'old'}] as DocumentaryCandidate[],firstBatchReady:candidates=>candidates.some(candidate=>candidate.id==='new'),
+    stopped:()=>false,discover:async(_query,providers)=>{calls.push(providers.join(','));return [{id:'new'}] as DocumentaryCandidate[];}});
+  assert.deepEqual((await batches.next()).value?.map(candidate=>candidate.id),['old','new']);
+  assert.deepEqual(calls,['youtube']);await batches.return(undefined);
+});
+
 test('rejection requests full discovery; an empty first source does not end the search',async()=>{
   for(const empty of [false,true]){
     const calls:string[]=[];

@@ -868,8 +868,19 @@ export class DocumentaryProjectService {
           let waitingAt=Date.now();
           const requiredImagePart=kind==='image'&&documentaryGeneralDiagramScope(context,requirement.identities)
             ?documentaryRequiredVisiblePart(scene.narration):undefined;
+          // Reuse only a concise, exact-title video that the existing local
+          // shortlist can send straight to actual-frame review. A weaker
+          // shared pool must not create a new paid ranking ahead of a saved
+          // uncertain ranking for this scene.
+          const completedRelated=kind==='video'&&requirement.identities?.length
+            ?session.completedRelated(requirement,kind):undefined;
+          const reusable=completedRelated?documentaryMetadataShortlist(scene,completedRelated.candidates.filter(item=>item.kind===kind
+            &&!tried.has(documentaryCandidateKey(item))
+            &&!rejectedCandidates.has(rejectedCandidateFingerprint(item))
+            &&!isUncertain(item)&&!formatUnavailable(item))).map(item=>({...item,match:'unverified' as const})):undefined;
           const batches=localOnly||quick?(async function*(){yield [] as DocumentaryCandidate[];})():discoverDocumentarySourceBatches({kind,queries,
             coalesceMs:kind==='video'?200:0,
+            reused:reusable,
             stockQueries:kind==='video'&&this.intelligence!.rankCandidates?documentaryStockQueries(requirement):[],
             // Preserve two precise searches for part/action/date scenes. A
             // single named establishing view may use its exact subject as the

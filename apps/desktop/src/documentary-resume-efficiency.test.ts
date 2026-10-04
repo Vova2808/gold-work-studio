@@ -47,7 +47,7 @@ test('failed identity repair runs once, preserving approved and manual scenes an
 });
 
 test('named subjects and dates always get semantic ranking before downloading',()=>{
-  const scene={documentary:{requirement:{identities:[{name:'SS United States',aliases:[]}],years:[],queries:['SS United States deck']}}} as never;
+  const scene={narration:'The SS United States had a deck.',documentary:{requirement:{identities:[{name:'SS United States',aliases:[]}],years:[],queries:['SS United States deck']}}} as never;
   const source=(title:string,id:string)=>({id,provider:'commons',kind:'image',title,description:'',query:'',width:1920,height:1080,concerns:[]}) as unknown as DocumentaryCandidate;
   const exact=source('SS United States deck in Philadelphia','exact'),other=source('United States economy','other');
   assert.deepEqual(documentaryMetadataShortlist(scene,[other,exact]),[]);
@@ -56,7 +56,7 @@ test('named subjects and dates always get semantic ranking before downloading',(
 });
 
 test('Faster and long named compilations cannot bypass semantic source ranking',()=>{
-  const scene={documentary:{requirement:{identities:[{name:'Faster',aliases:[]}],years:[],queries:['Faster motorcycle documentary']}}} as never;
+  const scene={narration:'The film Faster showed motorcycle racing.',documentary:{requirement:{identities:[{name:'Faster',aliases:[]}],years:[],queries:['Faster motorcycle documentary']}}} as never;
   const bad=['Make XP Faster: Windows Help','Ostriches run faster','Which car is faster?'].map(title=>({title,kind:'video',provider:'youtube',durationSeconds:900,concerns:[]})) as unknown as DocumentaryCandidate[];
   assert.deepEqual(documentaryMetadataShortlist(scene,bad),[]);
   const generic={documentary:{requirement:{identities:[],years:[],queries:['engine piston detail']}}} as never;

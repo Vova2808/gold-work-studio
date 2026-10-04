@@ -18,6 +18,21 @@ test('related scenes share discovery, but not mutable evidence or a different er
   const [a,b]=await Promise.all([session.related(requirement,'video',search),session.related({...requirement,queries:['Yamaha wheels']},'video',search)]);
   assert.equal(calls,1);a.candidates[0]!.concerns.push('wrong for first scene');assert.deepEqual(b.candidates[0]!.concerns,[]);
   await session.related({...requirement,years:['2004']},'video',search);assert.equal(calls,2);
+  const completed=session.completedRelated(requirement,'video');
+  assert.equal(completed?.candidates[0]?.id,'a');
+  completed!.candidates[0]!.concerns.push('changed');
+  assert.deepEqual(session.completedRelated(requirement,'video')?.candidates[0]?.concerns,[]);
+  assert.equal(session.completedRelated({...requirement,years:['2005']},'video'),undefined);
+  assert.equal(calls,2,'Reading completed discovery cannot start another provider query');
+});
+
+test('an unfinished shared search never blocks a scene waiting for its own source',async()=>{
+  const session=new DocumentarySelectionSession();
+  const requirement={text:'Yamaha engine',entities:['Yamaha'],queries:['Yamaha engine'],years:[],identities:[{name:'Yamaha',aliases:[]}]} as DocumentaryRequirement;
+  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  const work=session.related(requirement,'video',async()=>{await gate;return {sources:[],candidates:[]};});
+  assert.equal(session.completedRelated(requirement,'video'),undefined);
+  release();await work;assert.deepEqual(session.completedRelated(requirement,'video')?.candidates,[]);
 });
 
 test('refinement does not reset source/time budgets; narration wait is excluded',()=>{
