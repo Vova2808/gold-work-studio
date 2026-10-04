@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {Project,Scene,DocumentaryRequirement,DocumentaryCandidate} from '@gold-work/shared';
@@ -84,6 +84,39 @@ test('an explicit maker name keeps its inherited motorcycle model exact',async()
   await intelligence.resolveVisualScopes({id:'fixture-honda',scenes:[scene]} as Project,[scene],async batch=>{result=batch.get(scene.id);});
   assert.equal(result?.visualScope,'exact');
   assert.equal(result?.identities?.[0]?.name,'Honda RC211V');
+});
+
+test('a name in the preceding slice does not force a generic video close-up of that exact model',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-slice-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const before={id:'before',order:0,narration:'The Honda RC211V had a powerful engine, but'} as Scene;
+  const narration=' it made riders work to control the power.';
+  const requirement={text:narration,entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:['RC211V']}],
+    identityContextVersion:3,years:[],queries:['Honda RC211V power delivery'],plannedBy:'semantic'} as DocumentaryRequirement;
+  const current={id:'current',order:1,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  const project={id:'scope-slice',scenes:[before,current]} as Project;
+  let calls=0,result:DocumentaryRequirement|undefined;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    calls++;return JSON.stringify({scenes:[{id:'current',scope:'illustrative',quote:'riders work to control the power',query:'motorcycle racing power delivery'}]});
+  }},()=>root);
+  await intelligence.resolveVisualScopes(project,[current],async batch=>{result=batch.get('current');});
+  assert.equal(calls,1);
+  assert.equal(result?.visualScope,'illustrative');
+  assert.deepEqual(result?.identities,[]);
+  assert.equal(result?.narrativeIdentities?.[0]?.name,'Honda RC211V');
+});
+
+test('an uncertain old visual-scope batch blocks regrouping without another paid request',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-pending-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const analysis=join(root,'Documentary','Analysis');await mkdir(analysis,{recursive:true});
+  await writeFile(join(analysis,`${'a'.repeat(64)}.json`),JSON.stringify({state:'partial',purpose:'visual-scope',raw:'{"scenes":'}));
+  const narration='It made the engine easier to control.';
+  const requirement={text:narration,entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:['RC211V']}],
+    identityContextVersion:3,years:[],queries:['motorcycle racing engine'],plannedBy:'semantic'} as DocumentaryRequirement;
+  const scene={id:'uncertain',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    throw Error('must not submit');
+  }},()=>root);
+  await assert.rejects(intelligence.resolveVisualScopes({id:'pending',scenes:[scene]} as Project,[scene],async()=>{}),/неизвестный платный результат/);
 });
 
 test('changing an approved thematic visual target revokes only that saved approval',()=>{
