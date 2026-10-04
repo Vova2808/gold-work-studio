@@ -70,3 +70,14 @@ test('a short exact named video can be probed after long metadata picks, but dat
   assert.equal(documentaryExactNamedShortVideoProbe([base],{...requirement,years:['2002']},requirement.text),undefined);
   assert.equal(documentaryExactNamedShortVideoProbe([base],requirement,'The crankshaft turns.'),undefined);
 });
+
+test('a named person in an unrelated sport does not get the early download shortcut',()=>{
+  const requirement={text:'Rossi had eight wins, the most for a Yamaha rider.',entities:['Valentino Rossi'],
+    identities:[{name:'Valentino Rossi',aliases:['Rossi']}],years:[],
+    queries:['Valentino Rossi 2004 season wins Yamaha compilation','Rossi 2004 MotoGP race wins highlights']} as DocumentaryRequirement;
+  const unrelated={provider:'youtube',kind:'video',rights:'licensed',videoDefinition:'hd',
+    title:'Valentino Rossi Tests The F1 2006 Ferrari Onboard at Misano',durationSeconds:60} as DocumentaryCandidate;
+  const relevant={...unrelated,title:'Valentino Rossi Yamaha MotoGP 2004 highlights'};
+  assert.equal(documentaryExactNamedShortVideoProbe([unrelated],requirement,requirement.text),undefined);
+  assert.equal(documentaryExactNamedShortVideoProbe([unrelated,relevant],requirement,requirement.text),relevant);
+});

@@ -413,6 +413,37 @@ test("an old pending video inspection does not prevent an independently verified
   assert.equal(result.project.videoBrief!.readyScript, project.videoBrief!.readyScript);
 });
 
+test("a resumed automatic search does not download a source with an unknown paid inspection again", async t => {
+  const {root,projects,project}=await setup();
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const scene=project.scenes[0]!;
+  scene.documentary!.requirement={...scene.documentary!.requirement,preferredKind:'video',entities:['Red tractor'],queries:['red tractor field'],plannedBy:'semantic'};
+  await projects.update(project.id,project);
+  const video=join(root,'tractor.mp4');
+  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=1280x720:r=8:d=3','-an','-c:v','libx264',video]);
+  const candidate:DocumentaryCandidate={id:'pending-video',provider:'commons',kind:'video',title:'Red tractor',description:'Red tractor field',
+    pageUrl:'https://example.test/tractor',downloadUrl:'',localPath:video,author:'Fixture',license:'CC0',licenseUrl:'https://example.test/license',
+    rights:'public-domain',attribution:'Fixture',query:'tractor',retrievedAt:'now',match:'exact-metadata',concerns:[],width:1280,height:720,durationSeconds:3};
+  const searcher=new DocumentarySearch();
+  searcher.search=async input=>({candidates:input.kind==='video'?[candidate]:[],sources:[]});
+  let inspections=0;
+  const makeService=()=>new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'workspace')),searcher,join(root,'Materials'),
+    {download:async()=>{throw Error('Local source must not download');}},()=>{}, {
+      available:async()=>true,
+      plan:async(_project,scenes)=>new Map(scenes.map(item=>[item.id,{...item.documentary!.requirement,plannedBy:'semantic' as const}])),
+      inspect:async()=>{inspections++;throw new DocumentaryAnalysisError('Unknown previous charge','pending','video-catalog');},
+    });
+  await makeService().autoSelect(project.id,{sceneIds:[scene.id]});
+  assert.equal(inspections,1);
+  const marker=join(root,'workspace',project.id,'Documentary',scene.id,'uncertain-candidates.json');
+  const firstMarker=JSON.parse(await readFile(marker,'utf8'));
+  assert.equal(firstMarker.keys.length,2,'The provider ID and catalogued file alias must both be protected');
+  await makeService().autoSelect(project.id,{sceneIds:[scene.id]});
+  const secondMarker=JSON.parse(await readFile(marker,'utf8'));
+  assert.equal(secondMarker.scope,firstMarker.scope,'A resume must preserve the candidate quarantine scope');
+  assert.equal(inspections,1,'An automatic resume must skip the uncertain source before another download/inspection');
+});
+
 test("a timed-out YouTube original does not start another long YouTube download before the photo fallback", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));

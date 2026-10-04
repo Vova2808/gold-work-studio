@@ -44,6 +44,14 @@ import { documentaryCandidateKey, documentaryReuseIssue, documentaryVarietyIssue
 const rejectedCandidateFingerprint=(candidate:DocumentaryCandidate)=>createHash('sha256').update(JSON.stringify([
   candidate.provider,candidate.id,candidate.excerpt?.sourceChecksum,candidate.excerpt?.startSeconds,candidate.excerpt?.endSeconds
 ])).digest('hex');
+const uncertainFileFingerprint=(checksum:string)=>createHash('sha256').update(`uncertain-file:${checksum}`).digest('hex');
+function uncertainCandidateFingerprints(candidate:DocumentaryCandidate):string[]{
+  // Catalogued media reappears as local:<checksum> on the next run. Keep that
+  // alias quarantined alongside the provider ID before another file copy.
+  const checksum=/^local:([a-f0-9]{64})$/.exec(candidate.id)?.[1]
+    ??(candidate.localPath?/^([a-f0-9]{64})\./.exec(basename(candidate.localPath))?.[1]:undefined);
+  return [rejectedCandidateFingerprint(candidate),...(checksum?[uncertainFileFingerprint(checksum)]:[])];
+}
 
 /** A still has one view. For video only a short clip or an exact indexed
  * excerpt is safe to skip after a completed visual rejection; a long source
@@ -715,6 +723,20 @@ export class DocumentaryProjectService {
         const rejectionScope=createHash('sha256').update(JSON.stringify(['visual-rejection-v1',scope,project.aspectRatio,requirement.preferredKind,scene.documentary?.layout])).digest('hex');
         const rejectionPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'rejected-candidates.json');
         const rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
+        // A paid inspection with an unknown outcome is not a visual rejection:
+        // keep the source for manual review, but never download it again merely
+        // to rediscover the same pending/partial completion on auto resume.
+        const uncertainPath=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),'uncertain-candidates.json');
+        const uncertainCandidates=await readDocumentaryRejections(uncertainPath,rejectionScope);
+        const isUncertain=(candidate:DocumentaryCandidate)=>uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key));
+        const rememberUncertain=async(candidate:DocumentaryCandidate,checksum?:string)=>{
+          const keys=[...uncertainCandidateFingerprints(candidate),...(checksum?[uncertainFileFingerprint(checksum)]:[])];
+          if(keys.every(key=>uncertainCandidates.has(key)))return;
+          for(const key of keys)uncertainCandidates.add(key);
+          await saveDocumentaryRejections(uncertainPath,rejectionScope,uncertainCandidates).catch(()=>{
+            recordDiagnosticEvent('warn','documentary.search.uncertain-cache-write-failed',{projectId,sceneId:scene.id});
+          });
+        };
         const previousAttempts=attempts.get(scene.id);
         const tried=previousAttempts?.scope===scope?previousAttempts.keys:new Set<string>();
         attempts.set(scene.id,{scope,keys:tried});
@@ -752,7 +774,8 @@ export class DocumentaryProjectService {
               if (!sourceErrors.includes(message)) sourceErrors.push(message);
             }
             return result.candidates.filter(item => item.kind === kind && !tried.has(item.id)
-              &&!rejectedCandidates.has(rejectedCandidateFingerprint(item)));
+              &&!rejectedCandidates.has(rejectedCandidateFingerprint(item))
+              &&!isUncertain(item));
           };
           if (localOnly) {
             const current = (await this.projects.get(projectId,{omitCandidates:true}))!;
@@ -814,6 +837,7 @@ export class DocumentaryProjectService {
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
           const candidates = selectDocumentaryCandidates(pool.filter(candidate => !rejectedCandidates.has(rejectedCandidateFingerprint(candidate))
+            &&!isUncertain(candidate)
             &&!recoveredContext.scenes[scene.id]?.sourceKeys.includes(documentaryCandidateKey(candidate))
             && !documentaryKnownQualityIssue(candidate,latestProject,scene)
             && !tried.has(documentaryCandidateKey(candidate)) && !blockedCatalogs.has(documentaryCandidateKey(candidate)) && (candidate.localPath || candidate.provider !== "youtube" || this.youtube?.downloadAvailable?.() !== false)
@@ -902,6 +926,7 @@ export class DocumentaryProjectService {
               catch (error) {
                 if (error instanceof DocumentaryStorageUnavailableError || (error as NodeJS.ErrnoException)?.code === "ENOSPC") throw error;
                 if(error instanceof DocumentaryAnalysisError&&error.kind!=='pending')throw error;
+                if(error instanceof DocumentaryAnalysisError&&error.kind==='pending')await rememberUncertain(candidate);
                 const message = error instanceof Error ? error.message : String(error);
                 if (candidate.provider === "youtube" && documentaryDownloadTimedOut(error)) youtubeTimedOut = true;
                 await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: message } }));
@@ -929,6 +954,7 @@ export class DocumentaryProjectService {
                 } catch (error) {
                   if (!(error instanceof DocumentaryAnalysisError) || error.kind !== "pending") throw error;
                   blockedCatalogs.add(documentaryCandidateKey(candidate));
+                  await rememberUncertain(candidate,current.documentary?.checksum);
                   await changeScene(scene.id, latest => ({ ...latest, documentary: { ...latest.documentary!, autoError: error.message } }));
                   continue;
                 }
@@ -958,6 +984,7 @@ export class DocumentaryProjectService {
               } catch (error) {
                 if (!(error instanceof DocumentaryAnalysisError) || error.kind !== "pending") throw error;
                 if (error.purpose === "video-catalog") blockedCatalogs.add(documentaryCandidateKey(candidate));
+                await rememberUncertain(candidate,current.documentary?.checksum);
                 await changeScene(scene.id, latest => ({ ...latest, documentary: { ...latest.documentary!, autoError: error.message } }));
                 this.publish({ projectId, phase: "applying", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id,
                   message: `Кадр ${scene.order + 1}: пропускаю «${candidate.title.slice(0, 90)}» — прежний анализ не завершён. Проверяю другой источник без повторной оплаты этого запроса.` });
