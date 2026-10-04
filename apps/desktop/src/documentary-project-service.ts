@@ -16,7 +16,7 @@ import type { LocalProjectStorage } from "./local-project-storage.js";
 import type { StockClient } from "./stock-client.js";
 import { checksumFile } from "./effect-library.js";
 import { prepareDocumentaryMedia, prepareDocumentaryRangePoster,prepareDocumentaryDiagram } from "./documentary-media-cache.js";
-import { DocumentarySearch, documentarySearchUnavailable } from "./documentary-search.js";
+import { DocumentarySearch, documentarySearchUnavailable, documentaryFuseModelSuffix } from "./documentary-search.js";
 import { downloadDocumentaryFile, withDocumentaryDownloadBudget, documentaryDownloadTimedOut } from "./documentary-download.js";
 import { atomicWrite } from "./fs-utils.js";
 import { measureDocumentaryStage } from "./documentary-metrics.js";
@@ -294,7 +294,7 @@ export function documentaryDetailScore(candidate: DocumentaryCandidate, requirem
 export function documentaryConflictingModelTitle(candidate:DocumentaryCandidate,requirement:DocumentaryRequirement):boolean {
   if(candidate.kind!=='video'||candidate.provider!=='youtube'||candidate.localPath||(candidate.durationSeconds??0)<120
     ||requirement.preferredKind!=='image')return false;
-  const titleWords=candidate.title.match(/[A-Za-z][A-Za-z0-9-]*/g)??[];
+  const titleWords=documentaryFuseModelSuffix(candidate.title).match(/[A-Za-z][A-Za-z0-9-]*/g)??[];
   for(const entity of requirement.entities){
     const match=/^([A-Za-z]{3,})\s+([A-Za-z][A-Za-z0-9-]*\d[A-Za-z0-9-]*)$/i.exec(entity.trim());
     if(!match)continue;
@@ -310,7 +310,7 @@ export function documentaryConflictingModelTitle(candidate:DocumentaryCandidate,
 }
 
 export function selectDocumentaryCandidates(candidates: DocumentaryCandidate[], entities: string[], used: Set<string>, years: string[] = [], allowUnlabelledStockVideos = false, refinedPhotoQueries: string[] = [], requirement?: DocumentaryRequirement): DocumentaryCandidate[] {
-  const normalize = (text: string) => ` ${text.toLowerCase().normalize("NFKD").replace(/(?<=\p{L})\.(?=\p{L})/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+  const normalize = (text: string) => ` ${documentaryFuseModelSuffix(text).toLowerCase().normalize("NFKD").replace(/(?<=\p{L})\.(?=\p{L})/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
   const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => !["the", "of", "and", "inc"].includes(word));
   const titleMatches = (candidate: DocumentaryCandidate) => entities.some(entity => normalize(candidate.title).includes(normalize(entity)));
   const yearsMatched = (candidate: DocumentaryCandidate) => years.filter(year => `${candidate.title} ${candidate.description} ${candidate.capturedAt ?? ""}`.includes(year)).length;

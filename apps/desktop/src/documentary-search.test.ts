@@ -9,6 +9,17 @@ import {documentaryRetryAfter} from "./documentary-download.js";
 import {StockApiRateLimitError} from "./stock-client.js";
 import { DocumentaryDownloadWatchdog, DocumentaryYouTube, DocumentaryYouTubeDefinitionError, documentaryYouTubeFormatSelector, youtubeDocumentaryCandidates } from "./documentary-youtube.js";
 
+test('a split model suffix in an archive title matches the same machine, not a neighbouring code',()=>{
+  const source={kind:'video',provider:'youtube',description:'Race motorcycle review',concerns:[],rights:'licensed'} as unknown as DocumentaryCandidate;
+  const ranked=rankDocumentaryCandidates([
+    {...source,id:'exact',title:'Honda RC211 V Valentino Rossi 2002'},
+    {...source,id:'different',title:'Honda RC213 V race 2002'},
+  ],{query:'Honda RC211V',kind:'video',entities:['Honda RC211V']});
+  assert.equal(ranked[0]?.id,'exact');
+  assert.equal(ranked[0]?.match,'exact-metadata');
+  assert.equal(ranked[1]?.match,'unverified');
+});
+
 test('a daily YouTube quota refusal stops fresh queries but preserves other sources',async()=>{
   let calls=0,local=0;
   const search=new DocumentarySearch(undefined,globalThis.fetch,undefined,async()=>{local++;return [];},{search:async()=>{calls++;throw Error("YouTube 429: Quota exceeded for Search Queries per day");}});

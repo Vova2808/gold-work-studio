@@ -32,6 +32,10 @@ test('photo-first selection avoids a same-brand review of another explicit model
     description:'The R1 crossplane engine was inspired by the Yamaha M1 MotoGP racer',durationSeconds:163} as DocumentaryCandidate;
   assert.equal(documentaryConflictingModelTitle(candidate,requirement),true);
   assert.equal(documentaryConflictingModelTitle({...candidate,title:'Yamaha YZR-M1 engine technical film'},requirement),false);
+  const honda={...requirement,entities:['Honda RC211V']};
+  assert.equal(documentaryConflictingModelTitle({...candidate,title:'Honda RC211 V motorcycle documentary'},honda),false,
+    'A trailing model letter separated by a space is still the requested machine');
+  assert.equal(documentaryConflictingModelTitle({...candidate,title:'Honda RC213 V motorcycle documentary'},honda),true);
   assert.equal(documentaryConflictingModelTitle({...candidate,title:'Yamaha R1S versus M1 engine comparison'},requirement),false);
   assert.equal(documentaryConflictingModelTitle({...candidate,title:'MotoGP engine development archive'},requirement),false);
   assert.equal(documentaryConflictingModelTitle({...candidate,provider:'commons'},requirement),false);

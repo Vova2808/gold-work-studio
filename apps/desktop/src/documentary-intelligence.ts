@@ -33,6 +33,7 @@ import { effectFfmpeg } from "./effect-media.js";
 import { documentaryComparisonSubjects } from "./documentary-comparison.js";
 import type { NarrationTiming } from "./narration-timing.js";
 import { documentaryCandidateKey, documentarySampleTimes, documentaryVarietyIssue, usedDocumentaryRanges, unavailableDocumentaryRanges, sameDocumentarySource } from "./documentary-reuse.js";
+import { documentaryFuseModelSuffix } from "./documentary-search.js";
 import { availableVideoSegments, buildVideoCatalog, documentaryFrozenVideoRange, excludeVideoCatalogRange, readVideoFrames, DocumentaryBlackFrameError, type VideoCatalog } from "./documentary-video-catalog.js";
 import { directCatalogChoices, representativeCatalogChoices, documentaryDistraction, documentaryCatalogIdentityConflict, documentarySubjectPolicy, documentaryRangeEditorialPolicy, documentaryRangeEditorialIssue, documentaryIdentityReviewIssue, documentaryIdentityMatches, documentaryIdentityNames, documentaryGeneralActionIssue, documentaryActionReviewIssue, documentaryProjectionIssue, documentaryListsNamedSubjects } from "./documentary-visual-relevance.js";
 
@@ -348,7 +349,16 @@ export class DocumentaryIntelligence {
       // The source has already been described from real pixels. Asking another
       // model to rank its title adds no evidence. This is ONLY a shortlist hint;
       // the exact interval still passes the normal five-frame/identity/reuse check.
-      if (!catalog.pendingIds?.length && !exhausted && !noRelevantView && !noCameraEvidence && (direct || representative)) this.catalogShortlists.set(candidate, scope);
+      // A generic speed/track match is not proof of a named machine. Keep the
+      // source for normal discovery, but don't buy an early range check unless
+      // its title or a usable indexed range actually names the model code.
+      const modelCodes=scene.documentary?.requirement.identities?.length===1
+        ?scene.documentary.requirement.identities[0]!.name.split(/[^\p{L}\p{N}]+/u).filter(word=>word.length>=3&&/\d/u.test(word)&&/\p{L}/u.test(word))
+        :[];
+      const modelEvidence=` ${documentaryFuseModelSuffix([candidate.title,...ranges.flatMap(range=>[range.description,...range.entities])]
+        .join(' ')).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ')} `;
+      const exactModelShortcut=!modelCodes.length||modelCodes.some(code=>modelEvidence.includes(` ${code.normalize('NFKC').toLowerCase()} `));
+      if (!catalog.pendingIds?.length && !exhausted && !noRelevantView && !noCameraEvidence && exactModelShortcut && (direct || representative)) this.catalogShortlists.set(candidate, scope);
       return { candidate, score: exhausted || noRelevantView || noCameraEvidence ? -1 : actionExcerpt + direct * 4 + representative * 2 + (ranges.length ? 1 : 0) };
     }));
     return scored.filter(item => item.score >= 0).sort((a,b)=>b.score-a.score).map(item=>item.candidate);

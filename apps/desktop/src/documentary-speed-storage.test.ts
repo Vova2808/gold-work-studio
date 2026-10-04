@@ -136,6 +136,29 @@ test('an indexed montage about a different person is not an early paid shortcut 
   assert.equal((await intelligence.rankLocalCandidates(project,scene,[known])).length,1,'Actual indexed person evidence remains eligible');
 });
 
+test('generic track footage stays available but does not receive an early paid shortcut for a named machine',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-model-catalog-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const checksum='9'.repeat(64),directory=join(root,'catalog',checksum);await mkdir(directory,{recursive:true});
+  const segments=Array.from({length:24},(_,id)=>({id,start:id*8,end:id*8+8,sample:id*8+4,camera:true,usable:true,
+    entities:[],description:id===8?'Onboard camera speed display during MotoGP race straight':'Motorcycle riders cornering on track'}));
+  await writeFile(join(directory,'catalog-v1.json'),JSON.stringify({version:1,checksum,duration:520,windows:Array.from({length:65}),segments}));
+  const source={id:`local:${checksum}`,kind:'video',title:'Valentino Rossi best moments',description:'Motorcycle racing highlights'} as DocumentaryCandidate;
+  const scene={id:'honda-speed',durationSeconds:4,narration:'On the straights the Honda had the edge in top speed.',documentary:{requirement:{
+    entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:[]}],years:[],
+    queries:['Honda RC211V top speed straight MotoGP footage'],detail:'top speed on the straight'}}} as unknown as Scene;
+  const project={id:'same',scenes:[scene]} as never;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{throw Error('No paid range check');}},
+    id=>join(root,id),async()=>{},join(root,'catalog'));
+  const ranked=await intelligence.rankLocalCandidates(project,scene,[source]);
+  assert.deepEqual(ranked,[source],'The source can still compete in normal discovery');
+  assert.deepEqual(intelligence.cataloguedCandidates(project,scene,ranked),[],'A speed keyword cannot establish RC211V identity');
+  const named={...source,title:'Honda RC211V race footage'};
+  assert.deepEqual(intelligence.cataloguedCandidates(project,scene,await intelligence.rankLocalCandidates(project,scene,[named])),[named],
+    'An explicitly named source keeps the fast catalog path');
+  const split={...source,title:'Honda RC211 V race footage'};
+  assert.deepEqual(intelligence.cataloguedCandidates(project,scene,await intelligence.rankLocalCandidates(project,scene,[split])),[split]);
+});
+
 test('a distributed non-camera catalog avoids paid reuse ranking but does not reject mixed or unknown sources',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-non-camera-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const checksum='c'.repeat(64),directory=join(root,'catalog',checksum);await mkdir(directory,{recursive:true});

@@ -47,7 +47,7 @@ export function documentaryKnownQualityIssue(candidate:DocumentaryCandidate,proj
     &&!/\breal\s*(?:vs\.?|versus)\b|\b(?:real life|real footage)\b.*\bcomparison\b|сравнен\S*\s+с\s+реальн/iu.test(metadata))
     return 'Источник помечен как запись видеоигры. Для документального кадра нужна натурная съёмка.';
   if(!candidate.width||!candidate.height||!(['commons','pexels','pixabay'].includes(candidate.provider)
-    || candidate.provider==='local'&&Boolean(candidate.localPath)))return;
+    || Boolean(candidate.localPath)))return;
   return documentarySourceQualityIssue(candidate,project.aspectRatio,
     documentaryQualityPresentation(scene)??(documentaryAutoPortraitTemplate(scene,candidate,project.aspectRatio)?'portrait-card':undefined));
 }

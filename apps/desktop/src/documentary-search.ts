@@ -29,7 +29,10 @@ export function documentaryLicense(value: unknown): { url: string; label: string
   } catch { return { url: "", label: "Условия не подтверждены", rights: "unknown" }; }
 }
 const canonicalWords = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-const metadataHas = (text: string, term: string) => ` ${canonicalWords(text)} `.includes(` ${canonicalWords(term)} `);
+/** Archive titles often split a trailing model letter: "RC211 V" is RC211V. */
+export const documentaryFuseModelSuffix = (value: string): string => value.replace(/\b([A-Za-z]{1,5}\d{2,})\s+([A-Za-z])\b/g, "$1$2");
+const metadataHas = (text: string, term: string) => ` ${canonicalWords(documentaryFuseModelSuffix(text))} `
+  .includes(` ${canonicalWords(documentaryFuseModelSuffix(term))} `);
 export function documentaryExactQuery(input: DocumentarySearchInput): string {
   let query = input.query.replace(/[“”]/g, '"').trim();
   for (const entity of [...(input.entities ?? [])].sort((a, b) => b.length - a.length)) {
