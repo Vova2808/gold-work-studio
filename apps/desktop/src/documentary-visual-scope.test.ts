@@ -31,9 +31,10 @@ test('only a grounded abstract slice becomes a thematic stock shot; exact and in
   const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
     calls++;
     const ids=(JSON.parse(input).scenes as Array<{id:string}>).map(item=>item.id);
-    assert.deepEqual(ids,['s1','s4','s5']);
+    assert.deepEqual(ids,['s1','s2','s4','s5']);
     return JSON.stringify({scenes:[
       {id:'s1',scope:'illustrative',quote:lines[1],query:'motorcycle racing corner onboard'},
+      {id:'s2',scope:'exact',quote:lines[2],query:'Valentino Rossi race footage'},
       {id:'s4',scope:'illustrative',quote:'words absent from original',query:'motorcycle racing mistake'},
       {id:'s5',scope:'illustrative',quote:lines[5],query:'Valentino Rossi racing onboard'},
     ]});
@@ -76,18 +77,43 @@ test('a short thematic stock video found by a concise query reaches pixel review
     illustrationQuery:'motorcycle engine racing'}),racing);
 });
 
-test('an explicit maker name keeps its inherited motorcycle model exact',async()=>{
+test('an explicit maker name can remain exact after scene-level classification',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-maker-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const narration="Honda's stated concept for the whole bike was ease of riding.";
   const requirement={text:narration,entities:['Honda RC211V'],identities:[{name:'Honda RC211V',aliases:['RC211V']}],
     identityContextVersion:3,years:[],queries:['Honda RC211V riding'],plannedBy:'semantic'} as DocumentaryRequirement;
   const scene={id:'honda',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
-  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
-    throw Error('Explicit subject must not need paid scope classification');
-  }},()=>'.');
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>
+    JSON.stringify({scenes:[{id:'honda',scope:'exact',quote:narration,query:'Honda RC211V riding'}]})},()=>root);
   let result:DocumentaryRequirement|undefined;
   await intelligence.resolveVisualScopes({id:'fixture-honda',scenes:[scene]} as Project,[scene],async batch=>{result=batch.get(scene.id);});
   assert.equal(result?.visualScope,'exact');
+  assert.equal(result?.visualScopeVersion,2);
   assert.equal(result?.identities?.[0]?.name,'Honda RC211V');
+});
+
+test('unfinished old exact scope is reconsidered; current exact and approved scenes stay untouched',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-upgrade-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const narration='Dorna helped bring motorcycle racing to a wider audience.';
+  const requirement={text:narration,entities:['Dorna Sports'],identities:[{name:'Dorna Sports',aliases:[]}],
+    identityContextVersion:3,visualScope:'exact',years:[],queries:['Dorna Sports MotoGP'],plannedBy:'semantic'} as DocumentaryRequirement;
+  const old={id:'old',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  const current={...old,id:'current',documentary:{...old.documentary!,requirement:{...requirement,visualScopeVersion:2}}} as Scene;
+  const approved={...old,id:'approved',documentary:{...old.documentary!,verified:true}} as Scene;
+  const project={id:'scope-upgrade',scenes:[old,current,approved]} as Project;
+  let calls=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
+    calls++;assert.deepEqual(JSON.parse(input).scenes.map((row:{id:string})=>row.id),['old']);
+    return JSON.stringify({scenes:[{id:'old',scope:'illustrative',quote:narration,
+      query:'motorcycle racing track and riders'}]});
+  }},()=>root);
+  const saved=new Map<string,DocumentaryRequirement>();
+  await intelligence.resolveVisualScopes(project,project.scenes,async batch=>{for(const [id,value] of batch)saved.set(id,value);});
+  assert.equal(calls,1);
+  assert.deepEqual([...saved.keys()],['old']);
+  assert.equal(saved.get('old')?.visualScope,'illustrative');
+  assert.equal(saved.get('old')?.visualScopeVersion,2);
+  assert.deepEqual(saved.get('old')?.identities,[]);
 });
 
 test('a name in the preceding slice does not force a generic video close-up of that exact model',async t=>{

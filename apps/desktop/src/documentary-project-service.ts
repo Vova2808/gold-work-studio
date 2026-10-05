@@ -676,13 +676,28 @@ export class DocumentaryProjectService {
     this.downloadControllers.set(projectId, new AbortController());
     if (waitForNarration) this.narrationWaits.set(projectId, waitForNarration);
     const run = (async () => {
+      const mergeRetried = (previous:AutoStockSelectionResult,retried:AutoStockSelectionResult,ids:string[]):AutoStockSelectionResult => {
+        const merged=new Map(previous.failures.map(failure=>[failure.sceneId,failure]));
+        for(const id of ids)merged.delete(id);
+        for(const failure of retried.failures)merged.set(failure.sceneId,failure);
+        for(const scene of retried.project.scenes){
+          if(scene.documentary?.verified&&(scene.documentary.layout!=="compare"||scene.documentary.comparison))merged.delete(scene.id);
+        }
+        return {...previous,project:retried.project,selected:previous.selected+retried.selected,
+          skipped:previous.skipped+retried.skipped,failed:merged.size,failures:[...merged.values()]};
+      };
       const selectCurrent = async () => {
       const attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>();
       const session=new DocumentarySelectionSession();
       await this.repairFailedIdentities(projectId, options.sceneIds);
       let result = await this.selectAll(projectId, options, false, attempts,session);
-      if (result.failed && !this.stopRequested.has(projectId) && await this.repairFailedIdentities(projectId, options.sceneIds))
-        result = await this.selectAll(projectId, options, false, attempts,session);
+      if (result.failed && !this.stopRequested.has(projectId)) {
+        const repaired=await this.repairFailedIdentities(projectId,options.sceneIds);
+        if(repaired.length){
+          const retried=await this.selectAll(projectId,{sceneIds:repaired},false,attempts,new DocumentarySelectionSession());
+          result=mergeRetried(result,retried,repaired);
+        }
+      }
       if (!result.failed || !this.intelligence?.refineQueries || this.stopRequested.has(projectId)) return result;
       const failed = result.project.scenes.filter(scene => scene.includeInAssembly !== false && (!options.sceneIds || options.sceneIds.includes(scene.id))
         && scene.documentary && !scene.documentary.verified && !scene.documentary.pinned && !scene.documentary.requirement.searchRefined
@@ -692,24 +707,29 @@ export class DocumentaryProjectService {
         // spending a paid refinement on an outage.
         && (!documentarySearchUnavailable(scene.documentary.searchError)
           || attempts.get(scene.id)?.found)
-        && (session.canAttempt(scene.id,'video')||session.canAttempt(scene.id,'image'))
+        // The first pass may have exhausted its per-scene budget. Query
+        // repair gets its own bounded retry; otherwise this filter suppresses
+        // the repair precisely for the scenes that need it most.
         && !/pending|partial|неопредел|оплачен|ожидает ответа/i.test(scene.documentary.autoError ?? '')).slice(0, 24);
       if (!failed.length) return result;
       this.publish({ projectId, phase: 'preparing', completed: result.total - result.failed, total: result.total, selected: result.selected, skipped: result.skipped, failed: result.failed,
         message: `Уточняю поисковые запросы ${failed.length} неподтверждённых кадров; готовые материалы сохранены…` });
       const queries = await this.intelligence.refineQueries(result.project, failed);
       if (this.stopRequested.has(projectId)) throw new DOMException('Подбор остановлен пользователем', 'AbortError');
-      let changed = false;
+      const changedIds:string[]=[];
       await this.projects.mutate(projectId, current => ({ scenes: current.scenes.map(scene => {
         const before = failed.find(item => item.id === scene.id), next = queries.get(scene.id), doc = scene.documentary;
         if (!before || !next?.length || !doc || doc.verified || doc.pinned || scene.narration !== before.narration
           || JSON.stringify(doc.requirement) !== JSON.stringify(before.documentary!.requirement)) return scene;
-        changed ||= JSON.stringify(next) !== JSON.stringify(doc.requirement.queries);
+        if(JSON.stringify(next)!==JSON.stringify(doc.requirement.queries))changedIds.push(scene.id);
         return { ...scene, documentary: { ...doc, requirement: { ...doc.requirement, queries: next, searchRefined: true } } };
       }) }),{candidateSceneIds:[]});
-      // Exactly one second pass. The persisted marker prevents repeated paid
-      // rewrites on resume; source/inspection checkpoints still guard each call.
-      return changed ? this.selectAll(projectId, options, false, attempts,session) : result;
+      // Search only rewritten failures with a fresh attempt budget. The old
+      // session was exhausted by the first pass; paid checks remain guarded by
+      // their persisted request checkpoints and candidate fingerprints.
+      if(!changedIds.length)return result;
+      const retried=await this.selectAll(projectId,{sceneIds:changedIds},false,attempts,new DocumentarySelectionSession());
+      return mergeRetried(result,retried,changedIds);
       };
       let result = await selectCurrent();
       // A temporary source refusal is not a verdict on the scene. Keep the
@@ -730,14 +750,7 @@ export class DocumentaryProjectService {
         const ids = temporary.map(failure => failure.sceneId);
         const retried = await this.selectAll(projectId, { sceneIds: ids }, false,
           new Map(), new DocumentarySelectionSession());
-        const merged = new Map(result.failures.map(failure => [failure.sceneId, failure]));
-        for (const id of ids) merged.delete(id);
-        for (const failure of retried.failures) merged.set(failure.sceneId, failure);
-        for (const scene of retried.project.scenes) {
-          if (scene.documentary?.verified && (scene.documentary.layout !== "compare" || scene.documentary.comparison)) merged.delete(scene.id);
-        }
-        result = { ...result, project: retried.project, selected: result.selected + retried.selected,
-          skipped: result.skipped + retried.skipped, failed: merged.size, failures: [...merged.values()] };
+        result=mergeRetried(result,retried,ids);
       }
       return result;
     })(); this.autoRuns.set(projectId, run);
@@ -752,27 +765,27 @@ export class DocumentaryProjectService {
     } finally { this.autoRuns.delete(projectId); this.downloadControllers.delete(projectId); this.narrationWaits.delete(projectId); }
   }
 
-  private async repairFailedIdentities(projectId: string, sceneIds?: string[]): Promise<boolean> {
-    if (!this.intelligence?.resolveIdentities) return false;
+  private async repairFailedIdentities(projectId: string, sceneIds?: string[]): Promise<string[]> {
+    if (!this.intelligence?.resolveIdentities) return [];
     const project = await this.projects.get(projectId);
-    if (!project) return false;
+    if (!project) return [];
     const failed = project.scenes.filter(scene => scene.includeInAssembly !== false && (!sceneIds || sceneIds.includes(scene.id))
       && !scene.documentary?.verified && !scene.documentary?.pinned && scene.documentary?.requirement.identities?.length
       && !documentarySearchUnavailable(scene.documentary.searchError)
       && !scene.documentary.requirement.identityRepairVersion
       && /именованн|identity|identifiedEntity|requiredIdentity/i.test(scene.documentary.autoError ?? ''));
-    if (!failed.length) return false;
-    let changed = false;
+    if (!failed.length) return [];
+    const changedIds:string[]=[];
     await this.intelligence.resolveIdentities(project, failed, async plan => {
       await this.projects.mutate(projectId, current => ({scenes:current.scenes.map(scene => {
         const before=failed.find(item=>item.id===scene.id), next=plan.get(scene.id), doc=scene.documentary;
         if (!before || !next || !doc || doc.verified || doc.pinned || scene.narration!==before.narration
           || JSON.stringify(doc.requirement)!==JSON.stringify(before.documentary!.requirement)) return scene;
-        changed ||= JSON.stringify(next.identities)!==JSON.stringify(doc.requirement.identities);
+        if(JSON.stringify(next.identities)!==JSON.stringify(doc.requirement.identities))changedIds.push(scene.id);
         return {...scene,documentary:{...doc,requirement:{...next,identityRepairVersion:1}}};
       })}),{candidateSceneIds:[]});
     }, {shouldStop:()=>this.stopRequested.has(projectId),progress:message=>this.publish({projectId,phase:'preparing',completed:project.scenes.filter(s=>s.documentary?.verified).length,total:project.scenes.length,selected:0,skipped:0,failed:failed.length,message})});
-    return changed;
+    return changedIds;
   }
 
   private async selectAll(projectId: string, options: AutoStockSelectionOptions, videoOnly = false, attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>(),session=new DocumentarySelectionSession()): Promise<AutoStockSelectionResult> {
@@ -782,7 +795,8 @@ export class DocumentaryProjectService {
     if (!project || waitForNarration && project.scenes.some(scene => scene.includeInAssembly !== false && scene.documentary?.requirement.plannedBy !== "semantic")) throw new Error("Сначала подготовьте поисковой план");
     const visualScopeScenes=project.scenes.filter(scene=>(!options.sceneIds||options.sceneIds.includes(scene.id))
       &&scene.includeInAssembly!==false&&scene.documentary?.requirement.identityContextVersion===3
-      &&scene.documentary.requirement.identities?.length&&!scene.documentary.requirement.visualScope
+      &&scene.documentary.requirement.identities?.length
+      &&(!scene.documentary.requirement.visualScope || scene.documentary.requirement.visualScope==='exact' && scene.documentary.requirement.visualScopeVersion!==2)
       &&!scene.documentary.verified&&!scene.documentary.pinned);
     if(visualScopeScenes.length&&this.intelligence?.resolveVisualScopes){
       const readyScript=project.videoBrief?.readyScript;

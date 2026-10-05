@@ -59,10 +59,13 @@ export interface DocumentaryRequirement {
   /** A thematic stock illustration is allowed only after a grounded scope decision.
    * The original story referent is retained separately for audit and re-planning. */
   visualScope?: "exact" | "illustrative";
+  /** Re-evaluate unfinished legacy scopes when the scene-level illustration policy changes. */
+  visualScopeVersion?: 2;
   visualScopeQuote?: string;
   illustrationQuery?: string;
   narrativeEntities?: string[];
   narrativeIdentities?: Array<{ name: string; aliases: string[] }>;
+  narrativeYears?: string[];
   narrativeDetail?: string;
   narrativeQueries?: string[];
   years: string[];

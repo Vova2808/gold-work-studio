@@ -8,6 +8,7 @@ import { createVoiceCalibration } from "@gold-work/shared";
 import { prepareDocumentaryScript } from "./documentary-plan.js";
 import { DocumentarySearch } from "./documentary-search.js";
 import { DocumentaryProjectService } from "./documentary-project-service.js";
+import type {AutoStockSelectionResult,Project,Scene} from '@gold-work/shared';
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { effectFfmpeg } from "./effect-media.js";
 import { missingAssemblyInputs } from "./assembly-readiness.js";
@@ -50,4 +51,37 @@ test("local Stock import owns originals and metadata; review gates export and re
   assert.deepEqual((await service.autoSelect(project.id)).failures, []);
   await projects.mutate(project.id, () => ({ status: "generating" }));
   await assert.rejects(service.importMaterial(project.id, sceneId, { path: image, pageUrl: "", title: "Replacement", author: "", license: "", licenseUrl: "" }), /остановите/);
+});
+
+test('query repair revisits only changed failed scenes with a fresh attempt budget',async()=>{
+  const scene=(id:string,order:number,verified=false):Scene=>({id,order,title:id,imagePrompt:'',animationPrompt:'',
+    durationSeconds:5,status:'ready',narration:`Motorcycle ${id}`,
+    includeInAssembly:true,documentary:{verified,pinned:false,requirement:{text:`Motorcycle ${id}`,
+      identities:[],entities:['motorcycle'],years:[],queries:[`motorcycle ${id}`],plannedBy:'semantic'}}} as unknown as Scene);
+  let project={id:'resume-scope',scenes:[scene('ready',0,true),scene('changed',1),scene('unchanged',2)]} as Project;
+  const projects={get:async()=>project,mutate:async(_id:string,change:(current:Project)=>Partial<Project>)=>{
+    project={...project,...change(project)};return project;
+  }};
+  const calls:Array<{ids?:string[];session:unknown}>=[];
+  const intelligence={refineQueries:async()=>new Map([['changed',['motorcycle racing track']]])};
+  const service=new DocumentaryProjectService(projects as never,{} as LocalProjectStorage,
+    {} as DocumentarySearch,'',{} as never,()=>{},intelligence as never);
+  (service as unknown as {selectAll:(id:string,options:{sceneIds?:string[]},videoOnly:boolean,attempts:unknown,session:unknown)=>Promise<AutoStockSelectionResult>})
+    .selectAll=async(_id,options,_videoOnly,_attempts,session)=>{
+      calls.push({ids:options.sceneIds,session});
+      if(!options.sceneIds)return {project,total:3,selected:0,skipped:1,failed:2,failures:[
+        {sceneId:'changed',sceneNumber:2,category:'no-results',message:'not found'},
+        {sceneId:'unchanged',sceneNumber:3,category:'no-results',message:'not found'}]};
+      assert.deepEqual(options.sceneIds,['changed']);
+      project={...project,scenes:project.scenes.map(item=>item.id==='changed'
+        ?{...item,documentary:{...item.documentary!,verified:true}}:item)};
+      return {project,total:1,selected:1,skipped:0,failed:0,failures:[]};
+    };
+  const result=await service.autoSelect(project.id);
+  assert.equal(calls.length,2);
+  assert.notEqual(calls[0]!.session,calls[1]!.session);
+  assert.equal(result.total,3);
+  assert.equal(result.selected,1);
+  assert.equal(result.failed,1);
+  assert.deepEqual(result.failures.map(item=>item.sceneId),['unchanged']);
 });
