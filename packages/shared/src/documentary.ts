@@ -61,6 +61,8 @@ export interface DocumentaryRequirement {
   visualScope?: "exact" | "illustrative";
   /** Re-evaluate unfinished legacy scopes when the scene-level illustration policy changes. */
   visualScopeVersion?: 2 | 3;
+  /** One exhausted-exact-search fallback decision. It never asserts that thematic footage depicts the event. */
+  illustrationFallbackVersion?: 1;
   visualScopeQuote?: string;
   illustrationQuery?: string;
   narrativeEntities?: string[];

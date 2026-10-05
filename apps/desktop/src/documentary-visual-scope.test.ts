@@ -10,6 +10,7 @@ import {documentarySearchQueries,documentaryThematicStockProbe} from './document
 import {applyDocumentaryRequirement} from './documentary-visual-relevance.js';
 import {documentaryContextApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
 import {AnyModelCompletionUncertainError} from './anymodel-client.js';
+import {documentaryIllustrationFallback} from './documentary-illustration-fallback.js';
 
 test('only a grounded abstract slice becomes a thematic stock shot; exact and invalid decisions stay strict',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-visual-scope-'));
@@ -246,4 +247,62 @@ test('changing an approved thematic visual target revokes only that saved approv
   assert.equal(documentarySavedContextIssue({...project,scenes:[saved]},saved),undefined);
   const changed={...saved,documentary:{...saved.documentary!,requirement:{...requirement,illustrationQuery:'motorcycle garage'}}};
   assert.match(documentarySavedContextIssue({...project,scenes:[changed]},changed)!,/изменился/);
+});
+
+test('failed exact archive may use labelled generic video while preserving the original claim',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-fallback-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const narration='In 2004, Valentino Rossi won the motorcycle race at Phillip Island.';
+  const requirement={text:narration,entities:['Valentino Rossi'],identities:[{name:'Valentino Rossi',aliases:['Rossi']}],
+    years:['2004'],queries:['Valentino Rossi Phillip Island 2004'],identityContextVersion:3,
+    visualScope:'exact',visualScopeVersion:3,plannedBy:'semantic'} as DocumentaryRequirement;
+  const scene={id:'race',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  const project={id:'fallback',scenes:[scene]} as Project;
+  let calls=0,result:DocumentaryRequirement|undefined;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    calls++;return JSON.stringify({scenes:[{id:'race',safe:true,quote:'Valentino Rossi won the motorcycle race',
+      query:'motorcycle racing on a circuit'}]});
+  }},()=>root);
+  await intelligence.resolveIllustrationFallbacks(project,[scene],async batch=>{result=batch.get('race');});
+  assert.equal(calls,1);
+  assert.equal(result?.visualScope,'illustrative');
+  assert.equal(result?.illustrationFallbackVersion,1);
+  assert.deepEqual(result?.identities,[]);
+  assert.deepEqual(result?.years,[]);
+  assert.equal(result?.narrativeIdentities?.[0]?.name,'Valentino Rossi');
+  assert.deepEqual(result?.narrativeYears,['2004']);
+  assert.equal(documentaryGeneralIllustration(applyDocumentaryRequirement(scene,result!)),true);
+  assert.equal(result?.preferredKind,'video');
+});
+
+test('unsafe fallback, invented fact, named stock query and physical part stay exact',()=>{
+  const narration='In 2004 Rossi won the race.';
+  const requirement={text:narration,identities:[{name:'Rossi',aliases:[]}],entities:['Rossi'],years:['2004'],
+    queries:['Rossi race'],visualScope:'exact',visualScopeVersion:3} as DocumentaryRequirement;
+  const scene={narration,documentary:{requirement}} as Scene;
+  for(const row of [
+    {safe:false,quote:'Rossi won the race',query:'motorcycle racing circuit'},
+    {safe:true,quote:'Rossi lost the race',query:'motorcycle racing circuit'},
+    {safe:true,quote:'Rossi won the race',query:'Rossi motorcycle racing circuit'},
+    {safe:true,quote:'Rossi won the race',query:'motorcycle racing in 2004'},
+  ])assert.equal(documentaryIllustrationFallback(scene,row).visualScope,'exact');
+  const detail={...scene,narration:'The crankshaft rotates inside the engine.',documentary:{...scene.documentary!,requirement:{...requirement,text:'The crankshaft rotates inside the engine.'}}};
+  assert.equal(documentaryIllustrationFallback(detail as Scene,{safe:true,quote:'crankshaft rotates inside the engine',
+    query:'motorcycle engine close view'}).visualScope,'exact');
+});
+
+test('unknown fallback batch is not submitted again on resume',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-fallback-pending-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const narration='In 2004, a motorcycle race changed the season.';
+  const requirement={text:narration,identities:[{name:'Rossi',aliases:[]}],entities:['Rossi'],years:['2004'],
+    queries:['Rossi 2004 race'],visualScope:'exact',visualScopeVersion:3} as DocumentaryRequirement;
+  const scene={id:'pending-fallback',order:0,narration,documentary:{verified:false,pinned:false,requirement}} as Scene;
+  const project={id:'pending-fallback',scenes:[scene]} as Project;
+  let calls=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    calls++;throw new AnyModelCompletionUncertainError('Connection ended after submission');
+  }},()=>root);
+  const save=async()=>{throw Error('unknown response must not be accepted');};
+  await intelligence.resolveIllustrationFallbacks(project,[scene],save);
+  await intelligence.resolveIllustrationFallbacks(project,[scene],save);
+  assert.equal(calls,1);
 });

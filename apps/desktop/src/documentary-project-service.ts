@@ -563,7 +563,7 @@ export class DocumentaryProjectService {
   constructor(private readonly projects: Pick<ProjectService, "get" | "mutate"> & Partial<Pick<ProjectService, "list">>, private readonly storage: LocalProjectStorage,
     private readonly searcher: DocumentarySearch, private readonly materialRoot: string, private readonly stock: Pick<StockClient, "download"> & Partial<Pick<StockClient, "downloadToFile">>,
     private readonly publish: (progress: AutoStockProgress) => void = () => {},
-    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "inspectPreviewForScene" | "resolveIdentities" | "resolveVisualScopes" | "prepareSource" | "refineQueries">>,
+    private readonly intelligence?: Pick<DocumentaryIntelligence, "plan" | "inspect" | "available"> & Partial<Pick<DocumentaryIntelligence, "rankCandidates" | "rankLocalCandidates" | "cataloguedCandidates" | "inspectForSelection" | "inspectPreview" | "inspectPreviewForScene" | "resolveIdentities" | "resolveVisualScopes" | "resolveIllustrationFallbacks" | "prepareSource" | "refineQueries">>,
     private readonly library?: EffectLibrary,
     private readonly youtube?: Pick<DocumentaryYouTube, "download"> & Partial<Pick<DocumentaryYouTube, "downloadAvailable"|"preview">>) {}
 
@@ -714,6 +714,37 @@ export class DocumentaryProjectService {
         return {...previous,project:retried.project,selected:previous.selected+retried.selected,
           skipped:previous.skipped+retried.skipped,failed:merged.size,failures:[...merged.values()]};
       };
+      const prepareIllustrationFallbacks=async(previouslyFailedOnly:boolean):Promise<string[]>=>{
+        if(options.sceneIds||!this.intelligence?.resolveIllustrationFallbacks||this.stopRequested.has(projectId))return [];
+        const project=await this.projects.get(projectId,{omitCandidates:true});
+        if(!project)return [];
+        const failed=project.scenes.filter(scene=>scene.includeInAssembly!==false&&scene.documentary
+          &&!scene.documentary.verified&&!scene.documentary.pinned
+          &&scene.documentary.requirement.visualScope==='exact'
+          &&scene.documentary.requirement.visualScopeVersion===3
+          &&!scene.documentary.requirement.illustrationFallbackVersion
+          &&scene.documentary.layout!=='compare'
+          &&(!previouslyFailedOnly||scene.documentary.requirement.searchRefined&&Boolean(scene.documentary.autoError))
+          &&!/pending|partial|неопредел|оплачен|ожидает ответа/i.test(scene.documentary.autoError??''));
+        if(!failed.length)return [];
+        const changedIds:string[]=[];
+        await this.intelligence.resolveIllustrationFallbacks(project,failed,async plan=>{
+          await this.projects.mutate(projectId,current=>({scenes:current.scenes.map(scene=>{
+            const before=failed.find(item=>item.id===scene.id),next=plan.get(scene.id),doc=scene.documentary;
+            if(!before||!next||!doc||doc.verified||doc.pinned||scene.narration!==before.narration
+              ||JSON.stringify(doc.requirement)!==JSON.stringify(before.documentary!.requirement))return scene;
+            if(next.visualScope==='illustrative')changedIds.push(scene.id);
+            const updated=applyDocumentaryRequirement(scene,next);
+            if(next.visualScope!=='illustrative'||!updated.documentary)return updated;
+            const graphic=updated.documentary.motionGraphic;
+            return {...updated,documentary:{...updated.documentary,
+              motionGraphic:graphic?.origin==='automatic'?undefined:graphic,
+              template:updated.documentary.templateOrigin==='automatic'?undefined:updated.documentary.template,
+              templateOrigin:updated.documentary.templateOrigin==='automatic'?undefined:updated.documentary.templateOrigin}};
+          })}),{candidateSceneIds:[]});
+        },{shouldStop:()=>this.stopRequested.has(projectId),progress:message=>this.publish({projectId,phase:'preparing',completed:project.scenes.filter(s=>s.documentary?.verified).length,total:project.scenes.length,selected:0,skipped:0,failed:failed.length,message})});
+        return changedIds;
+      };
       const selectCurrent = async () => {
       const attempts = new Map<string,{scope:string;keys:Set<string>;found:boolean}>();
       const session=new DocumentarySelectionSession();
@@ -759,6 +790,7 @@ export class DocumentaryProjectService {
       const retried=await this.selectAll(projectId,{sceneIds:changedIds},false,attempts,new DocumentarySelectionSession());
       return mergeRetried(result,retried,changedIds);
       };
+      await prepareIllustrationFallbacks(true);
       let result = await selectCurrent();
       // A temporary source refusal is not a verdict on the scene. Keep the
       // user-started production alive and retry only those scenes after the
@@ -786,6 +818,13 @@ export class DocumentaryProjectService {
             selected:result.selected,skipped:result.skipped,failed:result.failed,
             message:'Два повтора после восстановления источников не дали новых подтверждённых кадров. Готовое сохранено; дальнейший такой же поиск не расходуется.'});
           break;
+        }
+      }
+      if(result.failed&&!this.stopRequested.has(projectId)){
+        const fallbackIds=await prepareIllustrationFallbacks(false);
+        if(fallbackIds.length){
+          const retried=await this.selectAll(projectId,{sceneIds:fallbackIds},false,new Map(),new DocumentarySelectionSession());
+          result=mergeRetried(result,retried,fallbackIds);
         }
       }
       return result;
@@ -954,7 +993,8 @@ export class DocumentaryProjectService {
         const videos=documentaryGeneralIllustration(scene)
           ?[...remoteStages('video'),localVideo]:[localVideo,...remoteStages('video')];
         const photos = remoteStages("image");
-        const stages = videoOnly ? videos : photoFirst.has(scene.id)||documentaryPhotoFirstScenes(project).has(scene.id) ? [...photos, ...videos] : [...videos, ...photos];
+        const stages = videoOnly||requirement.illustrationFallbackVersion&&requirement.visualScope==='illustrative'
+          ? videos : photoFirst.has(scene.id)||documentaryPhotoFirstScenes(project).has(scene.id) ? [...photos, ...videos] : [...videos, ...photos];
         // Search rewrites change where we look, not what already-inspected
         // pixels show. Carry attempts across passes of this run. A changed
         // narrative target gets a fresh set; later manual resumes remain allowed.
@@ -1338,7 +1378,7 @@ export class DocumentaryProjectService {
                   trimStartSeconds: review.trimStartSeconds ?? 0, trimEndSeconds: review.trimEndSeconds,
                   documentary: { ...latest.documentary!, selected: current.documentary!.selected, checksum: current.documentary!.checksum, visualHash: current.documentary!.visualHash,
                     ...(portraitTemplate?{template:portraitTemplate,templateOrigin:'automatic' as const}:{}),
-                    pinned: false, illustrative: false, verified: true, visualReview: review, reviewNote: review.reason, autoError: undefined } };
+                    pinned: false, illustrative: requirement.visualScope==='illustrative', verified: true, visualReview: review, reviewNote: review.reason, autoError: undefined } };
               });
               if(!accepted&&inspection.review.status==='rejected'&&documentaryCacheableVisualRejection(candidate)){
                 rejectedCandidates.add(rejectedCandidateFingerprint(candidate));

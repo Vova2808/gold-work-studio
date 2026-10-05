@@ -55,7 +55,7 @@ export interface DocumentaryInputScene {
   trimStartSeconds?: number; trimEndSeconds?: number; playbackRate?: number; transition?: "none" | "fade" | "mix"; transitionDurationSeconds?: number;
   autoTransition?: "none" | "fade" | "mix"; autoTransitionDurationSeconds?: number;
   kenBurnsDirection?: "auto" | "in" | "out" | "off"; autoKenBurnsDirection?: "in" | "out" | "pan-left" | "pan-right"; kenBurnsZoom?: number; autoKenBurnsZoom?: number; fadeEdges?: boolean;
-  documentary?: { layout: "full" | "contain" | "compare"; template?: string; templateMotion?: { amountPercent: number; curve: "smooth" | "dramatic" }; motionGraphic?: DocumentaryMotionGraphic; cuts?: DocumentaryVisualCut[]; texts?: DocumentaryTextClip[]; illustrative?: boolean; caption: DocumentaryCaption; effects: DocumentaryLayer[];
+  documentary?: { layout: "full" | "contain" | "compare"; template?: string; templateMotion?: { amountPercent: number; curve: "smooth" | "dramatic" }; motionGraphic?: DocumentaryMotionGraphic; cuts?: DocumentaryVisualCut[]; texts?: DocumentaryTextClip[]; illustrative?: boolean; illustrationFact?: string; requirement?: {visualScopeQuote?:string;illustrationFallbackVersion?:1}; caption: DocumentaryCaption; effects: DocumentaryLayer[];
     transitionStyle?: 'clean'|'blur'; autoTransitionStyle?: 'clean'|'blur'; templateTiming?: {startSeconds:number;durationSeconds:number};
     comparison?: { sceneId: string; leftLabel: string; rightLabel: string; illustrative?: boolean; imagePath?: string; videoPath?: string; trimStartSeconds?: number; trimEndSeconds?: number; playbackRate?: number; durationSeconds?: number };
     timing?: { sourceKey: string; audioPath?: string; audioStartSeconds?: number; audioEndSeconds?: number; durationInFrames: number; speechSeconds: number };
@@ -94,7 +94,9 @@ export function buildDocumentaryTimeline(project: DocumentaryProjectInput, media
       fromFrame: cursor, durationInFrames, transitionFrames, transition, motion: project.settings.assembly.kenBurns, narrationEnabled: project.settings.voice.enabled,
       imagePath: scene.imagePath ? mediaUrl(scene.imagePath) : undefined, videoPath: scene.videoPath ? mediaUrl(scene.videoPath) : undefined,
       audioPath: scene.audioPath ? mediaUrl(scene.audioPath) : undefined,
-      documentary: scene.documentary ? { layout: scene.documentary.layout, template: scene.documentary.template, templateMotion: scene.documentary.templateMotion, illustrative: scene.documentary.illustrative, caption: { ...scene.documentary.caption },
+      documentary: scene.documentary ? { layout: scene.documentary.layout, template: scene.documentary.template, templateMotion: scene.documentary.templateMotion, illustrative: scene.documentary.illustrative,
+        illustrationFact:scene.documentary.illustrative&&scene.documentary.requirement?.illustrationFallbackVersion===1
+          ?scene.documentary.requirement.visualScopeQuote:undefined,caption: { ...scene.documentary.caption },
         templateTiming: scene.documentary.templateTiming ? {...scene.documentary.templateTiming} : undefined,
         transitionStyle: scene.transition !== undefined ? scene.documentary.transitionStyle ?? 'clean'
           : (settings?.autoTransitions ?? settings?.autoEffects) !== false && scene.autoTransition !== undefined ? scene.documentary.autoTransitionStyle ?? 'clean' : 'clean',
@@ -143,7 +145,7 @@ export function buildDocumentaryTimeline(project: DocumentaryProjectInput, media
       fadeOutSeconds:Math.max(0,Math.min(cursor/60,project.settings.music.fadeOutSeconds??2)),ducking:project.settings.music.ducking!==false
     }:undefined,
     backgroundColor: safeColor(settings?.backgroundColor, "#161a20"), textColor: safeColor(settings?.textColor, "#ffffff"), accentColor: safeColor(settings?.accentColor, "#84c6db"),
-    illustrationLabel: /^(ru(?:[-_]|$)|russian$|рус)/i.test(project.language ?? "ru") ? "Иллюстративные кадры" : "Illustrative footage",
+    illustrationLabel: /^(ru(?:[-_]|$)|russian$|рус)/i.test(project.language ?? "ru") ? "Иллюстрация" : "Illustration",
     captionsEnabled: settings?.captionsEnabled ?? true, sfxVolume: Math.max(0, Math.min(100, settings?.sfxVolume ?? 25)) };
 }
 export const DEFAULT_DOCUMENTARY_TIMELINE = buildDocumentaryTimeline({ aspectRatio: "16:9", scenes: [], settings: { voice: { enabled: false }, assembly: { kenBurns: false } } });

@@ -154,6 +154,10 @@ function DocumentaryFrame({ scene, timeline, visualOnly = false }: { scene: Docu
       <div style={{ fontFamily: "Arial, sans-serif", fontWeight: 700, fontSize: captionFont, lineHeight: 1.15, maxWidth: "88%", boxSizing:'border-box', color: caption.color,
         backgroundColor: `${caption.backgroundColor}${Math.round(clamp(caption.opacity / 100) * 255).toString(16).padStart(2, "0")}`, padding: "12px 20px", borderLeft: `5px solid ${timeline.accentColor}`, whiteSpace: "pre-line", overflowWrap: "break-word", ...design.textBox }}>{captionText}</div>
     </AbsoluteFill>}
+    {doc?.illustrative&&doc.illustrationFact&&<div style={{position:'absolute',top:'6%',left:'6%',maxWidth:'68%',
+      color:'#fff',fontFamily:'Arial,sans-serif',fontSize:Math.max(22,timeline.width/65),fontWeight:700,lineHeight:1.3,
+      backgroundColor:'#08131de0',borderLeft:`6px solid ${timeline.accentColor}`,padding:'14px 20px',borderRadius:6,
+      boxShadow:'0 12px 32px #0008',opacity:clamp(frame/12),transform:`translateY(${(1-clamp(frame/14))*18}px)`}}>{doc.illustrationFact}</div>}
     {[doc?.illustrative, doc?.layout === "compare" && doc.comparison?.illustrative].map((illustrative, index) => illustrative && <div key={`illustration-${index}`} style={{
       position: "absolute", bottom: "3%", right: doc?.layout === "compare" && index === 0 ? "54%" : "3%", maxWidth: doc?.layout === "compare" ? "43%" : "88%",
       fontFamily: "Arial, sans-serif", fontSize: timeline.width / 60, lineHeight: 1.2, color: "#ffffff", backgroundColor: "#000000cc", padding: "8px 12px"
