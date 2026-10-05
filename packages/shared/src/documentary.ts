@@ -60,7 +60,7 @@ export interface DocumentaryRequirement {
    * The original story referent is retained separately for audit and re-planning. */
   visualScope?: "exact" | "illustrative";
   /** Re-evaluate unfinished legacy scopes when the scene-level illustration policy changes. */
-  visualScopeVersion?: 2;
+  visualScopeVersion?: 2 | 3;
   visualScopeQuote?: string;
   illustrationQuery?: string;
   narrativeEntities?: string[];

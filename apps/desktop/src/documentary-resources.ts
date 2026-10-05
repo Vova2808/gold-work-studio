@@ -110,8 +110,13 @@ async function probeDocumentaryMemory(): Promise<number> {
   return kib * 1024;
 }
 
-export async function ensureDocumentaryMemory(probe: () => Promise<number> = documentaryAvailableMemory): Promise<void> {
-  const available = await probe();
+export async function ensureDocumentaryMemory(probe: () => Promise<number> = documentaryAvailableMemory,
+  physicalProbe: () => number = freemem): Promise<void> {
+  // A healthy Windows commit counter does not mean that FFmpeg, Electron and
+  // a new image review can fit in physical RAM. The live full selection fell
+  // below 1 GiB free immediately before its process disappeared without a
+  // completed error result. Refuse a new paid request before that pressure.
+  const available = Math.min(await probe(), physicalProbe());
   if (!Number.isFinite(available) || available < DOCUMENTARY_MEMORY_RESERVE) {
     throw new DocumentaryMemoryUnavailableError(`Недостаточно памяти для анализа Stock: доступно ${Number.isFinite(available) ? Math.max(0, Math.floor(available / 1024 ** 2)) : 0} МБ. Освободите память, закрыв ненужные приложения; новый платный запрос не отправлен. Проверенные материалы сохранены.`);
   }

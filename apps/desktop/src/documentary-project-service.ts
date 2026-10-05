@@ -765,6 +765,7 @@ export class DocumentaryProjectService {
       // provider window; completed media and paid checkpoints are preserved.
       if (options.sceneIds) return result;
       const deadline = Date.now() + 90 * 60_000;
+      let noProgressPasses = 0;
       for (let retry = 0; retry < 8; retry += 1) {
         const temporary = result.failures.filter(failure => failure.category === "provider-temporary");
         if (!temporary.length || this.stopRequested.has(projectId)) break;
@@ -779,6 +780,13 @@ export class DocumentaryProjectService {
         const retried = await this.selectAll(projectId, { sceneIds: ids }, false,
           new Map(), new DocumentarySelectionSession());
         result=mergeRetried(result,retried,ids);
+        noProgressPasses=retried.selected>0?0:noProgressPasses+1;
+        if(noProgressPasses>=2){
+          this.publish({projectId,phase:'preparing',completed:result.total-result.failed,total:result.total,
+            selected:result.selected,skipped:result.skipped,failed:result.failed,
+            message:'Два повтора после восстановления источников не дали новых подтверждённых кадров. Готовое сохранено; дальнейший такой же поиск не расходуется.'});
+          break;
+        }
       }
       return result;
     })(); this.autoRuns.set(projectId, run);
@@ -824,7 +832,7 @@ export class DocumentaryProjectService {
     const visualScopeScenes=project.scenes.filter(scene=>(!options.sceneIds||options.sceneIds.includes(scene.id))
       &&scene.includeInAssembly!==false&&scene.documentary?.requirement.identityContextVersion===3
       &&scene.documentary.requirement.identities?.length
-      &&(!scene.documentary.requirement.visualScope || scene.documentary.requirement.visualScope==='exact' && scene.documentary.requirement.visualScopeVersion!==2)
+      &&(!scene.documentary.requirement.visualScope || scene.documentary.requirement.visualScope==='exact' && scene.documentary.requirement.visualScopeVersion!==3)
       &&!scene.documentary.verified&&!scene.documentary.pinned);
     if(visualScopeScenes.length&&this.intelligence?.resolveVisualScopes){
       const readyScript=project.videoBrief?.readyScript;
@@ -1192,7 +1200,7 @@ export class DocumentaryProjectService {
               // actual-frame validation below is still mandatory for approval.
             }
             if (!attempts.length) await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
-              autoError:sourceErrors.some(documentarySearchUnavailable)
+              autoError:sourceErrors.some(documentarySearchUnavailable)&&!attemptState.found
                 ?"Поиск ограничен источниками; полный набор кандидатов ещё не проверен. Продолжите подбор после восстановления доступа."
                 :"В найденных источниках не подтверждается нужный предмет; продолжаю поиск другого вида материала." } }));
           }
@@ -1346,6 +1354,10 @@ export class DocumentaryProjectService {
         }
         if (!accepted && upgradePhoto) skipped++;
         else if (!accepted) {
+          // A partial rate limit still leaves one source's search space
+          // unexamined. Resume once its announced window closes; persisted
+          // candidate rejections and paid checkpoints prevent re-buying the
+          // same failed reviews. This keeps an unattended production alive.
           const temporarilyUnavailable=sourceErrors.some(documentarySearchUnavailable);
           const message=(temporarilyUnavailable
             ?"Поисковые источники ограничили доступ; подбор этой сцены не завершён. Повторите после восстановления источников."
@@ -1354,10 +1366,13 @@ export class DocumentaryProjectService {
           failures.push({ sceneId: scene.id, sceneNumber: scene.order + 1, category: temporarilyUnavailable?"provider-temporary":"no-results", message });
           // A failed scene has been processed, not queued. Persist the result
           // so gaps remain explainable after navigation or an app restart.
-          await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!,
-            searchError: sourceErrors.join("\n") || undefined,
-            autoError: !foundThisRun && sourceErrors.length && !attemptState.found
-              ?message:current.documentary?.autoError||message } }));
+          await changeScene(scene.id, current => {
+            const prior=current.documentary?.autoError;
+            const staleQuota=prior&&/^(?:Поиск ограничен источниками|Поисковые источники ограничили доступ)/.test(prior);
+            return { ...current, documentary: { ...current.documentary!,
+              searchError: sourceErrors.join("\n") || undefined,
+              autoError:!foundThisRun&&temporarilyUnavailable?message:prior&&!staleQuota?prior:message } };
+          });
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

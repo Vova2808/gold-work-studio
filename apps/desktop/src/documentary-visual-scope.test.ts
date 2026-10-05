@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readdir,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {Project,Scene,DocumentaryRequirement,DocumentaryCandidate} from '@gold-work/shared';
@@ -9,6 +9,7 @@ import {documentaryGeneralIllustration,documentaryVisualReviewContext} from './d
 import {documentarySearchQueries,documentaryThematicStockProbe} from './documentary-project-service.js';
 import {applyDocumentaryRequirement} from './documentary-visual-relevance.js';
 import {documentaryContextApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
+import {AnyModelCompletionUncertainError} from './anymodel-client.js';
 
 test('only a grounded abstract slice becomes a thematic stock shot; exact and invalid decisions stay strict',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-visual-scope-'));
@@ -31,8 +32,9 @@ test('only a grounded abstract slice becomes a thematic stock shot; exact and in
   const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
     calls++;
     const ids=(JSON.parse(input).scenes as Array<{id:string}>).map(item=>item.id);
-    assert.deepEqual(ids,['s1','s2','s4','s5']);
+    assert.deepEqual(ids,['s0','s1','s2','s4','s5']);
     return JSON.stringify({scenes:[
+      {id:'s0',scope:'exact',quote:lines[0],query:'Valentino Rossi Yamaha 2004'},
       {id:'s1',scope:'illustrative',quote:lines[1],query:'motorcycle racing corner onboard'},
       {id:'s2',scope:'exact',quote:lines[2],query:'Valentino Rossi race footage'},
       {id:'s4',scope:'illustrative',quote:'words absent from original',query:'motorcycle racing mistake'},
@@ -88,7 +90,7 @@ test('an explicit maker name can remain exact after scene-level classification',
   let result:DocumentaryRequirement|undefined;
   await intelligence.resolveVisualScopes({id:'fixture-honda',scenes:[scene]} as Project,[scene],async batch=>{result=batch.get(scene.id);});
   assert.equal(result?.visualScope,'exact');
-  assert.equal(result?.visualScopeVersion,2);
+  assert.equal(result?.visualScopeVersion,3);
   assert.equal(result?.identities?.[0]?.name,'Honda RC211V');
 });
 
@@ -103,17 +105,43 @@ test('unfinished old exact scope is reconsidered; current exact and approved sce
   const project={id:'scope-upgrade',scenes:[old,current,approved]} as Project;
   let calls=0;
   const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
-    calls++;assert.deepEqual(JSON.parse(input).scenes.map((row:{id:string})=>row.id),['old']);
-    return JSON.stringify({scenes:[{id:'old',scope:'illustrative',quote:narration,
-      query:'motorcycle racing track and riders'}]});
+    calls++;assert.deepEqual(JSON.parse(input).scenes.map((row:{id:string})=>row.id),['old','current']);
+    return JSON.stringify({scenes:['old','current'].map(id=>({id,scope:'illustrative',quote:narration,
+      query:'motorcycle racing track and riders'}))});
   }},()=>root);
   const saved=new Map<string,DocumentaryRequirement>();
   await intelligence.resolveVisualScopes(project,project.scenes,async batch=>{for(const [id,value] of batch)saved.set(id,value);});
   assert.equal(calls,1);
-  assert.deepEqual([...saved.keys()],['old']);
+  assert.deepEqual([...saved.keys()],['old','current']);
   assert.equal(saved.get('old')?.visualScope,'illustrative');
-  assert.equal(saved.get('old')?.visualScopeVersion,2);
+  assert.equal(saved.get('old')?.visualScopeVersion,3);
+  assert.equal(saved.get('current')?.visualScope,'illustrative');
   assert.deepEqual(saved.get('old')?.identities,[]);
+});
+
+test('a contextual spoken year may use relevant B-roll, while a dated race event stays exact',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-year-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const lines=['Its edit was finished in April 2003.','Rossi won the 2003 Australian Grand Prix.'];
+  const scenes=lines.map((narration,order)=>({id:`year-${order}`,order,narration,documentary:{verified:false,pinned:false,
+    requirement:{text:narration,entities:['Valentino Rossi'],identities:[{name:'Valentino Rossi',aliases:['Rossi']}],
+      identityContextVersion:3,visualScope:'exact',visualScopeVersion:2,years:['2003'],queries:['Valentino Rossi 2003'],
+      plannedBy:'semantic'}}} as Scene));
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
+    assert.deepEqual(JSON.parse(input).scenes.map((row:{id:string})=>row.id),['year-0','year-1']);
+    return JSON.stringify({scenes:[
+      {id:'year-0',scope:'illustrative',quote:lines[0],query:'documentary film editing workstation'},
+      {id:'year-1',scope:'exact',quote:lines[1],query:'Valentino Rossi Australian Grand Prix 2003'},
+    ]});
+  }},()=>root);
+  const saved=new Map<string,DocumentaryRequirement>();
+  await intelligence.resolveVisualScopes({id:'fixture-year',scenes} as Project,scenes,async batch=>{
+    for(const [id,value] of batch)saved.set(id,value);
+  });
+  assert.equal(saved.get('year-0')?.visualScope,'illustrative');
+  assert.deepEqual(saved.get('year-0')?.years,[]);
+  assert.deepEqual(saved.get('year-0')?.narrativeYears,['2003']);
+  assert.equal(saved.get('year-1')?.visualScope,'exact');
+  assert.deepEqual(saved.get('year-1')?.years,['2003']);
 });
 
 test('a name in the preceding slice does not force a generic video close-up of that exact model',async t=>{
@@ -150,7 +178,7 @@ test('a non-spoken music marker does not invalidate a grounded illustrative quot
   assert.deepEqual(result?.identities,[]);
 });
 
-test('an uncertain old visual-scope batch blocks regrouping without another paid request',async t=>{
+test('an unmatchable old visual-scope batch keeps the exact plan without another paid request',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-scope-pending-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const analysis=join(root,'Documentary','Analysis');await mkdir(analysis,{recursive:true});
   await writeFile(join(analysis,`${'a'.repeat(64)}.json`),JSON.stringify({state:'partial',purpose:'visual-scope',raw:'{"scenes":'}));
@@ -161,7 +189,46 @@ test('an uncertain old visual-scope batch blocks regrouping without another paid
   const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
     throw Error('must not submit');
   }},()=>root);
-  await assert.rejects(intelligence.resolveVisualScopes({id:'pending',scenes:[scene]} as Project,[scene],async()=>{}),/неизвестный платный результат/);
+  let saved=0;
+  await intelligence.resolveVisualScopes({id:'pending',scenes:[scene]} as Project,[scene],async batch=>{saved+=batch.size});
+  assert.equal(saved,0);
+  assert.notEqual(scene.documentary!.requirement.visualScope,'illustrative');
+});
+
+test('an exact matching pending scope batch is skipped while disjoint scenes continue',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-scope-pending-batch-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const scenes=Array.from({length:26},(_,order)=>{
+    const narration=`Honda's production decision ${order+1} shaped its racing work.`;
+    return {id:`pending-${order}`,order,narration,documentary:{verified:false,pinned:false,
+      requirement:{text:narration,entities:['Honda'],identities:[{name:'Honda',aliases:[]}],
+        identityContextVersion:3,visualScope:'exact',visualScopeVersion:2,years:[],
+        queries:['Honda racing work'],plannedBy:'semantic'}}} as unknown as Scene;
+  });
+  scenes[1]!.documentary!.verified=true;
+  const project={id:'pending-batch',scenes} as Project;
+  let calls=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(_system,input)=>{
+    calls++;
+    if(calls===1)throw new AnyModelCompletionUncertainError('Connection ended after submission');
+    const rows=(JSON.parse(input).scenes as Array<{id:string;current:string}>).map(scene=>({
+      id:scene.id,scope:'illustrative',quote:scene.current,query:'motorcycle team working in garage'}));
+    return JSON.stringify({scenes:rows});
+  }},()=>root);
+  const saved=new Map<string,DocumentaryRequirement>();
+  const save=async(batch:Map<string,DocumentaryRequirement>)=>{for(const [id,value] of batch)saved.set(id,value);};
+  await assert.rejects(intelligence.resolveVisualScopes(project,scenes,save),/неизвестен|неизвестн/i);
+  // Simulate a checkpoint created before request membership was persisted and
+  // one formerly pending scene that became verified in the meantime.
+  scenes[4]!.documentary!.verified=true;
+  const analysis=join(root,'Documentary','Analysis');
+  for(const file of (await readdir(analysis)).filter(name=>name.startsWith('visual-scope-')))
+    await rm(join(analysis,file));
+  await intelligence.resolveVisualScopes(project,scenes,save);
+  assert.equal(calls,4,'The pending eight-scene request must not be sent again');
+  assert.equal(saved.has('pending-0'),false);
+  assert.equal(saved.has('pending-8'),false);
+  assert.equal(saved.get('pending-9')?.visualScope,'illustrative');
+  assert.equal(saved.get('pending-25')?.visualScope,'illustrative');
 });
 
 test('changing an approved thematic visual target revokes only that saved approval',()=>{

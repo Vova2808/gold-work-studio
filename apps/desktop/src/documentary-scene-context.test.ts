@@ -114,6 +114,42 @@ test('general-illustration policy does not resend an older uncertain paid frame 
   await assert.rejects(restart.inspectForSelection(project,scene),/неизвестный результат/);
 });
 
+test('thematic frame review checks the visible task without repaying an older unknown review',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-thematic-review-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const narration='In 2003 Baros crashed while racing the Yamaha.';
+  const visualTask='motorcycle racing crash';
+  const context={current:{scene:12,text:narration},preceding:[{scene:11,text:'Baros joined Yamaha.'}],following:[],earlierTimeReferences:['2003']};
+  const input=JSON.stringify({narration,narrationContext:narration,source:{title:'Motorcycle crash footage'}});
+  const images=['actual-frame-fixture'];
+  const inspection={submissions:0,shouldStop:()=>false,comparisonSubjects:[],identities:[],
+    generalIllustration:true,illustrationTask:visualTask,narrativeContext:context};
+  let oldKey='',calls=0;
+  const first=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,submitted,frames)=>{
+    calls++;
+    const data=JSON.parse(submitted);
+    assert.equal(data.narration,visualTask);
+    assert.equal(data.narrativeContext.current.text,visualTask);
+    assert.deepEqual(data.narrativeContext.preceding,[]);
+    assert.deepEqual(data.narrativeContext.earlierTimeReferences,[]);
+    assert.match(system,/preclassified THEMATIC shot/);
+    const oldSystem=system.split(' For this preclassified THEMATIC shot')[0]!;
+    const oldInput=JSON.stringify({...data,narration,narrationContext:narration,narrativeContext:context});
+    oldKey=createHash('sha256').update(JSON.stringify([2,'visual-overview',oldSystem,oldInput,frames])).digest('hex');
+    return JSON.stringify({status:'rejected',reason:'Fixture review'});
+  }},()=>join(root,'first'));
+  await Reflect.get(first,'inspection').run(inspection,
+    ()=>Reflect.get(first,'complete').call(first,'project','visual-overview','Inspect actual frames',input,images));
+  assert.equal(calls,1);
+  const guarded=join(root,'guarded','Documentary','Analysis');await mkdir(guarded,{recursive:true});
+  await writeFile(join(guarded,oldKey+'.json'),JSON.stringify({state:'pending',purpose:'visual-overview'}));
+  const restart=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+    assert.fail('The old uncertain paid review must not be resubmitted');
+  }},()=>join(root,'guarded'));
+  await assert.rejects(Reflect.get(restart,'inspection').run(inspection,
+    ()=>Reflect.get(restart,'complete').call(restart,'project','visual-overview','Inspect actual frames',input,images)),/неизвестный результат/);
+});
+
 test('a short general video verifies its actual rendered range in one paid check',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-short-general-')),videoPath=join(root,'fixture.mp4');
   t.after(()=>rm(root,{recursive:true,force:true}));

@@ -63,6 +63,24 @@ test("an unattended quota wait can be stopped without retrying the scene", async
   assert.equal(selections,1,"stop must not start another selection or paid inspection");
 });
 
+test("unattended quota recovery stops after two full retries with no verified material", async t => {
+  const {root,projects,project}=await setup();
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const searcher=new DocumentarySearch();
+  searcher.nextRetryDelayMs=()=>1;
+  let selections=0;
+  const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,"workspace")),
+    searcher,join(root,"Materials"),{download:async()=>{throw Error("not used");}},()=>{});
+  Object.assign(service,{selectAll:async()=>{
+    selections++;
+    return {project,total:project.scenes.length,selected:0,skipped:0,failed:1,
+      failures:[{sceneId:project.scenes[0]!.id,sceneNumber:1,category:"provider-temporary",message:"HTTP 429"}]};
+  }});
+  const result=await service.autoSelect(project.id);
+  assert.equal(selections,3,"Initial search plus two timed retries; no endless paid checks");
+  assert.equal(result.failed,1);
+});
+
 test("a searched scene with no verified material keeps a visible failure after restart", async t => {
   const { root, projects, project } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -278,17 +296,16 @@ test("local sources with a stale exact match are screened before downloading or 
   assert.equal(ranked, 1); assert.equal(examined, 0); assert.equal(result.failed, 1);
 });
 
-test("low committed memory blocks a new paid request without creating a pending checkpoint", async () => {
+test("low committed memory guard refuses a new paid request; cached answers remain usable", async () => {
   const { root, project } = await setup(); let submissions = 0;
   let available = DOCUMENTARY_MEMORY_RESERVE - 1;
   const client = { configured: async () => true, documentaryCompletion: async () => {
     submissions++;
     return JSON.stringify({ scenes: project.scenes.map(scene => ({ id: scene.id, entities: ["tractor"], queries: ["tractor field"], preferredKind: "video" })) });
   } };
-  const intelligence = new DocumentaryIntelligence(client, () => root, () => ensureDocumentaryMemory(async () => available));
-  await assert.rejects(intelligence.plan(project, project.scenes), /Недостаточно памяти/);
+  const intelligence = new DocumentaryIntelligence(client, () => root, () => ensureDocumentaryMemory(async () => available, () => DOCUMENTARY_MEMORY_RESERVE * 2));
+  await assert.rejects(ensureDocumentaryMemory(async () => available, () => DOCUMENTARY_MEMORY_RESERVE * 2), /Недостаточно памяти/);
   assert.equal(submissions, 0);
-  assert.deepEqual(await readdir(join(root, "Documentary", "Analysis")), []);
   available = DOCUMENTARY_MEMORY_RESERVE;
   await intelligence.plan(project, project.scenes);
   assert.equal(submissions, 1);
@@ -296,6 +313,8 @@ test("low committed memory blocks a new paid request without creating a pending 
   await intelligence.plan(project, project.scenes);
   assert.equal(submissions, 1, "Reading a paid cached answer needs no new request or memory reservation");
   await assert.rejects(ensureDocumentaryMemory(async () => Number.NaN), /Недостаточно памяти/);
+  await assert.rejects(ensureDocumentaryMemory(async () => DOCUMENTARY_MEMORY_RESERVE * 2,
+    () => DOCUMENTARY_MEMORY_RESERVE - 1), /Недостаточно памяти/);
 });
 
 test('failed search gets one persisted query revision while narration, identities and voice stay exact', async t => {
@@ -353,10 +372,12 @@ test('one rate-limited source does not block query repair after other sources re
       rankCandidates: async () => [],
       refineQueries: async (_project, scenes) => { revisions++; return new Map(scenes.map(item => [item.id, ['Tractor Alpha repaired archive']])); }
     });
-  await service.autoSelect(project.id, { sceneIds: [scene.id] });
+  const result = await service.autoSelect(project.id, { sceneIds: [scene.id] });
   const saved = (await projects.get(project.id))!.scenes[0]!;
   assert.match(saved.documentary!.searchError!, /429/);
   assert.ok(saved.documentary!.candidates.length > 0);
+  assert.equal(result.failures[0]?.category, 'provider-temporary', 'The unsearched rate-limited provider remains eligible for a timed retry in full production');
+  assert.doesNotMatch(saved.documentary!.autoError!, /^Поиск ограничен источниками/, 'A rejected candidate must not retain a stale quota-only diagnosis');
   assert.equal(revisions, 1);
   assert.equal(saved.documentary!.requirement.searchRefined, true);
   await service.autoSelect(project.id, { sceneIds: [scene.id] });
@@ -752,7 +773,7 @@ test("resume revisits a repetitive accepted sequence while preserving old materi
   assert.equal(searches, 0, "Manual pins are never automatically replaced");
 });
 
-for (const [label, Failure] of [["low memory", DocumentaryMemoryUnavailableError], ["full storage", DocumentaryStorageUnavailableError], ["unavailable provider models", AnyModelModelUnavailableError], ["analysis service failure", DocumentaryAnalysisError]] as ReadonlyArray<readonly [string,new(message:string)=>Error]>) test(`automatic selection stops at ${label} and leaves later scenes untouched`, async () => {
+for (const [label, Failure] of [["full storage", DocumentaryStorageUnavailableError], ["unavailable provider models", AnyModelModelUnavailableError], ["analysis service failure", DocumentaryAnalysisError]] as ReadonlyArray<readonly [string,new(message:string)=>Error]>) test(`automatic selection stops at ${label} and leaves later scenes untouched`, async () => {
   const { root, projects, project } = await setup();
   project.scenes = Array.from({ length: 12 }, (_, order) => ({ ...structuredClone(project.scenes[0]!), id: `stop-${order}`, order }));
   await projects.update(project.id, project);
@@ -849,6 +870,35 @@ test("a transient terminal provider failure is persisted before one bounded retr
     assert.equal(JSON.parse(await readFile(path,'utf8')).state,'failed');
   }).plan(project, project.scenes);
   assert.equal(waits,32);assert.equal(submissions, 2, "Only the explicitly failed request is retried");
+  const path = join(root, "Documentary", "Analysis", (await readdir(join(root, "Documentary", "Analysis")))[0]!);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).state, "complete");
+});
+
+test("low memory waits before any paid checkpoint, then resumes the same plan", async () => {
+  const { root, project } = await setup(); let checks = 0, submissions = 0, waits = 0; const progress:string[]=[];
+  const intelligence = new DocumentaryIntelligence({ configured: async () => true, documentaryCompletion: async () => {
+    submissions++;
+    return JSON.stringify({ scenes: project.scenes.map(scene => ({ id: scene.id, entities: ["tractor"], queries: ["tractor field"], preferredKind: "video" })) });
+  } }, () => root, async () => {
+    if (++checks < 3) throw new DocumentaryMemoryUnavailableError("Low RAM");
+  }, undefined, async () => {
+    waits++;
+    assert.deepEqual(await readdir(join(root, "Documentary", "Analysis")), [], "No request is pending while RAM is low");
+  });
+  await intelligence.plan(project, project.scenes,undefined,{progress:message=>progress.push(message),shouldStop:()=>false});
+  assert.equal(submissions, 1); assert.equal(waits, 2);
+  assert.ok(progress.some(message=>message.includes('Жду освобождения RAM')));
+});
+
+test("explicit empty 503 responses wait through a prolonged outage without replaying unknown work", async () => {
+  const { root, project } = await setup(); let submissions = 0, waits = 0;
+  const intelligence = new DocumentaryIntelligence({ configured: async () => true, documentaryCompletion: async () => {
+    if (++submissions <= 6) throw new AnyModelProviderResponseError("Service unavailable", 503, 0);
+    return JSON.stringify({ scenes: project.scenes.map(scene => ({ id: scene.id, entities: ["tractor"], queries: ["tractor field"], preferredKind: "video" })) });
+  } }, () => root, async () => {}, undefined, async () => { waits++; });
+  await intelligence.plan(project, project.scenes);
+  assert.equal(submissions, 7);
+  assert.ok(waits > 1000, "The shared service cooldown remains active after the former four-attempt limit");
   const path = join(root, "Documentary", "Analysis", (await readdir(join(root, "Documentary", "Analysis")))[0]!);
   assert.equal(JSON.parse(await readFile(path, "utf8")).state, "complete");
 });
