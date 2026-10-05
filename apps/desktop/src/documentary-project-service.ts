@@ -277,6 +277,34 @@ export function documentaryThematicStockProbe(candidates:DocumentaryCandidate[],
   return eligible.sort((a,b)=>score(b)-score(a))[0];
 }
 
+/** Stock search already used the scene's thematic query. For a broad shot,
+ * try two short, usable originals directly against their actual pixels instead
+ * of paying for a second opinion on captions first. Specific claims keep the
+ * normal semantic shortlist. This only orders candidates, never approves one. */
+export function documentaryFastThematicCandidates(scene:Scene,candidates:DocumentaryCandidate[]):DocumentaryCandidate[]{
+  if(!documentaryGeneralIllustration(scene)||documentaryGeneralActionIssue(scene)
+    ||documentaryRequiredVisiblePart(scene.narration)||documentaryMetadataShortlist(scene,candidates).length)return [];
+  const stock=candidates.filter(candidate=>(candidate.provider==='pexels'||candidate.provider==='pixabay')
+    &&candidate.rights!=='unknown'
+    &&Math.max(candidate.width??0,candidate.height??0)>=1280
+    &&Math.min(candidate.width??0,candidate.height??0)>=720
+    &&(candidate.kind==='image'||(candidate.durationSeconds??Infinity)>=3&&(candidate.durationSeconds??Infinity)<=60));
+  const wordsOf=(value:string)=>new Set((value.toLowerCase().match(/[\p{L}]{4,}/gu)??[]).map(word=>word.replace(/s$/,'')));
+  const words=wordsOf(scene.documentary!.requirement.illustrationQuery??scene.documentary!.requirement.queries[0]??'');
+  const match=(candidate:DocumentaryCandidate)=>{
+    const title=wordsOf(candidate.title);
+    return [...words].filter(word=>title.has(word)).length;
+  };
+  const ordered=stock.filter(candidate=>match(candidate)>0).sort((a,b)=>match(b)-match(a)
+    ||Math.min(1,(b.width??0)*(b.height??0)/(1920*1080))-Math.min(1,(a.width??0)*(a.height??0)/(1920*1080)));
+  if(!ordered.length)return [];
+  const archive=candidates.find(candidate=>candidate.provider!=='pexels'&&candidate.provider!=='pixabay'
+    &&candidate.rights!=='unknown'&&(candidate.kind==='image'||candidate.localPath||(candidate.durationSeconds??Infinity)<=60));
+  const shortlist=[ordered[0]!,...(archive?[archive]:ordered.slice(1,2))];
+  const seen=new Set<string>();
+  return shortlist.filter(candidate=>{const key=documentaryCandidateKey(candidate);return !seen.has(key)&&Boolean(seen.add(key));});
+}
+
 /** Only metadata ranking is skipped; original pixels and context are checked. */
 export function documentaryExactNamedStillProbe(candidates:DocumentaryCandidate[],requirement:DocumentaryRequirement,narration:string):DocumentaryCandidate|undefined {
   const identity=requirement.identities?.length===1?requirement.identities[0]:undefined;
@@ -1142,14 +1170,15 @@ export class DocumentaryProjectService {
           }
           const directStill=!quick&&!localOnly&&kind==='image'&&this.intelligence!.rankCandidates
             ?documentaryExactNamedStillProbe(localOrder,requirement,scene.narration):undefined;
+          const fastThematic=!quick&&!localOnly?documentaryFastThematicCandidates(scene,localOrder):[];
           retryDirectStill=Boolean(directStill);
-          let attempts = directStill?[directStill]:quick ? earlyCandidates : documentaryCandidateAttempts(localOrder, searchSubjects);
+          let attempts = directStill?[directStill]:quick ? earlyCandidates : fastThematic.length?fastThematic:documentaryCandidateAttempts(localOrder, searchSubjects);
           // A local source's old exact-metadata flag belongs to its ORIGINAL
           // search. Screen its relevance to this scene before analysing more
           // ranges of a long, already-downloaded but unrelated source.
           const requiredVideoPart=kind==='video'&&documentaryGeneralDiagramScope(context,requirement.identities)
             ?documentaryRequiredVisiblePart(scene.narration):undefined;
-          if (!quick && !directStill && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement, requiredVideoPart))) {
+          if (!quick && !directStill && !fastThematic.length && this.intelligence!.rankCandidates && localOrder.length && (localOnly || !hasExactDocumentaryVideoCandidate(localOrder, requirement, requiredVideoPart))) {
             if (fatal || this.stopRequested.has(projectId)) return;
             this.publish({ projectId, phase: "preparing", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id,
               message: `Кадр ${scene.order + 1}: отбираю подходящие источники по смыслу…` });

@@ -10,6 +10,28 @@ import {DocumentaryIntelligence,readAnalysisCheckpoint} from './documentary-inte
 import {AnyModelClient} from './anymodel-client.js';
 import type {AnyModelStore} from './anymodel-store.js';
 import {documentaryRequiredVisiblePart,documentaryDetailEvidenceIssue,documentaryRivalryTarget} from './documentary-detail-evidence.js';
+import {documentaryFastThematicCandidates} from './documentary-project-service.js';
+
+test('general stock uses a two-source pixel-review shortlist; exact model and visible part stay strict',()=>{
+  const narration='Motorcycle racing felt faster and more dramatic.';
+  const requirement={text:narration,entities:[],identities:[],years:[],queries:['motorcycle racing'],
+    visualScope:'illustrative',visualScopeQuote:narration,illustrationQuery:'motorcycle racing'} as DocumentaryRequirement;
+  const scene={id:'general',order:0,narration,documentary:{requirement}} as Scene;
+  const candidate=(id:string,title:string,provider:'pexels'|'pixabay'|'commons'='pexels'):DocumentaryCandidate=>({
+    id,provider,kind:'video',title,description:'',query:'motorcycle racing',durationSeconds:12,width:1920,height:1080,
+    rights:'licensed',pageUrl:`https://example.test/${id}`,downloadUrl:`https://example.test/${id}.mp4`,concerns:[],
+    author:'Fixture',license:'CC BY',licenseUrl:'https://example.test/license',attribution:'Fixture',retrievedAt:'now',match:'unverified'
+  });
+  const pool=[candidate('wrong','Nature documentary film'),candidate('race','Motorcycle on track'),
+    candidate('race-again','Racing bike corner','pixabay'),candidate('archive','Sports footage circuit','commons')];
+  assert.deepEqual(documentaryFastThematicCandidates(scene,pool.slice(0,3)).map(item=>item.id),['race','race-again']);
+  assert.deepEqual(documentaryFastThematicCandidates(scene,pool).map(item=>item.id),['race','archive'],
+    'A concise archive source remains eligible for the same actual-frame check');
+  assert.deepEqual(documentaryFastThematicCandidates({...scene,narration:'The Yamaha YZR-M1 raced.',documentary:{requirement:{...requirement,
+    text:'The Yamaha YZR-M1 raced.',visualScope:'exact',identities:[{name:'Yamaha YZR-M1',aliases:[]}]}}} as unknown as Scene,pool),[]);
+  assert.deepEqual(documentaryFastThematicCandidates({...scene,narration:'The crankshaft rotates.',documentary:{requirement:{...requirement,
+    text:'The crankshaft rotates.',visualScopeQuote:'The crankshaft rotates.'}}} as Scene,pool),[]);
+});
 
 test('related scenes share discovery, but not mutable evidence or a different era',async()=>{
   const session=new DocumentarySelectionSession();let calls=0;
