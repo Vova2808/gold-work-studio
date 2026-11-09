@@ -1,0 +1,27 @@
+name: Publish Windows update
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Publish installer and update manifest
+        run: pnpm --filter @gold-work/desktop release:updates
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_PUBLISH_TOKEN }}
