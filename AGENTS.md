@@ -2,7 +2,7 @@
 
 ## Current user task (2026-11-09)
 
-Read `TASK.md` and `STATUS.md` at the start of work and after context recovery. The current user instruction in TASK.md overrides all older execution/testing guidance below: Codex and every agent must not run tests, checks, lint/typecheck, builds/packages, the app/dev/preview, provider probes, generation/search/render/export, or benchmarks, and must not create new tests. Use file operations, Git and static source/diff review only; the user builds, runs and accepts each version. The coordinator alone updates TASK.md/STATUS.md.
+Read `TASK.md` and `STATUS.md` at the start of work and after context recovery. For this local migration, the coordinator's canonical live copies are `E:\GoldWorkStudio\TASK.md` and `E:\GoldWorkStudio\STATUS.md` when present; repository copies record the handoff snapshot. The current user instruction in TASK.md overrides all older execution/testing guidance below: Codex and every agent must not run tests, checks, lint/typecheck, builds/packages, the app/dev/preview, provider probes, generation/search/render/export, or benchmarks, and must not create new tests. Use file operations, Git and static source/diff review only; the user builds, runs and accepts each version. The coordinator alone updates TASK.md/STATUS.md. Do not change a source/profile candidate while the user is checking it.
 
 ## Scope and source of truth
 
