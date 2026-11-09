@@ -1,0 +1,171 @@
+{
+  "note": "Retained parsed response; original wire raw not kept by old checkpoint. status/reason were overwritten by validation.",
+  "result": {
+    "status": "uncertain",
+    "confidence": 0.95,
+    "reason": "Анализ не подтвердил отсутствие рекламных надписей исходника. Ответ сохранён без повторной оплаты.",
+    "quality": "clear",
+    "identityMatch": true,
+    "identifiedEntity": "Ford Mustang",
+    "isCameraFootage": true,
+    "mediaType": "camera",
+    "presentation": "clean",
+    "cameraEvidence": "Camera footage from inside a vehicle following a black 2020 Ford Mustang on a highway.",
+    "actionMatch": true,
+    "actionEvidence": "The Mustang is continuously driving forward along the highway alongside other vehicles.",
+    "startSeconds": 3,
+    "endSeconds": 6,
+    "narrativeEvidence": {
+      "subjectMatch": true,
+      "eraMatch": true,
+      "detailMatch": true,
+      "requiredEra": "2020",
+      "observedEra": "2020",
+      "eraEvidenceQuote": "2020 Ford Mustang",
+      "evidence": "The vehicle styling and metadata accurately reflect a 2020 Ford Mustang GT500."
+    },
+    "technicalQuality": {
+      "detail": "clear",
+      "compression": "clean",
+      "pixelated": false,
+      "evidence": "Sharp, clear video frames showing the road and surrounding cars without artifacts.",
+      "orientation": "upright",
+      "continuousShot": true
+    },
+    "sampleChecks": [
+      {
+        "seconds": 3.1,
+        "identityMatch": true,
+        "identifiedEntity": "Ford Mustang",
+        "eraMatch": true,
+        "evidence": "Black 2020 Ford Mustang visible ahead on the highway."
+      },
+      {
+        "seconds": 3.75,
+        "identityMatch": true,
+        "identifiedEntity": "Ford Mustang",
+        "eraMatch": true,
+        "evidence": "The Mustang continues driving forward in traffic."
+      },
+      {
+        "seconds": 4.5,
+        "identityMatch": true,
+        "identifiedEntity": "Ford Mustang",
+        "eraMatch": true,
+        "evidence": "The Mustang maintains its position on the road."
+      },
+      {
+        "seconds": 5.25,
+        "identityMatch": true,
+        "identifiedEntity": "Ford Mustang",
+        "eraMatch": true,
+        "evidence": "The Mustang drives forward as traffic moves."
+      },
+      {
+        "seconds": 5.85,
+        "identityMatch": true,
+        "identifiedEntity": "Ford Mustang",
+        "eraMatch": true,
+        "evidence": "The Mustang is visible driving along the road with speed limit signs present."
+      }
+    ],
+    "annotations": [],
+    "sourceText": {
+      "kind": "caption",
+      "text": ""
+    },
+    "scriptEvidence": {
+      "version": 1,
+      "scriptText": "A 2020 Ford Mustang drives along a road.",
+      "checks": [
+        {
+          "requirementId": "car",
+          "kind": "object",
+          "scriptQuote": "2020 Ford Mustang",
+          "required": "2020 Ford Mustang",
+          "match": true,
+          "evidence": "A black 2020 Ford Mustang is clearly visible in all frames."
+        },
+        {
+          "requirementId": "drive",
+          "kind": "action",
+          "scriptQuote": "drives",
+          "required": "car driving",
+          "match": true,
+          "evidence": "The Mustang is observed moving forward along the highway in all frames.",
+          "temporalEvidence": {
+            "startState": "Car is driving forward on the highway",
+            "endState": "Car continues driving forward on the highway",
+            "changed": true,
+            "sameSubject": true,
+            "observations": [
+              {
+                "seconds": 3.1,
+                "subject": "black 2020 Ford Mustang",
+                "visible": true,
+                "state": "driving forward in lane"
+              },
+              {
+                "seconds": 3.75,
+                "subject": "black 2020 Ford Mustang",
+                "visible": true,
+                "state": "driving forward in lane"
+              },
+              {
+                "seconds": 4.5,
+                "subject": "black 2020 Ford Mustang",
+                "visible": true,
+                "state": "driving forward in lane"
+              },
+              {
+                "seconds": 5.25,
+                "subject": "black 2020 Ford Mustang",
+                "visible": true,
+                "state": "driving forward in lane"
+              },
+              {
+                "seconds": 5.85,
+                "subject": "black 2020 Ford Mustang",
+                "visible": true,
+                "state": "driving forward in lane"
+              }
+            ]
+          }
+        },
+        {
+          "requirementId": "road",
+          "kind": "condition",
+          "scriptQuote": "along a road",
+          "required": "road",
+          "match": true,
+          "evidence": "The vehicles are traveling on a multi-lane paved road with surrounding trees and road signs."
+        }
+      ]
+    }
+  },
+  "requirements": {
+    "version": 1,
+    "scriptText": "A 2020 Ford Mustang drives along a road.",
+    "checks": [
+      {
+        "id": "car",
+        "kind": "object",
+        "scriptQuote": "2020 Ford Mustang",
+        "required": "2020 Ford Mustang"
+      },
+      {
+        "id": "drive",
+        "kind": "action",
+        "scriptQuote": "drives",
+        "required": "car driving"
+      },
+      {
+        "id": "road",
+        "kind": "condition",
+        "scriptQuote": "along a road",
+        "required": "road"
+      }
+    ],
+    "nonVisual": []
+  }
+}

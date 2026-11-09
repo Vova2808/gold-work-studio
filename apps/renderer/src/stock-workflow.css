@@ -1,0 +1,55 @@
+.stock-workflow { border: 0; padding: 0; margin: 20px auto; min-width: 0; max-width: 1120px; display: grid; gap: 16px; }
+.stock-workflow-section { background: var(--panel, #171a20); border: 1px solid var(--border, #30333b); border-radius: 12px; padding: 22px; display: grid; gap: 14px; min-width: 0; overflow-wrap: anywhere; }
+.stock-workflow-section h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; margin: 0; }
+.stock-workflow-section h2 > span { display: grid; place-items: center; border: 1px solid #887a4c; color: #e4c477; border-radius: 50%; width: 28px; height: 28px; font-size: 14px; }
+.stock-workflow-section p { margin: 0; line-height: 1.55; color: #bcc0ca; }
+.stock-workflow-section small { color: #aeb4c1; line-height: 1.5; }
+.stock-workflow-field { display: grid; gap: 8px; min-width: 0; }
+.stock-workflow-field > span { color: #e4e5e9; font-size: 13px; }
+.stock-workflow-field select, .stock-workflow-field input:not([type=range]) { width: 100%; min-width: 0; min-height: 40px; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 7px; background: var(--panel-2, #101218); border: 1px solid var(--border, #393e49); color: var(--text, #e4e5e9); }
+.stock-workflow-field input[type=range] { width: 100%; accent-color: #c5a35b; }
+.stock-workflow-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.stock-workflow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.stock-workflow-section > button { justify-self: start; }
+.stock-workflow-ratio-labels { display: flex; justify-content: space-between; font-size: 12px; color: #aeb4c1; margin-top: -10px; }
+.stock-workflow-more { border-top: 1px solid #30343e; padding-top: 12px; }
+.stock-workflow-more > summary { cursor: pointer; color: #d8dbe2; padding: 4px 0; }
+.stock-workflow-more[open] > :not(summary) { margin-top: 14px; }
+.stock-workflow-script { white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+.stock-montage-presets { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.stock-montage-card > button:first-child { text-align: left; background: var(--panel-2, #10141b); border: 1px solid var(--line, #3d4350); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; color: inherit; cursor: pointer; height: 100%; }
+.stock-montage-card > button[aria-pressed=true] { border-color: var(--gold, #d7b467); box-shadow: inset 0 0 0 1px var(--gold, #d7b467); background: var(--gold-soft, #252319); }
+.stock-montage-card > button:focus-visible { outline: 2px solid var(--gold, #e4c477); outline-offset: 3px; }
+.stock-montage-presets svg { width: 100%; aspect-ratio: 16/9; border-radius: 6px; }
+.stock-montage-presets strong { font-size: 15px; }
+.stock-montage-presets span { font-size: 13px; line-height: 1.55; color: #c1c6cf; }
+.stock-montage-presets small { margin-top: auto; }
+.stock-workflow audio { width: 100%; }
+.stock-workflow:disabled { opacity: .7; }
+.stock-montage-choices, .stock-background-picker, .stock-background-catalog, .stock-music-controls { display: grid; gap: 14px; min-width: 0; }
+.stock-montage-choices p, .stock-background-picker p, .stock-music-controls p { margin: 0; color: #bcc0ca; line-height: 1.55; }
+.stock-montage-choices small, .stock-background-picker small, .stock-music-controls small { color: #aeb4c1; line-height: 1.5; }
+.stock-background-picker .stock-workflow-actions > button { border: 1px solid #3d4350; border-radius: 8px; padding: 9px 12px; background: #10141b; color: #e6e8ed; cursor: pointer; max-width: 100%; overflow-wrap: anywhere; }
+.stock-background-picker button[aria-pressed=true] { border-color: #d7b467; background: #252319; }
+.stock-background-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(145px,1fr)); gap: 10px; max-height: 420px; overflow-y: auto; padding: 3px; }
+.stock-background-grid > button { min-width: 0; display: grid; gap: 7px; text-align: left; border: 1px solid #3d4350; border-radius: 8px; padding: 8px; color: #e6e8ed; background: #10141b; cursor: pointer; }
+.stock-background-grid img, .stock-background-grid video { width: 100%; aspect-ratio: 16/9; object-fit: contain; border-radius: 4px; background: #0d0f12; }
+.stock-background-grid strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stock-background-preview { margin: 0; display: grid; gap: 7px; max-width: 480px; }
+.stock-background-preview img, .stock-background-preview video { width: 100%; max-height: 270px; object-fit: contain; background: #0d0f12; border: 1px solid #3d4350; border-radius: 8px; }
+.stock-background-preview figcaption { color: #aeb4c1; font-size: 12px; }
+.stock-background-picker button:focus-visible { outline: 2px solid #e4c477; outline-offset: 2px; }
+.stock-music-controls audio { width: 100%; }
+.stock-music-policy { display: flex; gap: 8px; flex-wrap: wrap; }
+.stock-workflow button, .stock-creation-controls button { min-height: 36px; font: inherit; max-width: 100%; }
+.stock-music-policy button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border, #3d4350); background: var(--panel-2, #10141b); color: inherit; cursor: pointer; }
+.stock-music-policy button[aria-pressed=true] { border-color: #d7b467; background: #252319; }
+.stock-montage-card { display: grid; gap: 10px; min-width: 0; }
+.stock-montage-example { display: grid; gap: 10px; border: 1px solid var(--border, #3d4350); border-radius: 10px; padding: 12px; }
+.stock-montage-example video { display: block; width: 100%; max-height: 320px; aspect-ratio: 16/9; object-fit: contain; background: #050505; }
+.stock-background-picker .stock-workflow-error { color: #f39791; }
+.stock-creation-controls { border: 1px solid #3d4350; border-radius: 10px; padding: 14px; min-width: 0; }
+.stock-creation-controls > summary { cursor: pointer; color: #e4d5b4; font-size: 13px; line-height: 1.5; }
+.stock-creation-controls > fieldset { margin: 16px 0 0; padding: 0; border: 0; min-width: 0; display: grid; gap: 14px; }
+.stock-creation-controls h3 { margin: 12px 0 0; font-size: 15px; }
+@media(max-width: 850px) { .stock-montage-presets { grid-template-columns: 1fr; } .stock-montage-presets svg { max-height: 180px; } .stock-workflow-columns { grid-template-columns: 1fr; } .stock-workflow-section { padding: 16px; } }

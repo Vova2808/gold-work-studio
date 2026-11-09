@@ -4,12 +4,32 @@ directories:
   output: ../../release
 files:
   - dist/**/*
+  - '!dist/qa/**'
   - package.json
 asar: true
+asarUnpack:
+  - node_modules/ffmpeg-static/**
+  - node_modules/onnxruntime-node/**
+  # Remotion bundler и compositor запускают дочерние процессы и читают entry с диска.
+  - node_modules/@remotion/**
+  - node_modules/@gold-work/remotion-video/**
+  - node_modules/@gold-work/shared/**
 win:
   target:
-    - target: portable
+    - target: nsis
       arch:
         - x64
-artifactName: Gold-Work-Studio-${version}-portable.${ext}
-
+artifactName: Gold-Work-Studio-${version}-Setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+portable:
+  artifactName: Gold-Work-Studio-${version}-portable.${ext}
+publish:
+  provider: github
+  owner: Vova2808
+  repo: gold-work-studio-updates
+  releaseType: release

@@ -1,0 +1,448 @@
+{
+  "source": "full-clean-03 final-projects.json and saved source QA; URLs omitted; old category reconstructed from the branch and thrown error type, not a serialized failure array",
+  "failures": [
+    {
+      "number": 4,
+      "id": "doc-9b07e4bec5a23238e83a",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 7,
+      "id": "doc-5c8b7d41dd7f02c526a5",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "The ship is in open water and is not visibly moored to any dock, pier, buoy, or anchor.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "pexels: Поиск сцены завершён",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 9,
+      "id": "doc-010a7fe76a98a66bbac7",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "The video shows the Kintai Bridge over a river during snowfall, with no wooden cargo crates or port visible.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "internet-archive: Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 11,
+      "id": "doc-83c52066a27dd93a66fe",
+      "autoError": "Анализ материала не завершён: Некорректный полный JSON/JSON5 ответ анализа Stock; ответ сохранён без повторной оплаты Сохранено 1385 знаков ответа.",
+      "recordedRejection": "The ship has no sails unfurled or set (it is not sailing) and is navigating an urban harbor or bay directly off a city skyline rather than being at sea.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "internet-archive: Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "analysis"
+    },
+    {
+      "number": 12,
+      "id": "doc-7b3823871bd4c29fee44",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "Фрагмент содержит почти полностью чёрный кадр на 0.00 с; платная проверка пропущена.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 13,
+      "id": "doc-e3ea8a15807029f64a1f",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "The visual target requires the interior of a ship cargo hold. The video is an exterior aerial view of a cargo ship and dock looking down into an open hatch, rather than an interior view inside a ship's cargo hold.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 14,
+      "id": "doc-b2744806aa2e36747e81",
+      "autoError": "The boat hull is resting on a flat-rack shipping container on the ground in an outdoor yard, not in a dry dock.",
+      "recordedRejection": "The boat hull is resting on a flat-rack shipping container on the ground in an outdoor yard, not in a dry dock.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 15,
+      "id": "doc-d81ec7990e39b2e5a8cc",
+      "autoError": "The ship has bare masts with no sails set or unfurled, so the requested 'sails' condition is not satisfied.",
+      "recordedRejection": "The ship has bare masts with no sails set or unfurled, so the requested 'sails' condition is not satisfied.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Источник ограничил доступ (HTTP 429); результат сохранён у других источников.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 24,
+      "id": "doc-2a084c9373a92ad24d20",
+      "autoError": "The video depicts a cocktail preparation jar with smoke on a bar counter, not a steamboat funnel emitting smoke.",
+      "recordedRejection": "The video depicts a cocktail preparation jar with smoke on a bar counter, not a steamboat funnel emitting smoke.",
+      "sourceErrors": [
+        "commons: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 25,
+      "id": "doc-7382ee8989f995ba971c",
+      "autoError": "Не осталось достаточно времени для проверки содержимого. Новый платный анализ не отправлен; готовые материалы сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник."
+      ],
+      "oldCategory": "unknown",
+      "expectedCategory": "budget-exhausted"
+    },
+    {
+      "number": 26,
+      "id": "doc-e3291f9476f29f6de978",
+      "autoError": "Не осталось достаточно времени для проверки содержимого. Новый платный анализ не отправлен; готовые материалы сохранены.",
+      "recordedRejection": "The video shows the mast and rigging of a modern sailboat or yacht rather than a sailing ship.",
+      "sourceErrors": [
+        "commons: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник."
+      ],
+      "oldCategory": "unknown",
+      "expectedCategory": "budget-exhausted"
+    },
+    {
+      "number": 31,
+      "id": "doc-06b3436795a718ffa917",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "The visual target specifies 'sails filled with wind' (plural), but only a single sail is visible.",
+      "sourceErrors": [
+        "commons: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 33,
+      "id": "doc-7054a38131688210a5b3",
+      "autoError": "The visualTarget requires a sailor steering a ship wheel. The video only shows a hand on the steering wheel of a modern recreational motorboat, with no identifiable sailor or ship wheel present.",
+      "recordedRejection": "The visualTarget requires a sailor steering a ship wheel. The video only shows a hand on the steering wheel of a modern recreational motorboat, with no identifiable sailor or ship wheel present.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "commons: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 35,
+      "id": "doc-33d62fc1c0a9d7095967",
+      "autoError": "The video focuses on a red channel buoy; only a small modern yacht bow is partially visible on the left edge, not a sailing ship entering a harbor.",
+      "recordedRejection": "The video focuses on a red channel buoy; only a small modern yacht bow is partially visible on the left edge, not a sailing ship entering a harbor.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Истекло время поиска источника",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 37,
+      "id": "doc-ec1589c352cad217adde",
+      "autoError": "The video shows a yacht steering wheel and console on deck rather than a boat rudder in the water.",
+      "recordedRejection": "The video shows a yacht steering wheel and console on deck rather than a boat rudder in the water.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 38,
+      "id": "doc-3b98bff84b65a4252339",
+      "autoError": "The deck surface is not visible due to the low camera angle, and only a single person is visibly pulling a rope rather than multiple sailors pulling ropes.",
+      "recordedRejection": "The deck surface is not visible due to the low camera angle, and only a single person is visibly pulling a rope rather than multiple sailors pulling ropes.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.",
+        "internet-archive: Истекло время поиска источника",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Истекло время поиска источника"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 39,
+      "id": "doc-db2d5658e927f158580b",
+      "autoError": "The video shows tea leaves brewing in a glass vessel, not stacked wooden crates.",
+      "recordedRejection": "The video shows tea leaves brewing in a glass vessel, not stacked wooden crates.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 41,
+      "id": "doc-cbba5639b5cd64fefbe5",
+      "autoError": "Не осталось достаточно времени для проверки содержимого. Новый платный анализ не отправлен; готовые материалы сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза."
+      ],
+      "oldCategory": "unknown",
+      "expectedCategory": "budget-exhausted"
+    },
+    {
+      "number": 42,
+      "id": "doc-fea363549098402cc881",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": "The ship's funnel is not emitting smoke.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "pexels: Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 44,
+      "id": "doc-2ed3b95252edcb63e6f4",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 45,
+      "id": "doc-23bb0eb65933f2187ba8",
+      "autoError": "The ship is traveling on an inland canal or river during a maritime parade, not at sea as required.",
+      "recordedRejection": "The ship is traveling on an inland canal or river during a maritime parade, not at sea as required.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "internet-archive: Истекло время поиска источника",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Истекло время поиска источника"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 46,
+      "id": "doc-23fa08a5329d95cb6b1a",
+      "autoError": "Ожидание очереди анализа превышает бюджет. Готовые результаты сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза."
+      ],
+      "oldCategory": "unknown",
+      "expectedCategory": "budget-exhausted"
+    },
+    {
+      "number": 49,
+      "id": "doc-3f6301f528fa46623749",
+      "autoError": "Не удалось прочитать видеоисточник: Источник пробного фрагмента недоступен (HTTP 429)",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "internet-archive: Поиск сцены завершён",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "provider-temporary"
+    },
+    {
+      "number": 50,
+      "id": "doc-7c11b77e27ccefe5c75d",
+      "autoError": "The video shows CGI animated water surface ripples rather than large ocean waves, and lacks real camera footage.",
+      "recordedRejection": "The video shows CGI animated water surface ripples rather than large ocean waves, and lacks real camera footage.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 52,
+      "id": "doc-2c0c7c54308d881a38b9",
+      "autoError": "The video shows living sheep and a lamb rather than packaged wool bales.",
+      "recordedRejection": "The video shows living sheep and a lamb rather than packaged wool bales.",
+      "sourceErrors": [
+        "commons: Вебпоиск: commons.wikimedia.org: публичная страница поиска не вернула доступных ссылок на материалы",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: CAPTCHA/проверка безопасности или ограничение сайта. Пауза 300 с.",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 53,
+      "id": "doc-5835cf243de3d96aa19d",
+      "autoError": "Не удалось прочитать видеоисточник: Источник пробного фрагмента недоступен (HTTP 429)",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "internet-archive: Поиск сцены завершён",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "provider-temporary"
+    },
+    {
+      "number": 54,
+      "id": "doc-1c6a7f63d9ee1cd16d91",
+      "autoError": "Не удалось прочитать видеоисточник: Источник пробного фрагмента недоступен (HTTP 429)",
+      "recordedRejection": "No cargo loading is visible. The footage depicts a floating navigational buoy in a harbor.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "provider-temporary"
+    },
+    {
+      "number": 56,
+      "id": "doc-c8dc7ac5c15f888fbe7d",
+      "autoError": "The video shows a modern motorized cargo ship (Ro-Ro vessel), not a sailing ship.",
+      "recordedRejection": "The video shows a modern motorized cargo ship (Ro-Ro vessel), not a sailing ship.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек. (host=pixabay.com, status=429)",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 59,
+      "id": "doc-7923b2b077054bea9c4c",
+      "autoError": "The video is a wide aerial shot taken from high above; tourists walking on the ship's deck are not discernibly visible.",
+      "recordedRejection": "The video is a wide aerial shot taken from high above; tourists walking on the ship's deck are not discernibly visible.",
+      "sourceErrors": [
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pixabay: Pixabay: исчерпан лимит запросов, повторите через 10 сек.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    },
+    {
+      "number": 60,
+      "id": "doc-c8b014ee41ec94bc1499",
+      "autoError": "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.",
+      "recordedRejection": null,
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "pexels: Поиск сцены завершён",
+        "internet-archive: Поиск сцены завершён",
+        "youtube: YouTube 429: Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' of service 'youtube.googleapis.com' for consumer 'project_number:295834143747'.; Поиск сцены завершён",
+        "commons: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "download"
+    },
+    {
+      "number": 62,
+      "id": "doc-2d4e90c68f4848592f59",
+      "autoError": "The requested wooden ship steering wheel is completely absent; the video shows frothing water beside a boat with a rubber tire fender.",
+      "recordedRejection": "The requested wooden ship steering wheel is completely absent; the video shows frothing water beside a boat with a rubber tire fender.",
+      "sourceErrors": [
+        "pixabay: Источник ограничил запросы. Повторите через несколько минут или выберите другой источник.",
+        "web: Вебпоиск: www.bing.com: Вебпоиск недоступен: сайт приостановлен; действует пауза.",
+        "internet-archive: Поиск сцены завершён"
+      ],
+      "oldCategory": "provider-temporary",
+      "expectedCategory": "content-rejected"
+    }
+  ]
+}

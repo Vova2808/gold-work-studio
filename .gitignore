@@ -7,6 +7,7 @@ release/
 logs/
 data/
 workspace/
+work/
 .env
 .env.*
 !.env.example
@@ -15,6 +16,8 @@ workspace/
 *.p12
 *.pfx
 captures/
+apps/desktop/tools/yt-dlp-*/
+/workspace-data/
 uploads/
 *.sqlite
 *.sqlite3
@@ -24,3 +27,27 @@ Thumbs.db
 .idea/
 .vscode/
 
+
+# Локальные референсные проекты — не для git
+2 софта*/
+G-LABS/
+
+# Локальные секреты, профили и служебные файлы.
+.claude/
+credentials/
+google_credentials.json
+google_token.json
+cookies*.txt
+browser-profiles/
+isolated-profile*/
+__pycache__/
+*.pyc
+*.tmp
+*.zip
+*.7z
+
+# Локальные настройки агента и побочные результаты компиляции TypeScript.
+.codex/
+*.tsbuildinfo
+/apps/renderer/src/*.js
+/apps/renderer/vite.config.js
