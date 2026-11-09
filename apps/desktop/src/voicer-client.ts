@@ -6,7 +6,7 @@ import { atomicWrite } from "./fs-utils.js";
 import { NO_RETRY_MARKER } from "./google-errors.js";
 import { parseProxyUrl, proxyRequest, ProxyConnectError, type ProxyResponse } from "./proxy-utils.js";
 import type { VoicerStore } from "./voicer-store.js";
-import { observeNetwork } from "./diagnostics.js";
+import { observeNetwork, recordDiagnosticEvent } from "./diagnostics.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_RESPONSE_BODY_TIMEOUT_MS = 20_000;
@@ -15,6 +15,7 @@ const DEFAULT_POLL_INTERVAL_MS = 3_000;
 const DEFAULT_POLL_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SAFE_RETRY_ATTEMPTS = 4;
 const DEFAULT_SAFE_RETRY_BASE_DELAY_MS = 1_000;
+const TEMPLATE_BROWSE_PATH = "/templates/browse";
 
 export type VoicerClientErrorCode =
   | "configuration"
@@ -110,6 +111,18 @@ interface LumeanEnvelope<T> {
   success?: boolean;
   message?: string;
   data?: T;
+}
+
+interface LumeanTemplatePage {
+  items: Array<{
+    type?: unknown;
+    id?: unknown;
+    name?: unknown;
+    service_key?: unknown;
+    service?: { code?: unknown } | null;
+  }>;
+  current_page: number;
+  last_page: number;
 }
 
 interface VoicerHttpResponse {
@@ -214,12 +227,63 @@ export class VoicerClient {
     }
   }
 
-  /** TTS-шаблоны пользователя (создаются в кабинете Lumean или этим приложением). */
+  /** TTS-шаблоны пользователя в корне и вложенных папках Lumean. */
   async templates(signal?: AbortSignal): Promise<VoicerTemplate[]> {
-    const data = await this.request<Array<{ id?: string; name?: string; service_key?: string }>>("GET", "/templates", undefined, signal);
-    return (Array.isArray(data) ? data : [])
-      .filter((item) => typeof item.id === "string" && (item.service_key === "elevenlabs" || !item.service_key))
-      .map((item) => ({ uuid: item.id as string, name: item.name || "Шаблон", broken: false }));
+    const templates = new Map<string, VoicerTemplate>();
+    const folders: Array<string | undefined> = [undefined];
+    const visitedFolders = new Set<string>();
+    const recordPage = (data: LumeanTemplatePage, afterFilterCount: number | null) => {
+      recordDiagnosticEvent("debug", "voicer.templates.page", {
+        endpoint: TEMPLATE_BROWSE_PATH,
+        dataType: data === null ? "null" : Array.isArray(data) ? "array" : typeof data,
+        extractedCount: Array.isArray(data?.items) ? data.items.length : null,
+        afterFilterCount,
+      });
+    };
+    const invalidResponse = (data: LumeanTemplatePage) => {
+      recordPage(data, null);
+      return new VoicerClientError(
+        "Lumean вернул список шаблонов в неизвестном формате.",
+        { code: "response_body", retryable: false, creationUncertain: false }
+      );
+    };
+
+    // Пройдём все страницы корня до папок. Новые корневые шаблоны по-прежнему первые.
+    for (const folderId of folders) {
+      const query = new URLSearchParams({ per_page: "100", sort_by: "created_at", sort_order: "desc" });
+      if (folderId) query.set("folder_id", folderId);
+      for (let page = 1, lastPage = 1; page <= lastPage; page += 1) {
+        query.set("page", String(page));
+        const data = await this.request<LumeanTemplatePage>("GET", `${TEMPLATE_BROWSE_PATH}?${query}`, undefined, signal);
+        if (!Array.isArray(data?.items) || data.current_page !== page || !Number.isSafeInteger(data.last_page) || data.last_page < page) {
+          throw invalidResponse(data);
+        }
+        lastPage = data.last_page;
+
+        let afterFilterCount = 0;
+        for (const item of data.items) {
+          if (typeof item?.id !== "string" || !item.id.trim()) throw invalidResponse(data);
+          if (item.type === "folder") {
+            if (!visitedFolders.has(item.id)) {
+              visitedFolders.add(item.id);
+              folders.push(item.id);
+            }
+            continue;
+          }
+          if (item.type !== "template") throw invalidResponse(data);
+          const service = item.service_key || item.service?.code;
+          if (typeof service !== "string" || !service.trim()) throw invalidResponse(data);
+          if (service !== "elevenlabs") continue;
+          if (typeof item.name !== "string") throw invalidResponse(data);
+          afterFilterCount += 1;
+          if (!templates.has(item.id)) {
+            templates.set(item.id, { uuid: item.id, name: item.name || "Шаблон", broken: false });
+          }
+        }
+        recordPage(data, afterFilterCount);
+      }
+    }
+    return [...templates.values()];
   }
 
   /** Полный цикл озвучки: заказ по шаблону → ожидание completed → ссылка на файл → скачивание MP3. */
@@ -469,6 +533,7 @@ export class VoicerClient {
       );
     }
     const creationRequest = method === "POST" && path === "/orders";
+    const templateBrowseRequest = method === "GET" && path.startsWith(`${TEMPLATE_BROWSE_PATH}?`);
     const controller = new AbortController();
     const unlinkAbort = forwardAbort(signal, controller);
     let response: VoicerHttpResponse;
@@ -564,17 +629,22 @@ export class VoicerClient {
       }
       if (response.status === 403) {
         throw new VoicerClientError(
-          `Lumean: у ключа нет нужного права (${parsed?.message ?? "forbidden"}). Создайте ключ с пресетом full.`,
+          templateBrowseRequest
+            ? "Lumean отклонил доступ к списку шаблонов. Проверьте право templates.read."
+            : `Lumean: у ключа нет нужного права (${parsed?.message ?? "forbidden"}). Создайте ключ с пресетом full.`,
           { code: "http", retryable: false, creationUncertain: false }
         );
       }
       const transient = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
       const creationUncertain = creationRequest && ![400, 401, 402, 403, 404, 405, 413, 415, 422, 429].includes(response.status);
       throw new VoicerClientError(
-        `Lumean ${response.status}: ${parsed?.message ?? text.slice(0, 200)}`,
+        templateBrowseRequest
+          ? `Lumean ${response.status}: не удалось загрузить список шаблонов.`
+          : `Lumean ${response.status}: ${parsed?.message ?? text.slice(0, 200)}`,
         { code: "http", retryable: transient && !creationUncertain, creationUncertain }
       );
     }
+    if (templateBrowseRequest) return parsed?.data as T;
     return (parsed?.data ?? (parsed as unknown)) as T;
   }
 

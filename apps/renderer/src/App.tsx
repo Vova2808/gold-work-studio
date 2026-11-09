@@ -1,6 +1,7 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectEditorReady, type DocumentaryQueryPlanIssue } from '@gold-work/shared';
 import { stopVoiceSample, useVoiceSample } from './useVoiceSample';
+import { useVoicerTemplates } from './useVoicerTemplates';
 import {LocalMediaImage} from './LocalMediaImage';
 import {SceneSearchQueries} from './SceneSearchQueries';
 import {channelMediaMode, projectMediaMode} from '@gold-work/shared';
@@ -15,7 +16,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from
 import { Player, type PlayerRef } from "@remotion/player";
 import { UniversalVideo, DocumentaryVideo, buildDocumentaryTimeline, normalizeUniversalTimeline, selectProjectDocumentaryPalette, type DocumentaryTimeline, type TimelineMedia, type TimelineText, type UniversalTimeline, type UniversalVisualBeat } from "@gold-work/remotion-video";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bot, Captions, Check, ChevronLeft, CircleAlert, CircleUserRound, Clapperboard, Clock3, Copy, Download, Eye, EyeOff, FileText, Folder, FolderOpen, GripVertical, Grid2X2, Image, Languages, LayoutDashboard, Lightbulb, ListPlus, Mic2, MoreHorizontal, Music2, Paperclip, Pause, Play, Plus, RotateCcw, Save, Search, Send, Settings, SlidersHorizontal, Sparkles, Square, SquareTerminal, Trash2, Upload, Video, Volume2, WandSparkles, X, Zap } from "lucide-react";
-import { allocateAiStorySceneDurations, allocateSceneDurations, createDefaultProjectSettings, estimateNarrationDurationSeconds, IMAGE_STYLES, isBareDurationReply, isDirectorChatOnlyRequest, isScenarioGenerationRequest, isTranscriptAnalysisRequest, parseExplicitDurationSeconds, parsePastedTranscript, resolveProjectSceneTransition, resolveProjectSceneTransitionDuration, ttsLanguageCode, TTS_VOICES, voiceCalibrationMatches, type AutoStockProgress, type AutoStockSelectionResult, type ChannelProfile, type ChatTopicSummary, type ConsoleLogEntry, type DesktopApi, type LogLevel, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type StockAsset, type StockMediaType, type StockOrientation, type StockProvider, type SubtitleSettings, type UpdateProjectInput, type VisualBeat, type VoicerTemplate } from "@gold-work/shared";
+import { allocateAiStorySceneDurations, allocateSceneDurations, createDefaultProjectSettings, estimateNarrationDurationSeconds, IMAGE_STYLES, isBareDurationReply, isDirectorChatOnlyRequest, isScenarioGenerationRequest, isTranscriptAnalysisRequest, parseExplicitDurationSeconds, parsePastedTranscript, resolveProjectSceneTransition, resolveProjectSceneTransitionDuration, ttsLanguageCode, TTS_VOICES, voiceCalibrationMatches, type AutoStockProgress, type AutoStockSelectionResult, type ChannelProfile, type ChatTopicSummary, type ConsoleLogEntry, type DesktopApi, type LogLevel, type Project, type ProjectSettings, type QueueTask, type ReferenceAnalysis, type Scene, type StockAsset, type StockMediaType, type StockOrientation, type StockProvider, type SubtitleSettings, type UpdateProjectInput, type VisualBeat } from "@gold-work/shared";
 import { fallbackApi } from "./fallback-api";
 import { mergeScenarioDraft, restoreDocumentaryEdit } from "./scenario-draft-merge";
 import { preparePreviewFrames, remapPreviewTime } from "./timeline-preview";
@@ -1807,11 +1808,7 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
   const [scenarioProgress, setScenarioProgress] = useState<string | null>(null);
   useEffect(() => onRegisterLeaveGuard("project", () => leaveGuardRef.current()), [onRegisterLeaveGuard]);
   useEffect(() => api.onDirectorProgress((text) => setScenarioProgress(text)), []);
-  const [voicerTemplates, setVoicerTemplates] = useState<VoicerTemplate[] | null>(null);
-  useEffect(() => {
-    if (draft?.settings.voice.provider !== "elevenlabs" || voicerTemplates !== null) return;
-    api.listVoicerTemplates().then(setVoicerTemplates).catch(() => setVoicerTemplates([]));
-  }, [draft?.settings.voice.provider, voicerTemplates]);
+  const { templates, templatesBusy, templatesStatus, refreshTemplates } = useVoicerTemplates(api, draft?.settings.voice.provider === "elevenlabs");
   useEffect(() => {
     setDraft(project ? structuredClone(project) : null);
   }, [project?.id]);
@@ -2050,18 +2047,18 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
       <>
       {isAiStory ? <AiStorySettings
         project={draft} disabled={busy || saving || draft.status === "generating" || draft.status === "paused"} samplePlaying={samplePlaying} samplePreparing={samplePreparing}
-        templates={voicerTemplates} voices={voiceOptions} normalizedVoice={normalizeVoiceId(settings.voice.voice)}
+        templates={templates} templatesBusy={templatesBusy} templatesStatus={templatesStatus} voices={voiceOptions} normalizedVoice={normalizeVoiceId(settings.voice.voice)}
         plannedVeoCount={plannedVeoSceneCount}
         styleChooser={<VisualStyleChooser compact value={settings.image.style} onChange={style => setSettings({ image: { ...settings.image, style } })} />}
         onSettings={setSettings} onCalibrate={() => void calibrateProjectVoice()}
         onAspectRatio={aspectRatio => setDraft({ ...draft, aspectRatio })}
-        onRefreshTemplates={() => setVoicerTemplates(null)} onReferences={() => void chooseReferences()}
+        onRefreshTemplates={refreshTemplates} onReferences={() => void chooseReferences()}
         onAccounts={() => void saveAndNavigate("settings")}
       /> : isDocumentary ? <StockWorkflowSettings
         project={draft} api={api} disabled={busy || saving || draft.status === "generating" || draft.status === "paused"}
-        samplePlaying={samplePlaying} samplePreparing={samplePreparing} templates={voicerTemplates} voices={voiceOptions} normalizedVoice={normalizeVoiceId(settings.voice.voice)}
+        samplePlaying={samplePlaying} samplePreparing={samplePreparing} templates={templates} templatesBusy={templatesBusy} templatesStatus={templatesStatus} voices={voiceOptions} normalizedVoice={normalizeVoiceId(settings.voice.voice)}
         onSettings={setSettings} onAspectRatio={aspectRatio => setDraft({ ...draft, aspectRatio })}
-        onCalibrate={() => void calibrateProjectVoice()} onRefreshTemplates={() => setVoicerTemplates(null)}
+        onCalibrate={() => void calibrateProjectVoice()} onRefreshTemplates={refreshTemplates}
         onScenario={() => void navigateWorkflow("scenario")} onAccounts={() => void saveAndNavigate("settings")}
         onLibrary={() => void saveAndNavigate("library")} onChooseMusic={() => void chooseMusic()}
         onRefreshMontage={async () => {
@@ -2194,7 +2191,10 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
                     >
                       Выберите шаблон
                     </button>
-                    {(voicerTemplates ?? []).map((template) => (
+                    {settings.voice.voice && !templates.some((template) => template.uuid === settings.voice.voice) && (
+                      <button type="button" className="selected" disabled>Сохранённый шаблон Lumean</button>
+                    )}
+                    {templates.map((template) => (
                       <button
                         key={template.uuid}
                         className={settings.voice.voice === template.uuid ? "selected" : ""}
@@ -2203,11 +2203,11 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
                         {template.name}
                       </button>
                     ))}
-                    <button title="Обновить список шаблонов с Lumean" onClick={() => setVoicerTemplates(null)}>
+                    <button type="button" title="Обновить список шаблонов с Lumean" disabled={templatesBusy} onClick={refreshTemplates}>
                       <RotateCcw size={12} />
                     </button>
                   </div>
-                  <small>{voicerTemplates === null ? "Загружаю шаблоны с Lumean…" : voicerTemplates.length === 0 ? "Шаблоны не найдены — сохраните ключ Lumean в Настройках, и они появятся здесь" : "Ваши шаблоны с lumean.app. Пример генерируется один раз и кэшируется."}</small>
+                  <small role="status">{templatesStatus}</small>
                 </Field>
               ) : (
                 <Field label="ГОЛОС" hint="Голос озвучки этого проекта. Кнопка ниже проиграет короткий пример выбранного голоса.">

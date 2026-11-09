@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useVoiceSample } from './useVoiceSample';
+import { useVoicerTemplates } from './useVoicerTemplates';
 import type { ComponentType, SVGProps } from "react";
 import { ArchiveRestore, ArrowLeft, Check, Clock3, ExternalLink, FileText, Film, FolderOpen, Gauge, Globe2, Layers3, MessageSquareText, Mic2, Pencil, Play, Plus, RefreshCw, Settings, Trash2, UserRound, X } from "lucide-react";
 import * as FlagIcons from "country-flag-icons/react/3x2";
@@ -295,38 +296,29 @@ function ChannelProfileDialog({ api, existing, onClose, onSaved, onError, onOpen
   const [countryCode, setCountryCode] = useState(initialCountry.code);
   const [masterPrompt, setMasterPrompt] = useState(existing?.masterPrompt ?? "");
   const [defaultImageStyle, setDefaultImageStyle] = useState(existing?.defaultImageStyle ?? existing?.primaryCharacter?.stylePrompt ?? "");
-  const [templates, setTemplates] = useState<VoicerTemplate[]>([]);
-  const [templatesBusy, setTemplatesBusy] = useState(false);
-  const [templateUuid, setTemplateUuid] = useState(existing?.lumeanTemplateUuid ?? "");
+  const { templates, templatesBusy, templatesStatus, refreshTemplates } = useVoicerTemplates(api, step === 2);
+  const [templateChoice, setTemplateChoice] = useState({ uuid: existing?.lumeanTemplateUuid ?? "", name: existing?.lumeanTemplateName });
   const [duration, setDuration] = useState(existing?.defaultDurationMinutes ?? 10);
   const [direction, setDirection] = useState<ChannelDirection>(existing?.direction ?? (existing?.defaultMediaMode === "stock" ? "stock-documentary" : "ai-story"));
   const [motionTemplate, setMotionTemplate] = useState(existing?.motionTemplate ?? "Без шаблона");
   const [saving, setSaving] = useState(false);
   const country = COUNTRIES.find((option) => option.code === countryCode) ?? initialCountry;
 
-  async function refreshTemplates() {
-    setTemplatesBusy(true);
-    try {
-      setTemplates(await api.listVoicerTemplates());
-    } catch (reason) {
-      onError(errorText(reason));
-    } finally {
-      setTemplatesBusy(false);
-    }
+  function selectTemplate(uuid: string) {
+    const template = templates.find((item) => item.uuid === uuid);
+    setTemplateChoice({ uuid, name: template?.name ?? (uuid === existing?.lumeanTemplateUuid ? existing?.lumeanTemplateName : undefined) });
   }
 
-  useEffect(() => { if (step === 2) void refreshTemplates(); }, [step]);
-
   async function save() {
-    const selectedTemplate = templates.find((template) => template.uuid === templateUuid);
+    const selectedTemplate = templates.find((template) => template.uuid === templateChoice.uuid);
     const input: SaveChannelProfileInput = {
       name,
       countryCode: country.code,
       languageCode: country.languageCode,
       languageLabel: country.language,
       masterPrompt,
-      lumeanTemplateUuid: templateUuid || undefined,
-      lumeanTemplateName: selectedTemplate?.name || existing?.lumeanTemplateName,
+      lumeanTemplateUuid: templateChoice.uuid || undefined,
+      lumeanTemplateName: selectedTemplate?.name ?? templateChoice.name,
       defaultDurationMinutes: duration,
       direction,
       defaultMediaMode: direction === "ai-story" ? "ai" : "stock",
@@ -376,17 +368,21 @@ function ChannelProfileDialog({ api, existing, onClose, onSaved, onError, onOpen
           <div className="channel-form channel-final-step">
             <div className="voice-picker-row">
               <label><span>Сохранённый голос Lumean</span>
-                <select value={templateUuid} onChange={(event) => setTemplateUuid(event.target.value)}>
+                <select value={templateChoice.uuid} onChange={(event) => selectTemplate(event.target.value)}>
                   <option value="">Голос пока не выбран</option>
                   {existing?.lumeanTemplateUuid && !templates.some((template) => template.uuid === existing.lumeanTemplateUuid) && (
                     <option value={existing.lumeanTemplateUuid}>{existing.lumeanTemplateName || "Сохранённый голос"}</option>
                   )}
+                  {templateChoice.uuid && templateChoice.uuid !== existing?.lumeanTemplateUuid && !templates.some((template) => template.uuid === templateChoice.uuid) && (
+                    <option value={templateChoice.uuid}>{templateChoice.name || "Выбранный голос Lumean"}</option>
+                  )}
                   {templates.map((template) => <option key={template.uuid} value={template.uuid} disabled={template.broken}>{template.name}{template.broken ? " (недоступен)" : ""}</option>)}
                 </select>
               </label>
-              <button className="icon-button refresh-voice" title="Обновить список голосов" disabled={templatesBusy} onClick={() => void refreshTemplates()}><RefreshCw size={17} className={templatesBusy ? "spin" : ""} /></button>
+              <button className="icon-button refresh-voice" title="Обновить список голосов" disabled={templatesBusy} onClick={refreshTemplates}><RefreshCw size={17} className={templatesBusy ? "spin" : ""} /></button>
             </div>
-            {templates.length === 0 && <button className="settings-inline-link" onClick={onOpenSettings}><Settings size={15} /> Подключить Lumean API в настройках</button>}
+            <small role="status">{templatesStatus}</small>
+            {!templatesBusy && templates.length === 0 && <button className="settings-inline-link" onClick={onOpenSettings}><Settings size={15} /> Настройки подключения Lumean</button>}
             <div className="channel-default-grid">
               <small>Длительность ролика рассчитывается по готовому тексту и выбранному голосу.</small>
               <label><span>Направление</span><input value={directionLabel(direction)} disabled title="Направление нельзя изменить после создания канала" /></label>
@@ -432,28 +428,17 @@ function NewVideoDialog({ api, profile, busy, onClose, onCreate, onError }: {
   const creationMode = "script" as const;
   const [content, setContent] = useState("");
   const [imageStyle, setImageStyle] = useState(() => channelImageStyle(profile, createDefaultProjectSettings().image.style, Boolean(profile.primaryCharacter)));
-  const [templates, setTemplates] = useState<VoicerTemplate[]>([]);
-  const [voicesBusy, setVoicesBusy] = useState(false);
-  const [voiceChoice, setVoiceChoice] = useState(() => initialVoiceChoice(profile));
+  const { templates, templatesBusy, templatesStatus, refreshTemplates } = useVoicerTemplates(api);
+  const [voiceChoice, setVoiceChoice] = useState<{ value: string; label?: string }>(() => ({ value: initialVoiceChoice(profile) }));
   const [calibration, setCalibration] = useState<VoiceCalibration | null>(null);
-  const voiceSample = useVoiceSample(`${profile.id}:${voiceChoice}`);
+  const voiceSample = useVoiceSample(`${profile.id}:${voiceChoice.value}`);
   const calibrationBusy = voiceSample.preparing;
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [useChannelCharacter, setUseChannelCharacter] = useState(Boolean(profile.primaryCharacter));
 
-  useEffect(() => {
-    let cancelled = false;
-    setVoicesBusy(true);
-    void api.listVoicerTemplates()
-      .then((items) => { if (!cancelled) setTemplates(items); })
-      .catch((reason) => { if (!cancelled) setVoiceError(errorText(reason)); })
-      .finally(() => { if (!cancelled) setVoicesBusy(false); });
-    return () => { cancelled = true; };
-  }, [api]);
-
-  const voice = resolveVoiceChoice(voiceChoice, profile, templates);
+  const voice = resolveVoiceChoice(voiceChoice.value, profile, templates, voiceChoice.label);
   const edgeVoices = TTS_VOICES.filter((item) => item.language === "any" || item.language === profile.languageCode);
   const estimatedDurationSeconds = calibration && content.trim() ? estimateNarrationDurationSeconds(content, calibration) : null;
 
@@ -529,13 +514,21 @@ function NewVideoDialog({ api, profile, busy, onClose, onCreate, onError }: {
             </div>
             <div className="video-voice-controls">
               <select
-                value={voiceChoice}
-                onChange={(event) => { setVoiceChoice(event.target.value); setCalibration(null); setVoiceError(null); }}
+                value={voiceChoice.value}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setVoiceChoice({ value, label: resolveVoiceChoice(value, profile, templates)?.label });
+                  setCalibration(null);
+                  setVoiceError(null);
+                }}
                 disabled={calibrationBusy}
               >
                 <option value="">Выберите голос</option>
                 {profile.lumeanTemplateUuid && !templates.some((item) => item.uuid === profile.lumeanTemplateUuid) && (
                   <option value={`lumean:${profile.lumeanTemplateUuid}`}>{profile.lumeanTemplateName || "Голос канала"} · Lumean</option>
+                )}
+                {voice?.provider === "elevenlabs" && voice.id !== profile.lumeanTemplateUuid && !templates.some((item) => item.uuid === voice.id) && (
+                  <option value={voiceChoice.value}>{voice.label} · Lumean</option>
                 )}
                 {templates.length > 0 && <optgroup label="Lumean">{templates.map((template) => <option key={template.uuid} value={`lumean:${template.uuid}`} disabled={template.broken}>{template.name}{template.broken ? " (недоступен)" : ""}</option>)}</optgroup>}
                 <optgroup label="Edge / Google TTS">{edgeVoices.map((item) => <option key={item.id} value={`edge:${item.id}`}>{item.label}</option>)}</optgroup>
@@ -546,7 +539,10 @@ function NewVideoDialog({ api, profile, busy, onClose, onCreate, onError }: {
               </button>
             </div>
             {!aiStory && <small className="voice-calibration-note">Образец необязателен. Для платного голоса он расходует баланс сервиса.</small>}
-            {voicesBusy && <small className="voice-calibration-note">Обновляю список голосов Lumean…</small>}
+            <div className="video-voice-controls">
+              <small className="voice-calibration-note" role="status">{templatesStatus}</small>
+              <button type="button" className="ghost-button small" disabled={templatesBusy} onClick={refreshTemplates}>Обновить голоса</button>
+            </div>
             {calibration && (
               <div className="voice-calibration-stats">
                 <Gauge size={16} />
@@ -669,12 +665,12 @@ function initialVoiceChoice(profile: ChannelProfile): string {
   return edge ? `edge:${edge.id}` : "";
 }
 
-function resolveVoiceChoice(value: string, profile: ChannelProfile, templates: VoicerTemplate[]): { provider: "edge-tts" | "elevenlabs"; id: string; label: string } | null {
+function resolveVoiceChoice(value: string, profile: ChannelProfile, templates: VoicerTemplate[], selectedLabel?: string): { provider: "edge-tts" | "elevenlabs"; id: string; label: string } | null {
   if (value.startsWith("lumean:")) {
     const id = value.slice("lumean:".length).trim();
     if (!id) return null;
     const template = templates.find((item) => item.uuid === id);
-    return { provider: "elevenlabs", id, label: template?.name || (profile.lumeanTemplateUuid === id ? profile.lumeanTemplateName : undefined) || "Голос Lumean" };
+    return { provider: "elevenlabs", id, label: template?.name || (profile.lumeanTemplateUuid === id ? profile.lumeanTemplateName : undefined) || selectedLabel || "Голос Lumean" };
   }
   if (value.startsWith("edge:")) {
     const id = value.slice("edge:".length).trim();

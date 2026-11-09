@@ -14,7 +14,9 @@ type Props = {
   disabled: boolean;
   samplePlaying: boolean;
   samplePreparing: boolean;
-  templates: VoicerTemplate[] | null;
+  templates: VoicerTemplate[];
+  templatesBusy: boolean;
+  templatesStatus: string;
   voices: Array<{ id: string; label: string; gender?: string }>;
   normalizedVoice: string;
   onSettings: (patch: Partial<ProjectSettings>) => void;
@@ -31,7 +33,7 @@ function Field({ title, children }: { title: string; children: ReactNode }) {
   return <label className="stock-workflow-field"><span>{title}</span>{children}</label>;
 }
 
-export function StockWorkflowSettings({ project, api, disabled, samplePlaying, samplePreparing, templates, voices, normalizedVoice,
+export function StockWorkflowSettings({ project, api, disabled, samplePlaying, samplePreparing, templates, templatesBusy, templatesStatus, voices, normalizedVoice,
   onSettings, onAspectRatio, onCalibrate, onRefreshTemplates, onScenario, onAccounts, onLibrary, onChooseMusic, onRefreshMontage }: Props) {
   const { settings } = project;
   const { voice, assembly } = settings;
@@ -58,15 +60,15 @@ export function StockWorkflowSettings({ project, api, disabled, samplePlaying, s
           <Field title="Голос"><select aria-label="Голос" value={voice.provider === "elevenlabs" ? voice.voice : normalizedVoice} onChange={e => changeVoice(e.target.value)}>
             <option value="">Выберите голос</option>
             {voice.provider === "elevenlabs" ? <>
-              {voice.voice && !templates?.some(item => item.uuid === voice.voice) && <option value={voice.voice}>Сохранённый голос Lumean</option>}
-              {(templates ?? []).map(item => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}
+              {voice.voice && !templates.some(item => item.uuid === voice.voice) && <option value={voice.voice}>Сохранённый голос Lumean</option>}
+              {templates.map(item => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}
             </> : <>
               {normalizedVoice && !voices.some(item => item.id === normalizedVoice) && <option value={normalizedVoice}>Сохранённый голос · {normalizedVoice}</option>}
               {voices.map(item => <option key={item.id} value={item.id}>{item.label}{item.gender ? ` (${item.gender})` : ""}</option>)}
             </>}
           </select></Field>
         </div>
-        {voice.provider === "elevenlabs" && <div className="stock-workflow-actions"><button type="button" className="outline-button small" onClick={onRefreshTemplates}>Обновить голоса</button><small>{templates === null ? "Загружаю голоса…" : !templates.length ? "Голоса не загружены. Проверьте ключ Lumean в подключениях." : `${templates.length} голосов Lumean`}</small></div>}
+        {voice.provider === "elevenlabs" && <div className="stock-workflow-actions"><button type="button" className="outline-button small" disabled={templatesBusy} onClick={onRefreshTemplates}>Обновить голоса</button><small role="status">{templatesStatus}</small></div>}
         <div className="stock-workflow-actions"><button type="button" className="outline-button small" disabled={samplePreparing || !voice.voice.trim()} onClick={onCalibrate}>{samplePreparing ? "Готовлю пример…" : samplePlaying ? "Остановить пример" : "Прослушать пример голоса"}</button><small>{calibrated ? "Скорость выбранного голоса измерена." : "Пример также измеряет скорость для длительности сцен."} Новый пример расходует баланс сервиса.</small></div>
       </>}
       <button type="button" className="ghost-button" onClick={onAccounts}>Ключи и подключения сервисов</button>

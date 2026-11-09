@@ -7,7 +7,9 @@ type Props = {
   disabled: boolean;
   samplePlaying: boolean;
   samplePreparing: boolean;
-  templates: VoicerTemplate[] | null;
+  templates: VoicerTemplate[];
+  templatesBusy: boolean;
+  templatesStatus: string;
   voices: Array<{ id: string; label: string; gender?: string }>;
   normalizedVoice: string;
   plannedVeoCount: number;
@@ -29,7 +31,7 @@ function More({ title, children, open }: { title: string; children: ReactNode; o
 }
 
 /** Project-only controls. Connection secrets and scenario authoring stay on their own screens. */
-export function AiStorySettings({ project, disabled, samplePlaying, samplePreparing, templates, voices, normalizedVoice,
+export function AiStorySettings({ project, disabled, samplePlaying, samplePreparing, templates, templatesBusy, templatesStatus, voices, normalizedVoice,
   plannedVeoCount, styleChooser, onSettings, onAspectRatio, onCalibrate, onRefreshTemplates, onReferences, onAccounts }: Props) {
   const { settings } = project;
   const { voice, assembly } = settings;
@@ -37,7 +39,7 @@ export function AiStorySettings({ project, disabled, samplePlaying, samplePrepar
   const video = {...settings.video, provider:'flow' as const, model:/veo_3_1/i.test(settings.video.model) ? settings.video.model : 'veo_3_1_i2v_s_fast'};
   const calibrated = voiceCalibrationMatches(voice.calibration, voice.provider, voice.voice, project.language);
   const selectedVoice = voice.provider === "elevenlabs"
-    ? templates?.find(template => template.uuid === voice.voice)?.name ?? (voice.voice ? "Сохранённый шаблон Lumean" : "Голос не выбран")
+    ? templates.find(template => template.uuid === voice.voice)?.name ?? (voice.voice ? "Сохранённый шаблон Lumean" : "Голос не выбран")
     : voices.find(item => item.id === normalizedVoice)?.label ?? (voice.voice || "Голос не выбран");
   const style = IMAGE_STYLES.find(item => item.promptSuffix === image.style.trim());
   const selectionMode = video.selectionMode ?? "auto";
@@ -70,11 +72,11 @@ export function AiStorySettings({ project, disabled, samplePlaying, samplePrepar
             })}>
               <option value="">Выберите голос</option>
               {voice.provider === "elevenlabs" ? <>
-                {voice.voice && !templates?.some(item => item.uuid === voice.voice) && <option value={voice.voice}>Сохранённый шаблон</option>}
-                {(templates ?? []).map(item => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}
+                {voice.voice && !templates.some(item => item.uuid === voice.voice) && <option value={voice.voice}>Сохранённый шаблон</option>}
+                {templates.map(item => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}
               </> : voices.map(item => <option key={item.id} value={item.id}>{item.label}{item.gender ? ` (${item.gender})` : ""}</option>)}
             </select></Field>
-            {voice.provider === "elevenlabs" && <div className="ai-settings-inline"><small>{templates === null ? "Загружаю шаблоны…" : templates.length ? `${templates.length} шаблонов` : "Список недоступен. Сохранённый голос не изменён."}</small><button type="button" className="ghost-button small" onClick={onRefreshTemplates}>Обновить список</button></div>}
+            {voice.provider === "elevenlabs" && <div className="ai-settings-inline"><small role="status">{templatesStatus}</small><button type="button" className="ghost-button small" disabled={templatesBusy} onClick={onRefreshTemplates}>Обновить список</button></div>}
             <button type="button" className="outline-button small" disabled={samplePreparing || !voice.voice.trim() || voice.provider !== 'elevenlabs'} onClick={onCalibrate}>
               <Volume2 size={15} />{samplePreparing ? "Готовлю пример…" : samplePlaying ? "Остановить пример" : calibrated ? "Прослушать пример" : "Озвучить тест и измерить скорость"}
             </button>
