@@ -7,6 +7,8 @@ import type { ProxyResponse } from "./proxy-utils.js";
 export const NO_RETRY_MARKER = "[no-retry] ";
 
 export interface PaidMediaSubmission {
+  /** Used to cancel safe polling after a receipt is durable, never a blind replay. */
+  signal?: AbortSignal;
   beforeSubmit(): Promise<void>;
   onRejected(): Promise<void>;
 }

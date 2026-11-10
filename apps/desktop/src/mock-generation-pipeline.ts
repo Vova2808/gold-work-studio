@@ -278,6 +278,7 @@ export class MockGenerationPipeline {
   private mutation: Promise<void> = Promise.resolve();
   /** Реально выполняющиеся задачи (API-вызовы, FFmpeg) — работают вне мьютекса состояния. */
   private readonly executing = new Map<string, Promise<void>>();
+  private readonly stopping = new Map<string, Promise<QueueTask[]>>();
   /** Отмена долгих провайдерских запросов по кнопке «Остановить». */
   private readonly executionControllers = new Map<string, AbortController>();
   private readonly reportedTerminalRuns = new Set<string>();
@@ -320,6 +321,7 @@ export class MockGenerationPipeline {
   async start(projectId: string, target: "all" | "narration" = "all"): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      this.assertNotStopping(projectId);
       let project = await this.requireProject(projectId);
       const narrationOnly = target === "narration";
       const documentaryStock = project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2;
@@ -533,6 +535,7 @@ export class MockGenerationPipeline {
   async assembleOnly(projectId: string): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      this.assertNotStopping(projectId);
       const project = await this.requireProject(projectId);
       this.assertNoUncertainSubmission(projectId);
       if (project.scenes.length === 0) throw new Error("В проекте нет сцен");
@@ -560,6 +563,7 @@ export class MockGenerationPipeline {
   async regenerateScene(projectId: string, sceneId: string | string[], target: "image" | "video" | "audio" | "all" = "all"): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      this.assertNotStopping(projectId);
       if (!(["image", "video", "audio", "all"] as const).includes(target)) throw new Error("Неизвестный режим перегенерации");
       const project = await this.requireProject(projectId);
       if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
@@ -724,6 +728,7 @@ export class MockGenerationPipeline {
   async resume(projectId: string): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      this.assertNotStopping(projectId);
       const now = new Date().toISOString();
       let changed = false;
       for (const task of this.tasks) {
@@ -749,22 +754,34 @@ export class MockGenerationPipeline {
 
   /** Stop scheduling, save responses already in flight, then cancel the rest. */
   async stopAfterDraining(projectId: string): Promise<QueueTask[]> {
-    await this.pause(projectId);
-    const pending = this.tasks.filter(task => task.projectId === projectId).flatMap(task => {
-      const work = this.executing.get(task.id); return work ? [work] : [];
-    });
-    await Promise.allSettled(pending);
     return this.stop(projectId);
   }
 
   async stop(projectId: string): Promise<QueueTask[]> {
     await this.initialize();
+    const existing = this.stopping.get(projectId);
+    if (existing) return existing;
+    const work = Promise.resolve().then(() => this.finishStop(projectId)).finally(() => this.stopping.delete(projectId));
+    this.stopping.set(projectId, work);
+    return work;
+  }
+
+  private async finishStop(projectId: string): Promise<QueueTask[]> {
+    await this.pause(projectId);
+    const pending = this.tasks.filter(task => task.projectId === projectId).flatMap(task => {
+      // A creation with no receipt may be returning a paid synchronous result.
+      // Let it settle and save it. Polling with a durable ID/local work can stop.
+      if (!task.pendingSubmission || hasPaidReceipt(task)) {
+        this.executionControllers.get(task.id)?.abort(new Error("Остановлено пользователем"));
+      }
+      const work = this.executing.get(task.id); return work ? [work] : [];
+    });
+    await Promise.allSettled(pending);
     return this.mutate(async () => {
       const now = new Date().toISOString();
       let changed = false;
       for (const task of this.tasks) {
         if (task.projectId === projectId && ["pending", "running", "retry_wait", "paused", "blocked"].includes(task.status)) {
-          this.executionControllers.get(task.id)?.abort(new Error("Остановлено пользователем"));
           task.status = "cancelled";
           task.pausedFrom = undefined;
           task.nextAttemptAt = undefined;
@@ -794,6 +811,7 @@ export class MockGenerationPipeline {
     return this.mutate(async () => {
       const task = this.tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Задача ${taskId} не найдена`);
+      this.assertNotStopping(task.projectId);
       const knownOrder = hasPaidReceipt(task);
       if (task.status !== "failed" && task.status !== "cancelled") return structuredClone(task);
       if (this.executing.has(task.id)) throw new Error("Задача ещё завершает остановку. Дождитесь сохранения ответа провайдера.");
@@ -882,6 +900,7 @@ export class MockGenerationPipeline {
   async clearAll(): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      if (this.executing.size || this.stopping.size) throw new Error("Сначала остановите выполняющиеся задачи и дождитесь сохранения результатов.");
       this.assertPaidTasksCanBeRemoved(this.tasks);
       const taskCount = this.tasks.length;
       const runCount = new Set(this.tasks.map((task) => task.runId)).size;
@@ -926,14 +945,38 @@ export class MockGenerationPipeline {
   async removeProject(projectId: string): Promise<void> {
     await this.initialize();
     await this.mutate(async () => {
-      for (const task of this.tasks) {
-        if (task.projectId === projectId) {
-          this.executionControllers.get(task.id)?.abort(new Error("Проект удалён пользователем"));
-        }
-      }
-      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
-      await this.persist();
+      this.assertRemovable(projectId);
+      const remaining = this.tasks.filter(task => task.projectId !== projectId);
+      await this.repository.replace(remaining);
+      this.tasks = remaining;
     });
+  }
+
+  async assertProjectRemovable(projectId: string): Promise<void> {
+    await this.initialize();
+    await this.mutate(async () => this.assertRemovable(projectId));
+  }
+
+  private assertRemovable(projectId: string): void {
+    this.assertNotStopping(projectId);
+    const projectTasks = this.tasks.filter(task => task.projectId === projectId);
+    if (projectTasks.some(task => this.executing.has(task.id))) throw new Error("Сначала остановите проект и дождитесь сохранения выполняющихся задач.");
+    this.assertPaidTasksCanBeRemoved(projectTasks);
+  }
+
+  hasActiveWork(): boolean {
+    return this.executing.size > 0 || this.stopping.size > 0
+      || this.tasks.some(task => ["pending", "running", "retry_wait"].includes(task.status));
+  }
+
+  private assertNotStopping(projectId: string): void {
+    if (this.stopping.has(projectId)) throw new Error("Остановка ещё завершается. Дождитесь сохранения текущего результата.");
+  }
+
+  private stopPollingAfterReceipt(task: QueueTask): void {
+    if (this.stopping.has(task.projectId)) {
+      this.executionControllers.get(task.id)?.abort(new Error("Остановлено после сохранения ID заказа"));
+    }
   }
 
   async tick(): Promise<void> {
@@ -965,13 +1008,14 @@ export class MockGenerationPipeline {
         }
       }
 
-      let running = this.tasks.filter((task) => task.status === "running").length;
+      let running = new Set([...this.executing.keys(), ...this.tasks.filter(task => task.status === "running").map(task => task.id)]).size;
       // Видео — дорогой long-running запрос с низкой RPM-квотой. Пускаем по одной сцене,
       // а картинки и озвучку по-прежнему обрабатываем параллельно.
-      let videoRunning = this.tasks.some((task) => task.status === "running" && task.kind === "video");
+      let videoRunning = this.tasks.some(task => task.kind === "video" && (task.status === "running" || this.executing.has(task.id)));
       for (const task of this.tasks) {
         if (running >= this.policy.concurrency) break;
         if (task.status !== "pending") continue;
+        if (this.stopping.has(task.projectId)) continue;
         const uncertain = pendingSubmissionReason(task) ?? task.retryBlockedReason;
         if (uncertain) {
           task.status = "failed";
@@ -1776,6 +1820,7 @@ export class MockGenerationPipeline {
       if (remoteJob) { task.remoteJob = remoteJob; task.pendingSubmission = undefined; }
       task.updatedAt = new Date().toISOString();
       await this.persist();
+      if (remoteJob) this.stopPollingAfterReceipt(task);
       this.emit("info", "queue.task.progress", this.taskDetails(task));
     });
   }
@@ -1801,6 +1846,7 @@ export class MockGenerationPipeline {
 
   private mediaSubmission(taskId: string, provider: "anymodel" | "veo", kind: "image" | "video" | "speech", signal?: AbortSignal): PaidMediaSubmission {
     return {
+      signal,
       beforeSubmit: async () => {
         signal?.throwIfAborted();
         await this.updateSubmission(taskId, { provider, kind, startedAt: new Date().toISOString() });
@@ -1825,6 +1871,7 @@ export class MockGenerationPipeline {
       task.providerVideoJob = job;
       task.pendingSubmission = undefined;
       await this.persist();
+      this.stopPollingAfterReceipt(task);
     });
     signal?.throwIfAborted();
   }
@@ -1866,6 +1913,7 @@ export class MockGenerationPipeline {
       // Keep the received ID in memory if the write fails. The prior pending
       // checkpoint stays on disk and still blocks a duplicate after a crash.
       await this.persist();
+      this.stopPollingAfterReceipt(task);
     });
   }
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell, type IpcMainInvokeEvent } from "electron";
+import { app, autoUpdater as electronAutoUpdater, BrowserWindow, dialog, ipcMain, protocol, shell, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import electronUpdater from "electron-updater";
 import { AppUpdates } from "./app-updates.js";
@@ -55,7 +55,7 @@ import { documentaryNarrationReadiness } from "./documentary-production.js";
 import { startDocumentaryMetrics,finishDocumentaryMetrics } from "./documentary-metrics.js";
 import {prepareDocumentaryProduction,DocumentarySelectionIncompleteError} from './documentary-production.js';
 import {isDocumentaryWorkflow,runDocumentaryWorkflow,reconcileDocumentaryWorkflows,startDocumentaryWorkflowExport} from './documentary-workflow.js';
-import type { QueueTask } from "@gold-work/shared";
+import type { AppUpdateState, QueueTask } from "@gold-work/shared";
 import { DocumentaryIntelligence } from "./documentary-intelligence.js";
 import { ensureDocumentaryMemory } from "./documentary-resources.js";
 import { copyDocumentaryEffect } from "./documentary-effects.js";
@@ -176,24 +176,45 @@ function isAbortError(error: unknown): boolean {
 const scenarioPreparations = new Set<string>();
 let storageMaintenance: Promise<void> | undefined;
 let activeWorkspaceRequests = 0;
+let activeConnectionWrites = 0;
+let queueUpdateInFlight = false;
+let libraryImports = 0;
+type WorkspaceLock = { kind: "delete" | "close" | "update"; savingWindowId?: number };
+let workspaceLock: WorkspaceLock | undefined;
+let installWindowUpdate: (() => Promise<AppUpdateState>) | undefined;
+const workspaceBusyMessage = "Дождитесь завершения текущих операций или остановите задачи в очереди и дождитесь сохранения результатов.";
+// Polling and window controls can run while a close or deletion is prepared.
+const passiveWorkspaceIpc = new Set(["projects:list", "projects:changes", "projects:get", "queue:list", "window:close", "app:update-state", "app:update-check", "app:update-install"]);
 // These checks only inspect remote connections/account state. In particular,
 // a stalled Flow refresh must not retain unused Stock downloads indefinitely.
-const independentConnectionChecks = new Set(["anymodel:test", "voicer:test", "voicer:templates", "google:test", "stock:test", "youtube:test", "flow:test", "flow:accounts:refresh", "flow:accounts:refresh-all", "app:update-state", "app:update-check", "app:update-install"]);
+const independentConnectionChecks = new Set(["anymodel:test", "voicer:test", "voicer:templates", "google:test", "stock:test", "youtube:test", "flow:test", "flow:accounts:refresh", "flow:accounts:refresh-all"]);
 let cleanedAssemblyStamp: string | undefined;
 let stockWorkflowQueueStamp: string | undefined;
+
+function hasWorkspaceActivity(): boolean {
+  return Boolean(storageMaintenance || queueUpdateInFlight || activeWorkspaceRequests || activeConnectionWrites || libraryImports
+    || documentaryProductions.size || activeDirectorOperations.size || scenarioPreparations.size || pipeline.hasActiveWork());
+}
+
 function handleIpc<TArgs extends unknown[], TResult>(
   channel: string,
   handler: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>
 ): void {
   ipcMain.handle(channel, (event, ...args: unknown[]) => withDiagnosticContext(ipcDiagnosticContext(channel, args), async () => {
-    await storageMaintenance;
+    const passive = passiveWorkspaceIpc.has(channel);
+    if (!passive) await storageMaintenance;
     const started = Date.now();
+    const savingForClose = channel === "projects:update" && workspaceLock?.savingWindowId === event.sender.id;
+    if (!passive && ((workspaceLock && !savingForClose) || appUpdates?.installing)) {
+      throw new Error("Дождитесь завершения удаления, сохранения перед закрытием или установки обновления.");
+    }
     const preparationId = ["projects:apply-chat-topic", "projects:prepare-script"].includes(channel) && typeof args[0] === "string" ? args[0] : undefined;
     if (preparationId && scenarioPreparations.has(preparationId)) throw new Error("Этот сценарий уже подготавливается. Другие ролики можно создавать параллельно.");
     if (preparationId) scenarioPreparations.add(preparationId);
-    const guardsWorkspace = !independentConnectionChecks.has(channel);
-    if (guardsWorkspace && appUpdates?.installing) throw new Error("Приложение перезапускается для обновления. Дождитесь завершения установки.");
+    const guardsWorkspace = !passive && channel !== "projects:delete" && !independentConnectionChecks.has(channel);
+    const writesConnectionState = channel === "stock:test" || channel === "flow:test" || channel.startsWith("flow:accounts:refresh");
     if (guardsWorkspace) activeWorkspaceRequests++;
+    if (writesConnectionState) activeConnectionWrites++;
     const logRequest = !["projects:list", "projects:changes", "queue:list", "channels:list", "flow:accounts:list", "app:info", "app:write-log"].includes(channel);
     if (logRequest) void logger.write("debug", "ipc.request", { channel, args: summarizeArguments(args) });
     try {
@@ -217,6 +238,7 @@ function handleIpc<TArgs extends unknown[], TResult>(
       throw error;
     } finally {
       if (guardsWorkspace) activeWorkspaceRequests--;
+      if (writesConnectionState) activeConnectionWrites--;
       if (preparationId) scenarioPreparations.delete(preparationId);
     }
   }));
@@ -285,7 +307,10 @@ async function applyChannelProfileDefaults(project: Project, channelProfileId?: 
 function registerIpc(): void {
   handleIpc("app:update-state", () => appUpdates.snapshot());
   handleIpc("app:update-check", () => appUpdates.check());
-  handleIpc("app:update-install", () => appUpdates.install());
+  handleIpc("app:update-install", (event) => {
+    if (event.sender !== mainWindow?.webContents || !installWindowUpdate) throw new Error("Откройте основное окно для установки обновления.");
+    return installWindowUpdate();
+  });
   const retryPermissions=new DocumentaryRetryPermissions();
   handleIpc('music:pixabay',(_event,query:string)=>choosePixabayMusic(join(workspacePath,'Materials','Music'),typeof query==='string'?query:''));
   handleIpc('documentary:probe',()=>anyModelClient.probeDocumentaryConnection());
@@ -420,21 +445,36 @@ function registerIpc(): void {
   });
   handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
   handleIpc("projects:delete", async (_event, id: string) => {
-    await pipeline.removeProject(id);
-    const entry = await projectRepository.moveToTrash(id);
+    if (workspaceLock || hasWorkspaceActivity() || documentaryService.isSelecting(id)) throw new Error(workspaceBusyMessage);
+    workspaceLock = { kind: "delete" };
     try {
-      await projectStorage.moveProjectToTrash(id, entry.trashId);
-    } catch (error) {
-      await projectRepository.restore(entry.trashId).catch(() => undefined);
-      throw error;
+      await pipeline.assertProjectRemovable(id);
+      const entry = await projectRepository.moveToTrash(id);
+      let filesMoved = false;
+      try {
+        filesMoved = await projectStorage.moveProjectToTrash(id, entry.trashId);
+        await pipeline.removeProject(id);
+      } catch (error) {
+        try {
+          if (filesMoved && !await projectStorage.restoreProjectFromTrash(id, entry.trashId)) {
+            throw new Error("Перемещённые файлы не найдены в корзине.");
+          }
+          await projectRepository.restore(entry.trashId);
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], `Удаление проекта прервалось, возврат из корзины не завершён: ${String(error)} / ${String(rollbackError)}`);
+        }
+        throw error;
+      }
+      return {
+        trashId: entry.trashId,
+        kind: "project",
+        originalId: entry.project.id,
+        title: entry.project.title,
+        deletedAt: entry.deletedAt
+      } satisfies TrashItemSummary;
+    } finally {
+      workspaceLock = undefined;
     }
-    return {
-      trashId: entry.trashId,
-      kind: "project",
-      originalId: entry.project.id,
-      title: entry.project.title,
-      deletedAt: entry.deletedAt
-    } satisfies TrashItemSummary;
   });
   handleIpc("projects:open-folder", async (_event, id: string) => {
     const project = await projectService.get(id);
@@ -700,13 +740,21 @@ function registerIpc(): void {
     const result = await dialog.showOpenDialog({ title: "Добавить папки в библиотеку эффектов", properties: ["openDirectory", "multiSelections"] });
     return result.canceled ? [] : result.filePaths;
   });
-  handleIpc("library:import", (_event, roots: string[]) => effectLibrary.startImport(roots));
+  const startLibraryImport = async (roots: string[], options?: { category?: "background" }) => {
+    const progress = await effectLibrary.startImport(roots, options);
+    libraryImports++;
+    void effectLibrary.waitForImport()
+      .catch(error => logger.write("warn", "library.import.wait_failed", { error }))
+      .finally(() => { libraryImports--; });
+    return progress;
+  };
+  handleIpc("library:import", (_event, roots: string[]) => startLibraryImport(roots));
   handleIpc("library:choose-background-files", async () => {
     const result = await dialog.showOpenDialog({ title: "Добавить фоны", properties: ["openFile", "multiSelections"],
       filters: [{ name: "Изображения и видео", extensions: ["jpg", "jpeg", "png", "webp", "mp4", "mov", "wmv", "mkv", "webm", "avi", "m4v"] }] });
     return result.canceled ? [] : result.filePaths;
   });
-  handleIpc("library:import-background-files", (_event, paths: string[]) => effectLibrary.startImport(paths, { category: "background" }));
+  handleIpc("library:import-background-files", (_event, paths: string[]) => startLibraryImport(paths, { category: "background" }));
   handleIpc("library:cancel", () => effectLibrary.cancel());
   handleIpc("library:update", (_event, id: string, input: Parameters<EffectLibrary["update"]>[1]) => effectLibrary.update(id, input));
   handleIpc("library:trash", (_event, id: string, deleted: boolean) => effectLibrary.trash(id, deleted));
@@ -1171,39 +1219,117 @@ async function createWindow(): Promise<void> {
   let rendererReady = false;
   let closeApproved = false;
   let closeSequence = 0;
-  let pendingClose: number | undefined;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
-  const finishClose = (requestId: number, allowed: boolean) => {
-    if (pendingClose !== requestId || window.isDestroyed()) return;
-    clearTimeout(closeTimer);
+  let windowCloseLock: WorkspaceLock | undefined;
+  let closeRequestId: number | undefined;
+  let pendingClose: {
+    resolve: (lock: WorkspaceLock | undefined) => void;
+    timer: ReturnType<typeof setTimeout>;
+    timeoutDialog?: AbortController;
+  } | undefined;
+  let busyDialogOpen = false;
+  const showBusyClose = () => {
+    if (busyDialogOpen || window.isDestroyed()) return;
+    busyDialogOpen = true;
+    void dialog.showMessageBox(window, {
+      type: "info", title: "Закрытие Gold Work Studio",
+      message: "В Gold Work Studio ещё выполняется работа.", detail: workspaceBusyMessage
+    }).catch(error => logger.write("warn", "window.close_notice_failed", { error }))
+      .finally(() => { busyDialogOpen = false; });
+  };
+  const releaseClose = () => {
+    const request = pendingClose;
     pendingClose = undefined;
-    if (allowed) {
-      closeApproved = true;
-      window.close();
+    clearTimeout(request?.timer);
+    request?.timeoutDialog?.abort();
+    request?.resolve(undefined);
+    if (windowCloseLock && workspaceLock === windowCloseLock) workspaceLock = undefined;
+    windowCloseLock = undefined;
+    closeApproved = false;
+    if (closeRequestId !== undefined && rendererReady && !window.isDestroyed()) {
+      try { window.webContents.send("window:close-cancelled", closeRequestId); }
+      catch { /* The renderer may have gone away. */ }
     }
+    closeRequestId = undefined;
+  };
+  const finishClose = (requestId: number, allowed: boolean) => {
+    const request = pendingClose;
+    const lock = windowCloseLock;
+    if (!request || !lock || closeRequestId !== requestId || window.isDestroyed()) return;
+    const busy = hasWorkspaceActivity();
+    if (!allowed || busy) {
+      releaseClose();
+      if (busy && lock.kind === "close") showBusyClose();
+      return;
+    }
+    pendingClose = undefined;
+    clearTimeout(request.timer);
+    request.timeoutDialog?.abort();
+    lock.savingWindowId = undefined;
+    closeApproved = true;
+    request.resolve(lock);
   };
   const onCloseResult = (event: Electron.IpcMainEvent, requestId: number, allowed: boolean) => {
     if (event.sender === window.webContents) finishClose(requestId, allowed === true);
   };
   ipcMain.on("window:close-result", onCloseResult);
-  window.on("close", event => {
-    if (closeApproved || !rendererReady) return;
-    event.preventDefault();
-    if (pendingClose !== undefined) return;
+
+  const requestClose = (kind: "close" | "update"): Promise<WorkspaceLock | undefined> => {
+    const lock: WorkspaceLock = { kind, savingWindowId: window.webContents.id };
+    workspaceLock = windowCloseLock = lock;
     const requestId = ++closeSequence;
-    pendingClose = requestId;
-    window.webContents.send("window:request-close", requestId);
-    // A dead/unresponsive renderer cannot acknowledge the draft guard. Never
-    // turn a timeout into permission to discard unsaved edits.
-    closeTimer = setTimeout(() => {
-      if (window.isDestroyed() || pendingClose !== requestId) return;
-      void dialog.showMessageBox(window, {
-        type: "warning", title: "Закрытие Gold Work Studio",
-        message: "Редактор пока не подтвердил сохранение.",
-        detail: "Можно продолжить работу или явно закрыть окно с потерей несохранённых правок.",
-        buttons: ["Продолжить работу", "Закрыть без сохранения"], defaultId: 0, cancelId: 0,
-      }).then(({ response }) => finishClose(requestId, response === 1)).catch(() => finishClose(requestId, false));
-    }, 30_000);
+    closeRequestId = requestId;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        if (window.isDestroyed() || closeRequestId !== requestId || !pendingClose) return;
+        if (kind === "update" || hasWorkspaceActivity()) {
+          finishClose(requestId, false);
+          return;
+        }
+        const timeoutDialog = new AbortController();
+        pendingClose.timeoutDialog = timeoutDialog;
+        void dialog.showMessageBox(window, {
+          type: "warning", title: "Закрытие Gold Work Studio",
+          message: "Редактор пока не подтвердил сохранение.",
+          detail: "Можно продолжить работу или явно закрыть окно с потерей несохранённых правок.",
+          buttons: ["Продолжить работу", "Закрыть без сохранения"], defaultId: 0, cancelId: 0,
+          signal: timeoutDialog.signal
+        }).then(({ response }) => finishClose(requestId, response === 1)).catch(() => finishClose(requestId, false));
+      }, 30_000);
+      pendingClose = { resolve, timer };
+      try { window.webContents.send("window:request-close", requestId, kind); }
+      catch { if (kind === "update") finishClose(requestId, false); }
+    });
+  };
+
+  const installUpdate = async (): Promise<AppUpdateState> => {
+    const state = appUpdates.snapshot();
+    if (windowCloseLock?.kind === "update" || state.status === "installing") return state;
+    if (state.status !== "downloaded") throw new Error("Сначала дождитесь загрузки обновления.");
+    if (workspaceLock || hasWorkspaceActivity()) throw new Error(workspaceBusyMessage);
+    if (!rendererReady) throw new Error("Дождитесь загрузки редактора перед установкой обновления.");
+    const lock = await requestClose("update");
+    if (!lock || workspaceLock !== lock) throw new Error("Установка отложена. Проверьте сохранение правок и повторите попытку.");
+    try {
+      return await appUpdates.install(() => workspaceLock === lock, () => {
+        if (workspaceLock === lock) releaseClose();
+      });
+    } finally {
+      if (workspaceLock === lock && !appUpdates.installing) releaseClose();
+    }
+  };
+  installWindowUpdate = installUpdate;
+
+  window.on("close", event => {
+    if (closeApproved && (windowCloseLock?.kind === "close" || appUpdates.installerStarted)) return;
+    event.preventDefault();
+    if (windowCloseLock) return;
+    if (workspaceLock || hasWorkspaceActivity() || appUpdates.installing) {
+      showBusyClose();
+      return;
+    }
+    void requestClose("close").then(lock => {
+      if (lock && workspaceLock === lock && !window.isDestroyed()) window.close();
+    });
   });
 
   window.webContents.on("did-fail-load", (_event, code, description, url) => {
@@ -1211,16 +1337,31 @@ async function createWindow(): Promise<void> {
   });
   window.webContents.on("render-process-gone", (_event, details) => {
     rendererReady = false;
-    clearTimeout(closeTimer);
-    pendingClose = undefined;
+    if (!appUpdates.installerStarted) releaseClose();
     void logger.write("error", "renderer.process.gone", { reason: details.reason, exitCode: details.exitCode });
     if (details.reason === "clean-exit" || details.reason === "killed") return;
     // Native dialog remains available even when the renderer cannot draw.
     void dialog.showMessageBox(window, { type: "error", title: "GoldWork — восстановление окна",
       message: details.reason === "oom" ? "Интерфейсу не хватило памяти" : "Интерфейс неожиданно остановился",
-      detail: "Сохранённые материалы и озвучка остаются на диске. Можно восстановить окно без перезапуска производства и без повторной отправки платных заказов.",
-      buttons: ["Восстановить интерфейс", "Закрыть окно"], defaultId: 0, cancelId: 1
-    }).then(({ response }) => { if (!window.isDestroyed()) { if (response === 0) window.webContents.reload(); else window.close(); } });
+      detail: "Сохранённые материалы и озвучка остаются на диске. Можно восстановить окно без перезапуска производства. При закрытии несохранённые правки могут быть потеряны.",
+      buttons: ["Восстановить интерфейс", "Закрыть окно"], defaultId: 0, cancelId: 0
+    }).then(({ response }) => {
+      if (window.isDestroyed() || appUpdates.installerStarted) return;
+      if (response === 0) {
+        window.webContents.reload();
+      } else if (workspaceLock || hasWorkspaceActivity() || appUpdates.installing) {
+        showBusyClose();
+      } else {
+        workspaceLock = windowCloseLock = { kind: "close" };
+        closeApproved = true;
+        window.close();
+      }
+    }).catch(error => logger.write("warn", "window.recovery_notice_failed", { error }));
+  });
+  window.webContents.on("did-start-navigation", details => {
+    if (!details.isMainFrame || details.isSameDocument) return;
+    rendererReady = false;
+    if (!appUpdates.installerStarted) releaseClose();
   });
   window.webContents.on("did-finish-load", () => {
     rendererReady = true;
@@ -1233,9 +1374,13 @@ async function createWindow(): Promise<void> {
   window.on("unresponsive", () => void logger.write("error", "renderer.unresponsive", { error: "Окно не отвечает на события. Проверьте предыдущие операции и загрузку CPU/диска." }));
   window.on("responsive", () => void logger.write("info", "renderer.responsive"));
   window.on("closed", () => {
-    clearTimeout(closeTimer);
+    rendererReady = false;
+    if (!appUpdates.installerStarted) releaseClose();
     ipcMain.removeListener("window:close-result", onCloseResult);
-    if (mainWindow === window) mainWindow = undefined;
+    if (mainWindow === window) {
+      mainWindow = undefined;
+      installWindowUpdate = undefined;
+    }
     void logger.write("info", "window.closed");
   });
   const devUrl = process.env.ELECTRON_RENDERER_URL;
@@ -1474,12 +1619,14 @@ app.whenReady().then(async () => {
   // Merely opening the app must not delete downloads from existing projects.
   cleanedAssemblyStamp = (await pipeline.list()).filter(task => task.kind === "assemble" && task.status === "done").map(task => task.id).sort().join(",");
   await startRealtimeServer();
-  setInterval(
-    () => void (storageMaintenance ?? pipeline.tick())
+  setInterval(() => {
+    if (workspaceLock || appUpdates?.installing || queueUpdateInFlight) return;
+    queueUpdateInFlight = true;
+    void (storageMaintenance ?? pipeline.tick())
       .then(() => publishQueue())
-      .catch((error: unknown) => logger.write("error", "queue.tick.failed", { error })),
-    500
-  );
+      .catch((error: unknown) => logger.write("error", "queue.tick.failed", { error }))
+      .finally(() => { queueUpdateInFlight = false; });
+  }, 500);
   protocol.handle("gw-media", async (request) => {
     const mediaUrl = new URL(request.url);
     if (mediaUrl.hostname !== "local") return new Response("forbidden", { status: 403 });
@@ -1521,10 +1668,29 @@ app.whenReady().then(async () => {
     unsupportedMessage: process.env.PORTABLE_EXECUTABLE_DIR
       ? "Для автообновлений установите Gold Work Studio через Setup.exe. Portable-версия обновляется заменой файла."
       : "Автообновления доступны в установленной версии Windows.",
-    busy: async () => {
-      if (activeWorkspaceRequests || documentaryProductions.size || activeDirectorOperations.size || scenarioPreparations.size) return true;
-      return (await pipeline.list()).some(task => ["running", "pending", "retrying"].includes(task.status));
-    },
+    busy: async () => hasWorkspaceActivity(),
+    launchInstaller: () => new Promise<void>((resolve, reject) => {
+      const onQuitForUpdate = () => {
+        if (!appUpdates.installerStarted || workspaceLock?.kind !== "update") {
+          const preventQuit = (event: Electron.Event) => event.preventDefault();
+          app.once("before-quit", preventQuit);
+          queueMicrotask(() => { app.removeListener("before-quit", preventQuit); });
+        }
+        resolve();
+      };
+      electronAutoUpdater.once("before-quit-for-update", onQuitForUpdate);
+      try { nativeUpdater.quitAndInstall(true, true); }
+      catch (error) {
+        electronAutoUpdater.removeListener("before-quit-for-update", onQuitForUpdate);
+        reject(error);
+        return;
+      }
+      // electron-updater 6.8.9 queues this signal immediately before app.quit.
+      setImmediate(() => {
+        electronAutoUpdater.removeListener("before-quit-for-update", onQuitForUpdate);
+        reject(new Error("Установщик не запросил перезапуск приложения."));
+      });
+    }),
     publish: state => publishToWindows("app:update-state", state)
   });
   registerIpc();

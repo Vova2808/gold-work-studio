@@ -161,6 +161,7 @@ export function App() {
   const leaveGuardsRef = useRef<Partial<Record<"project" | "scenario" | "timeline", () => Promise<boolean>>>>({});
   const navigationInFlightRef = useRef(false);
   const editingSurfaceRef = useRef<HTMLDivElement>(null);
+  const closeRequestRef = useRef<{ id: number; approved: boolean } | null>(null);
   const savesNeedingConfirmationRef = useRef(new Set<string>());
   const [directorProgress, setDirectorProgress] = useState<string | null>(null);
   const [directorRefreshToken, setDirectorRefreshToken] = useState(0);
@@ -767,7 +768,12 @@ export function App() {
     };
   }, []);
 
-  async function canLeaveActiveEditor(): Promise<boolean> {
+  function unlockEditingSurface() {
+    navigationInFlightRef.current = false;
+    editingSurfaceRef.current?.removeAttribute("inert");
+  }
+
+  async function canLeaveActiveEditor(retainLock?: () => boolean): Promise<boolean> {
     if (navigationInFlightRef.current) return false;
     navigationInFlightRef.current = true;
     // Keep every editor stable until all guards and backup writes finish.
@@ -775,6 +781,7 @@ export function App() {
     const guard = activeSection === "project" || activeSection === "scenario"
       ? leaveGuardsRef.current[activeSection]
       : undefined;
+    let keepLocked = false;
     try {
       const timelineGuard = leaveGuardsRef.current.timeline;
       if (timelineGuard && !(await timelineGuard())) return false;
@@ -789,27 +796,41 @@ export function App() {
         }
         savesNeedingConfirmationRef.current.delete(id);
       }
+      keepLocked = retainLock?.() ?? false;
       return true;
     } catch (reason) {
       setError(errorMessage(reason));
       return false;
     } finally {
-      navigationInFlightRef.current = false;
-      editingSurfaceRef.current?.removeAttribute("inert");
+      if (!keepLocked) unlockEditingSurface();
     }
   }
 
-  const closeGuardRef = useRef<() => Promise<boolean>>(async () => false);
+  const closeGuardRef = useRef(canLeaveActiveEditor);
   closeGuardRef.current = canLeaveActiveEditor;
-  useEffect(() => api.onWindowCloseRequested?.(async () => {
+  useEffect(() => api.onWindowCloseRequested?.(async (requestId, reason) => {
+    const request = { id: requestId, approved: false };
+    closeRequestRef.current = request;
     try {
-      const allowed = await closeGuardRef.current();
-      if (!allowed) setNotice("Окно оставлено открытым: дождитесь сохранения или устраните ошибку и повторите закрытие.");
+      const allowed = await closeGuardRef.current(() => {
+        if (closeRequestRef.current !== request) return false;
+        request.approved = true;
+        return true;
+      });
+      if (closeRequestRef.current !== request) return false;
+      if (!allowed) setNotice(reason === "update"
+        ? "Обновление отложено. Дождитесь сохранения правок или устраните ошибку."
+        : "Окно оставлено открытым. Дождитесь сохранения или устраните ошибку и повторите закрытие.");
       return allowed;
     } catch (reason) {
       setError(errorMessage(reason));
       return false;
     }
+  }, requestId => {
+    const request = closeRequestRef.current;
+    if (request?.id !== requestId) return;
+    closeRequestRef.current = null;
+    if (request.approved) unlockEditingSurface();
   }), [api]);
 
   async function navigateSafely(section: SectionKey) {

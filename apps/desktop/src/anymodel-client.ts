@@ -2135,7 +2135,7 @@ export class AnyModelClient {
 
   async generateVideo(prompt: string, duration: number, aspectRatio: string, sourceImage?: Buffer,
     submission?: PaidMediaSubmission & { resumeJob?: AnyModelVideoJob; onJobKnown(job: AnyModelVideoJob): Promise<void> }): Promise<Buffer> {
-    if (submission?.resumeJob) return this.downloadVideoJob(submission.resumeJob);
+    if (submission?.resumeJob) return this.downloadVideoJob(submission.resumeJob, submission.signal);
     const settings = await this.store.publicSettings();
     const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({
       model: settings.videoModel,
@@ -2153,18 +2153,18 @@ export class AnyModelClient {
     if (typeof id !== "string" || !id.trim() || !ticket?.trim()) throw new Error("AnyModel не вернул идентификатор видео-задачи");
     const job: AnyModelVideoJob = { provider: "anymodel", jobId: id, connectionId: ticket };
     await submission?.onJobKnown(job);
-    return this.downloadVideoJob(job);
+    return this.downloadVideoJob(job, submission?.signal);
   }
 
-  private async downloadVideoJob(job: AnyModelVideoJob): Promise<Buffer> {
+  private async downloadVideoJob(job: AnyModelVideoJob, signal?: AbortSignal): Promise<Buffer> {
     for (let attempt = 0; attempt < 180; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      const poll = await this.request(`/v1/videos/${encodeURIComponent(job.jobId)}`, { headers: { "x-9router-connection-id": job.connectionId } });
+      await waitForRetry(5000, undefined, { signal });
+      const poll = await this.request(`/v1/videos/${encodeURIComponent(job.jobId)}`, { signal, headers: { "x-9router-connection-id": job.connectionId } });
       if (!poll.ok) throw new Error(await this.error(poll));
       const status = await poll.json() as { status?: string; url?: string; result_url?: string; error?: string };
       const url = status.result_url || status.url;
       if (url) {
-        const result = await this.fetchWithConfiguredProxy(url);
+        const result = await this.fetchWithConfiguredProxy(url, { signal });
         if (!result.ok) throw new Error("Не удалось скачать готовое видео");
         return Buffer.from(await result.arrayBuffer());
       }
@@ -2441,7 +2441,7 @@ export class AnyModelClient {
       }
       // Сетевой сбой — повторяем с бэкоффом.
       if (attempt < AnyModelClient.MAX_RETRIES) {
-        await sleep(backoffMs(attempt));
+        await sleep(backoffMs(attempt), init.signal ?? undefined);
         init.signal?.throwIfAborted();
         return this.request(path, init, attempt + 1);
       }
@@ -2487,7 +2487,7 @@ export class AnyModelClient {
       const bodyText = await response.clone().text().catch(() => "");
       const providerDelay = parseProviderRetryAfterMs(response.headers.get("retry-after"), bodyText);
       if (providerDelay !== null && providerDelay > 60_000) return response;
-      await sleep(retryAfterMs(response, bodyText, attempt));
+      await sleep(retryAfterMs(response, bodyText, attempt), init.signal ?? undefined);
       init.signal?.throwIfAborted();
       return this.request(path, init, attempt + 1);
     }
@@ -3208,8 +3208,8 @@ function clock(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return waitForRetry(ms, undefined, { signal });
 }
 
 function backoffMs(attempt: number): number {

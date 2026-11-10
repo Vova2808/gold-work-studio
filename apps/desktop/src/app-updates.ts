@@ -15,12 +15,15 @@ export class AppUpdates {
   private state: AppUpdateState;
   private checking?: Promise<AppUpdateState>;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
+  private installTimer?: ReturnType<typeof setTimeout>;
+  private onInstallFailed?: () => void;
 
   constructor(private readonly engine: UpdateEngine, private readonly options: {
     version: string;
     supported: boolean;
     unsupportedMessage?: string;
     busy: () => Promise<boolean>;
+    launchInstaller?: () => Promise<void>;
     publish: (state: AppUpdateState) => void;
   }) {
     this.state = { status: options.supported ? "idle" : "unsupported", currentVersion: options.version,
@@ -31,18 +34,30 @@ export class AppUpdates {
     engine.allowDowngrade = false;
     engine.on("checking-for-update", () => this.set({ status: "checking", message: "Проверяю обновления…", checkedAt: new Date().toISOString() }));
     engine.on("update-available", (info: { version: string }) => this.set({ status: "downloading", availableVersion: info.version, percent: 0, message: `Скачиваю обновление ${info.version}…` }));
-    engine.on("download-progress", (progress: { percent: number }) => {
-      if (this.state.status !== "installing") this.set({ status: "downloading", percent: Math.max(0, Math.min(100, Math.round(progress.percent))), message: `Скачиваю обновление ${this.state.availableVersion ?? ""}…` });
-    });
+    engine.on("download-progress", (progress: { percent: number }) => this.set({ status: "downloading", percent: Math.max(0, Math.min(100, Math.round(progress.percent))), message: `Скачиваю обновление ${this.state.availableVersion ?? ""}…` }));
     engine.on("update-downloaded", (info: { version: string }) => this.set({ status: "downloaded", availableVersion: info.version, percent: 100, message: `Версия ${info.version} готова. Перезапустите приложение для установки.` }));
     engine.on("update-not-available", () => this.set({ status: "up-to-date", availableVersion: undefined, percent: undefined, message: "Установлена последняя версия." }));
-    engine.on("error", () => this.set({ status: "error", percent: undefined, message: "Не удалось получить обновление. Проверьте подключение к интернету и повторите проверку." }));
+    engine.on("error", () => {
+      if (this.installing) this.installFailed("Не удалось запустить установку. Повторите после завершения работы.");
+      else this.set({ status: "error", percent: undefined, message: "Не удалось получить обновление. Проверьте подключение к интернету и повторите проверку." });
+    });
   }
 
   snapshot(): AppUpdateState { return { ...this.state }; }
   get installing(): boolean { return this.state.status === "installing"; }
+  get installerStarted(): boolean { return this.installing && this.installTimer === undefined; }
 
-  private set(patch: Partial<AppUpdateState>): void {
+  private installFailed(message: string): void {
+    clearTimeout(this.installTimer);
+    this.installTimer = undefined;
+    const notify = this.onInstallFailed;
+    this.onInstallFailed = undefined;
+    this.set({ status: "downloaded", message }, true);
+    notify?.();
+  }
+
+  private set(patch: Partial<AppUpdateState>, installFailure = false): void {
+    if (this.installing && !installFailure) return;
     this.state = { ...this.state, ...patch };
     this.options.publish(this.snapshot());
   }
@@ -60,7 +75,7 @@ export class AppUpdates {
     return run;
   }
 
-  async install(): Promise<AppUpdateState> {
+  async install(stillApproved: () => boolean = () => true, onFailed?: () => void): Promise<AppUpdateState> {
     if (this.state.status !== "downloaded") throw new Error("Сначала дождитесь загрузки обновления.");
     if (await this.options.busy()) {
       this.set({ message: "Дождитесь завершения подбора, генерации и рендера, затем установите обновление." });
@@ -68,12 +83,25 @@ export class AppUpdates {
     }
     // Recheck after the asynchronous production guard: concurrent clicks may
     // have already scheduled installation. Only one installer can be launched.
-    if (this.state.status !== "downloaded") return this.snapshot();
+    if (this.state.status !== "downloaded" || !stillApproved()) return this.snapshot();
+    this.onInstallFailed = onFailed;
+    this.installTimer = setTimeout(() => {
+      this.installTimer = undefined;
+      if (!stillApproved()) {
+        this.installFailed("Установка отложена. Подтвердите сохранение редактора и повторите попытку.");
+        return;
+      }
+      const failed = () => {
+        if (this.installing && this.onInstallFailed === onFailed) {
+          this.installFailed("Не удалось запустить установку. Повторите после завершения работы.");
+        }
+      };
+      try {
+        if (this.options.launchInstaller) void this.options.launchInstaller().catch(failed);
+        else this.engine.quitAndInstall(true, true);
+      } catch { failed(); }
+    }, 250);
     this.set({ status: "installing", message: "Перезапускаю приложение для установки обновления…" });
-    this.timers.push(setTimeout(() => {
-      try { this.engine.quitAndInstall(true, true); }
-      catch { this.set({ status: "downloaded", message: "Не удалось запустить установку. Повторите после завершения работы." }); }
-    }, 250));
     return this.snapshot();
   }
 
@@ -85,5 +113,11 @@ export class AppUpdates {
     this.timers.push(first, interval);
   }
 
-  stop(): void { for (const timer of this.timers) clearTimeout(timer); this.timers = []; }
+  stop(): void {
+    clearTimeout(this.installTimer);
+    this.installTimer = undefined;
+    this.onInstallFailed = undefined;
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers = [];
+  }
 }

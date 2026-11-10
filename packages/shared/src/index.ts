@@ -1392,7 +1392,10 @@ export interface DesktopApi extends EffectLibraryApi, DocumentaryApi {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
-  onWindowCloseRequested?(listener: () => Promise<boolean>): () => void;
+  onWindowCloseRequested?(
+    listener: (requestId: number, reason: "close" | "update") => Promise<boolean>,
+    onCancelled: (requestId: number) => void
+  ): () => void;
   getAppInfo(): Promise<{
     version: string;
     buildId: string;

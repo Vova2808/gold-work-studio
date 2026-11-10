@@ -1,4 +1,5 @@
 import { GoogleStore } from "./google-store.js";
+import { setTimeout as waitForPoll } from "node:timers/promises";
 import { parseProxyUrl, proxyRequest, ProxyConnectError, type ProxyResponse } from "./proxy-utils.js";
 import { describeNetworkError, googleError, isDefiniteMediaRejection, type PaidMediaSubmission } from "./google-errors.js";
 import type { ProviderVideoJob } from "@gold-work/shared";
@@ -70,7 +71,7 @@ export class VeoClient {
   async generateVideo(prompt: string, aspectRatio: string, sourceImage?: Buffer, submission?: VeoSubmission): Promise<Buffer> {
     try {
       if (submission?.resumeJob) {
-        return await this.downloadOperation(submission.resumeJob.operationName, {}, await this.requiredKey());
+        return await this.downloadOperation(submission.resumeJob.operationName, {}, await this.requiredKey(), submission.signal);
       }
       const settings = await this.store.publicSettings();
       const model = settings.veoModel?.trim() || "veo-3.1-lite-generate-preview";
@@ -120,12 +121,13 @@ export class VeoClient {
   }
 
   /** Файл по uri: ждём состояния ACTIVE и скачиваем. */
-  private async downloadFileUri(uri: string, key: string): Promise<Buffer> {
+  private async downloadFileUri(uri: string, key: string, signal?: AbortSignal): Promise<Buffer> {
     const fileName = uri.split("/").pop()?.split(":")[0];
     if (fileName) {
       const startedAt = Date.now();
       while (Date.now() - startedAt < 5 * 60_000) {
         const info = await this.request(`${BASE}/files/${encodeURIComponent(fileName)}`, {
+          signal,
           headers: { "x-goog-api-key": key },
           timeoutMs: 30_000
         });
@@ -133,10 +135,11 @@ export class VeoClient {
         const state = (info.json<{ state?: string }>()).state;
         if (state === "ACTIVE") break;
         if (state === "FAILED") throw new Error("Google: обработка видеофайла завершилась ошибкой");
-        await sleep(4_000);
+        await sleep(4_000, signal);
       }
     }
     const download = await this.request(uri.includes("alt=media") ? uri : `${uri}?alt=media`, {
+      signal,
       headers: { "x-goog-api-key": key },
       timeoutMs: REQUEST_TIMEOUT_MS
     });
@@ -165,15 +168,16 @@ export class VeoClient {
     const started = startResponse.json<VeoOperation>();
     if (typeof started.name !== "string" || !started.name.trim()) throw new Error("Veo не вернул идентификатор операции");
     await submission?.onJobKnown({ provider: "veo", operationName: started.name });
-    return this.downloadOperation(started.name, started, key);
+    return this.downloadOperation(started.name, started, key, submission?.signal);
   }
 
-  private async downloadOperation(name: string, started: VeoOperation, key: string): Promise<Buffer> {
+  private async downloadOperation(name: string, started: VeoOperation, key: string, signal?: AbortSignal): Promise<Buffer> {
     const startedAt = Date.now();
     let operation: VeoOperation = started;
     while (!operation.done && Date.now() - startedAt < 12 * 60_000) {
-      await sleep(6_000);
+      await sleep(6_000, signal);
       const poll = await this.request(`${BASE}/${name}`, {
+        signal,
         headers: { "x-goog-api-key": key },
         timeoutMs: 30_000
       });
@@ -189,7 +193,7 @@ export class VeoClient {
         ? `Veo отклонил промпт фильтром безопасности: ${filtered[0]}`
         : "Veo не вернул видео");
     }
-    return this.downloadFileUri(sample.video.uri, key);
+    return this.downloadFileUri(sample.video.uri, key, signal);
   }
 
   private async requiredKey(): Promise<string> {
@@ -214,6 +218,6 @@ export class VeoClient {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return waitForPoll(ms, undefined, { signal });
 }
