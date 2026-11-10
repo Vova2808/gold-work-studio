@@ -622,8 +622,25 @@ export class VoicerClient {
         );
       }
       if (response.status === 401) {
+        // Only documented, fixed messages may become diagnostics. Never copy
+        // an arbitrary server reply, API key or proxy credentials into the log.
+        const message = typeof parsed?.message === "string" ? parsed.message.trim() : "";
+        const reason = message === "API key is missing. Provide it in the X-API-KEY header." ? "missing_key"
+          : message === "Invalid or inactive API key." ? "invalid_or_inactive_key"
+          : message === "This API key has expired." ? "expired_key" : "unspecified";
+        const endpoint = templateBrowseRequest ? TEMPLATE_BROWSE_PATH
+          : path.startsWith("/orders/") ? "/orders/:id"
+          : ["/user", "/subscriptions", "/orders", "/storage/url"].includes(path) ? path : "other";
+        recordDiagnosticEvent("warn", "voicer.auth.rejected", {
+          endpoint, status: 401, reason,
+          responseFormat: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? "json_object" : "unknown",
+        });
+        const explanation = reason === "missing_key" ? "Сервис сообщил, что API-ключ не получен в заголовке X-API-KEY."
+          : reason === "invalid_or_inactive_key" ? "Сервис сообщил, что API-ключ неизвестен или отключён. Проверьте его статус в кабинете Lumean."
+          : reason === "expired_key" ? "Сервис сообщил, что срок действия API-ключа истёк. Проверьте его срок в кабинете Lumean."
+          : "Ответ не содержит распознанного уточнения причины. По этому ответу нельзя определить, почему авторизация отклонена.";
         throw new VoicerClientError(
-          "Lumean отклонил ключ API. Проверьте ключ в Настройках.",
+          `Lumean: авторизация отклонена (HTTP 401). ${explanation}`,
           { code: "http", retryable: false, creationUncertain: false }
         );
       }

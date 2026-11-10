@@ -151,6 +151,7 @@ export function SettingsPage({ appInfo, projects = [] }: { appInfo: AppInfo; pro
   const [voicer, setVoicer] = useState<VoicerSettings>({ configured: false, proxyConfigured: false, baseUrl: "https://api.lumean.app/api/public" });
   const [voicerKey, setVoicerKey] = useState("");
   const [voicerProxy, setVoicerProxy] = useState("");
+  const [voicerBaseUrl, setVoicerBaseUrl] = useState<string>();
   const [youtube, setYouTube] = useState<YouTubeSettings>({ configured: false, cookiesFileConfigured: false, workDirConfigured: false });
   const [youtubeKey, setYouTubeKey] = useState("");
   const [youtubeProxy, setYouTubeProxy] = useState("");
@@ -517,6 +518,8 @@ export function SettingsPage({ appInfo, projects = [] }: { appInfo: AppInfo; pro
   const currentSummary = summaries.find((summary) => summary.id === activeTab);
   const anyBusy = feedback.anymodel?.phase === "checking";
   const lumeanBusy = feedback.lumean?.phase === "checking";
+  const lumeanBaseUrl = voicerBaseUrl ?? voicer.baseUrl;
+  const lumeanHasDraft = Boolean(voicerKey.trim() || voicerProxy.trim() || lumeanBaseUrl !== voicer.baseUrl);
   const pexelsBusy = feedback.pexels?.phase === "checking";
   const pixabayBusy = feedback.pixabay?.phase === "checking";
   const youtubeBusy = feedback.youtube?.phase === "checking";
@@ -665,12 +668,21 @@ export function SettingsPage({ appInfo, projects = [] }: { appInfo: AppInfo; pro
                 title="Lumean"
                 description="Основная озвучка роликов голосами ElevenLabs."
                 status={currentSummary}
-                lastCheckedAt={lastSuccess.lumean}
+                lastCheckedAt={lumeanHasDraft || lumeanBusy ? undefined : lastSuccess.lumean}
               />
               <ConnectionFeedback feedback={feedback.lumean} />
               <div className="settings-form-grid">
                 <SettingsField label="API-ключ" hint="Ключ из кабинета Lumean, заголовок X-API-KEY.">
-                  <input type="password" value={voicerKey} onChange={(event) => setVoicerKey(event.target.value)} placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ Lumean"} />
+                  <input
+                    type="password"
+                    value={voicerKey}
+                    disabled={lumeanBusy}
+                    onChange={(event) => {
+                      setVoicerKey(event.target.value);
+                      setServiceFeedback("lumean", undefined);
+                    }}
+                    placeholder={voicer.configured ? "Оставьте пустым, чтобы не менять" : "Вставьте ключ Lumean"}
+                  />
                 </SettingsField>
                 <SettingsField
                   label="Proxy для Lumean"
@@ -681,7 +693,11 @@ export function SettingsPage({ appInfo, projects = [] }: { appInfo: AppInfo; pro
                   <input
                     type="password"
                     value={voicerProxy}
-                    onChange={(event) => setVoicerProxy(event.target.value)}
+                    disabled={lumeanBusy}
+                    onChange={(event) => {
+                      setVoicerProxy(event.target.value);
+                      setServiceFeedback("lumean", undefined);
+                    }}
                     placeholder={voicer.proxyConfigured ? "Оставьте пустым, чтобы не менять" : "socks5://логин:пароль@хост:порт"}
                     autoComplete="off"
                   />
@@ -689,21 +705,34 @@ export function SettingsPage({ appInfo, projects = [] }: { appInfo: AppInfo; pro
               </div>
               <TechnicalDetails title="Параметры подключения">
                 <SettingsField label="Base URL">
-                  <input value={voicer.baseUrl} onChange={(event) => setVoicer({ ...voicer, baseUrl: event.target.value })} placeholder="https://api.lumean.app/api/public" />
+                  <input
+                    value={lumeanBaseUrl}
+                    disabled={lumeanBusy}
+                    onChange={(event) => {
+                      setVoicerBaseUrl(event.target.value);
+                      setServiceFeedback("lumean", undefined);
+                    }}
+                    placeholder="https://api.lumean.app/api/public"
+                  />
                 </SettingsField>
               </TechnicalDetails>
+              {lumeanHasDraft && !lumeanBusy && (
+                <p role="status">Сначала сохраните изменения, затем нажмите «Проверить».</p>
+              )}
               <div className="provider-actions provider-actions-v2">
                 <button className="generate-button" disabled={lumeanBusy} onClick={() => void runSave("lumean", async () => {
                   const saved = await api.saveVoicerSettings({
-                    baseUrl: voicer.baseUrl,
+                    baseUrl: lumeanBaseUrl,
                     apiKey: voicerKey.trim() || undefined,
                     proxyUrl: voicerProxy.trim() || undefined,
                   });
                   setVoicer(saved);
                   setVoicerKey("");
                   setVoicerProxy("");
+                  setVoicerBaseUrl(undefined);
+                  forgetSuccess("lumean");
                 }, "Настройки сохранены. Нажмите «Проверить», чтобы подтвердить соединение.")}><Save size={15} />Сохранить</button>
-                <button className="outline-button small" disabled={!voicer.configured || lumeanBusy} onClick={() => void runCheck("lumean", () => api.testVoicerConnection())}>
+                <button className="outline-button small" disabled={!voicer.configured || lumeanBusy || lumeanHasDraft} onClick={() => void runCheck("lumean", () => api.testVoicerConnection())}>
                   {lumeanBusy ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}Проверить
                 </button>
                 <button className="outline-button small danger" disabled={!voicer.configured || lumeanBusy} onClick={() => void runSave("lumean", async () => {
