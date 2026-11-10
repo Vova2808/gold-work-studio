@@ -1216,6 +1216,8 @@ export interface CreateProjectInput {
 }
 
 export interface UpdateProjectInput {
+  /** Revision of the editor's source snapshot; checked atomically before saving. */
+  expectedUpdatedAt?: string;
   stockProduction?: StockProductionRun;
   storyCharacters?: StoryCharacter[];
   storyCharacterPlan?: Project["storyCharacterPlan"];
@@ -1390,6 +1392,7 @@ export interface DesktopApi extends EffectLibraryApi, DocumentaryApi {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
+  onWindowCloseRequested?(listener: () => Promise<boolean>): () => void;
   getAppInfo(): Promise<{
     version: string;
     buildId: string;

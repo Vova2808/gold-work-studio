@@ -170,6 +170,16 @@ const api: DesktopApi = {
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  onWindowCloseRequested: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, requestId: number) => {
+      void listener().then(
+        allowed => ipcRenderer.send("window:close-result", requestId, allowed),
+        () => ipcRenderer.send("window:close-result", requestId, false)
+      );
+    };
+    ipcRenderer.on("window:request-close", handler);
+    return () => ipcRenderer.removeListener("window:request-close", handler);
+  },
   getAppInfo: () => ipcRenderer.invoke("app:info")
 };
 

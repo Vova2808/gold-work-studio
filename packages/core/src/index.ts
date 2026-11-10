@@ -342,7 +342,12 @@ export class ProjectService {
   }
 
   async update(id: string, input: UpdateProjectInput): Promise<Project> {
+    const { expectedUpdatedAt, ...changes } = input;
+    input = changes;
     return this.mutate(id, (current) => {
+      if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== current.updatedAt) {
+        throw new Error("Проект изменился после открытия редактора. Сохранение отменено, чтобы не затереть свежие данные. Проверьте оставленные в редакторе правки и сохраните ещё раз.");
+      }
       if (input.storyCharacters && (current.status === "generating" || current.status === "paused")) {
         throw new Error("Нельзя менять персонажей во время производства.");
       }
@@ -397,7 +402,9 @@ export class ProjectService {
         scenes: input.scenes ?? current.scenes,
         settings: input.settings ?? current.settings
       });
-      return equalJson(next, current) ? current : { ...next, updatedAt: new Date().toISOString() };
+      const previousTime = Date.parse(current.updatedAt);
+      const nextTime = Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0);
+      return equalJson(next, current) ? current : { ...next, updatedAt: new Date(nextTime).toISOString() };
     }, options);
   }
 

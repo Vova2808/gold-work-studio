@@ -71,7 +71,7 @@ function createSilentWav(durationSeconds: number): Buffer {
 
 export class LocalProjectStorage {
   private snapshotWrites = new Map<string,{latest:Project;promise:Promise<string>}>();
-  constructor(readonly rootPath: string) {}
+  constructor(readonly rootPath: string, private readonly readProject?: (id: string) => Promise<Project | undefined>) {}
 
   projectDirectory(projectId: string): string {
     return join(this.rootPath, safeSegment(projectId));
@@ -244,7 +244,19 @@ export class LocalProjectStorage {
       try{
         for(;;){
           const latest=state.latest;
-          const directory=await this.writeProjectSnapshot(latest);
+          // Callers may arrive with a snapshot taken before a newer mutation.
+          // Read the current full registry inside the serialized backup writer.
+          const current = this.readProject ? await this.readProject(project.id) : latest;
+          if (!current) throw new Error("Проект уже удалён: резервная копия не перезаписана.");
+          const directory=await this.writeProjectSnapshot(current);
+          if (this.readProject) {
+            const after = await this.readProject(project.id);
+            if (!after) throw new Error("Проект удалён во время записи резервной копии.");
+            if (after.updatedAt !== current.updatedAt) {
+              state.latest = after;
+              continue;
+            }
+          }
           if(state.latest===latest)return directory;
         }
       }finally{if(this.snapshotWrites.get(project.id)===state)this.snapshotWrites.delete(project.id);}

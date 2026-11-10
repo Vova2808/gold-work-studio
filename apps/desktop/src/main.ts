@@ -408,7 +408,16 @@ function registerIpc(): void {
     return true;
   });
   // Scenario authorship and reference-analysis chat have been retired. Existing projects remain readable.
-  handleIpc("projects:update", (_event, id: string, input: UpdateProjectInput) => projectService.update(id, input));
+  handleIpc("projects:update", async (_event, id: string, input: UpdateProjectInput) => {
+    if (!input.expectedUpdatedAt) throw new Error("Не указана версия редактируемого проекта. Откройте его заново перед сохранением.");
+    const saved = await projectService.update(id, input);
+    try {
+      await projectStorage.ensureProject(saved);
+    } catch {
+      throw new Error("Изменения сохранены в реестре, но резервная копия проекта не обновлена. Проверьте доступность диска и сохраните ещё раз.");
+    }
+    return saved;
+  });
   handleIpc("projects:duplicate", (_event, id: string) => projectService.duplicate(id));
   handleIpc("projects:delete", async (_event, id: string) => {
     await pipeline.removeProject(id);
@@ -1159,10 +1168,51 @@ async function createWindow(): Promise<void> {
   mainWindow = window;
   mainWindowWasCreated = true;
 
+  let rendererReady = false;
+  let closeApproved = false;
+  let closeSequence = 0;
+  let pendingClose: number | undefined;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  const finishClose = (requestId: number, allowed: boolean) => {
+    if (pendingClose !== requestId || window.isDestroyed()) return;
+    clearTimeout(closeTimer);
+    pendingClose = undefined;
+    if (allowed) {
+      closeApproved = true;
+      window.close();
+    }
+  };
+  const onCloseResult = (event: Electron.IpcMainEvent, requestId: number, allowed: boolean) => {
+    if (event.sender === window.webContents) finishClose(requestId, allowed === true);
+  };
+  ipcMain.on("window:close-result", onCloseResult);
+  window.on("close", event => {
+    if (closeApproved || !rendererReady) return;
+    event.preventDefault();
+    if (pendingClose !== undefined) return;
+    const requestId = ++closeSequence;
+    pendingClose = requestId;
+    window.webContents.send("window:request-close", requestId);
+    // A dead/unresponsive renderer cannot acknowledge the draft guard. Never
+    // turn a timeout into permission to discard unsaved edits.
+    closeTimer = setTimeout(() => {
+      if (window.isDestroyed() || pendingClose !== requestId) return;
+      void dialog.showMessageBox(window, {
+        type: "warning", title: "Закрытие Gold Work Studio",
+        message: "Редактор пока не подтвердил сохранение.",
+        detail: "Можно продолжить работу или явно закрыть окно с потерей несохранённых правок.",
+        buttons: ["Продолжить работу", "Закрыть без сохранения"], defaultId: 0, cancelId: 0,
+      }).then(({ response }) => finishClose(requestId, response === 1)).catch(() => finishClose(requestId, false));
+    }, 30_000);
+  });
+
   window.webContents.on("did-fail-load", (_event, code, description, url) => {
     void logger.write("error", "renderer.load.failed", { code, description, url });
   });
   window.webContents.on("render-process-gone", (_event, details) => {
+    rendererReady = false;
+    clearTimeout(closeTimer);
+    pendingClose = undefined;
     void logger.write("error", "renderer.process.gone", { reason: details.reason, exitCode: details.exitCode });
     if (details.reason === "clean-exit" || details.reason === "killed") return;
     // Native dialog remains available even when the renderer cannot draw.
@@ -1173,6 +1223,7 @@ async function createWindow(): Promise<void> {
     }).then(({ response }) => { if (!window.isDestroyed()) { if (response === 0) window.webContents.reload(); else window.close(); } });
   });
   window.webContents.on("did-finish-load", () => {
+    rendererReady = true;
     void logger.write("info", "renderer.load.completed");
   });
   window.webContents.on("console-message", ({ level, message, lineNumber: line, sourceId }) => {
@@ -1182,6 +1233,8 @@ async function createWindow(): Promise<void> {
   window.on("unresponsive", () => void logger.write("error", "renderer.unresponsive", { error: "Окно не отвечает на события. Проверьте предыдущие операции и загрузку CPU/диска." }));
   window.on("responsive", () => void logger.write("info", "renderer.responsive"));
   window.on("closed", () => {
+    clearTimeout(closeTimer);
+    ipcMain.removeListener("window:close-result", onCloseResult);
     if (mainWindow === window) mainWindow = undefined;
     void logger.write("info", "window.closed");
   });
@@ -1373,7 +1426,7 @@ app.whenReady().then(async () => {
       .filter((project) => !project.channelProfileId)
       .map((project) => projectService.update(project.id, { channelProfileId: migrationProfile.id })));
   }
-  projectStorage = new LocalProjectStorage(join(workspacePath, "projects"));
+  projectStorage = new LocalProjectStorage(join(workspacePath, "projects"), id => projectRepository.get(id));
   effectLibrary = new EffectLibrary(join(workspacePath, "Library"), progress => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send("library:progress", progress);
@@ -1503,10 +1556,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("will-quit", () => {
   appUpdates?.stop();
   void flowAuthService?.closeAll();
   realtimeServer?.close();
   realtimeHttpServer?.close();
-  if (logger) void logger.write("info", "app.before_quit");
+  if (logger) void logger.write("info", "app.will_quit");
 });

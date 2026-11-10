@@ -65,7 +65,7 @@ const ScenarioPreparationContext = createContext<ReadonlySet<string>>(new Set())
 type ProjectEditorStage = "brief" | "settings";
 type ScenarioView = "editor" | "materials";
 type OpenProjectWorkflowStage = (projectId: string, stage: ProjectWorkflowStage) => void;
-type RegisterLeaveGuard = (section: "project" | "scenario", guard: () => Promise<boolean>) => () => void;
+type RegisterLeaveGuard = (section: "project" | "scenario" | "timeline", guard: () => Promise<boolean>) => () => void;
 
 const navigation: Array<{
   label: string;
@@ -158,8 +158,9 @@ export function App() {
   const socketConnectedRef = useRef(false);
   const previousProjectStatusRef = useRef(new Map<string, Project["status"]>());
   const pendingEditorProjectsRef = useRef(new Set<string>());
-  const leaveGuardsRef = useRef<Partial<Record<"project" | "scenario", () => Promise<boolean>>>>({});
+  const leaveGuardsRef = useRef<Partial<Record<"project" | "scenario" | "timeline", () => Promise<boolean>>>>({});
   const navigationInFlightRef = useRef(false);
+  const savesNeedingConfirmationRef = useRef(new Set<string>());
   const [directorProgress, setDirectorProgress] = useState<string | null>(null);
   const [directorRefreshToken, setDirectorRefreshToken] = useState(0);
   const [requestedDirectorTopicId, setRequestedDirectorTopicId] = useState<string | null>(null);
@@ -292,7 +293,7 @@ export function App() {
           if (!items) return;
           setProjects(current => {
             const byId = new Map(current.map(project => [project.id, project]));
-            const updated = items.map(project => byId.get(project.id)?.updatedAt === project.updatedAt ? byId.get(project.id)! : project);
+            const updated = items.map(project => (byId.get(project.id)?.updatedAt ?? "") >= project.updatedAt ? byId.get(project.id)! : project);
             for (const project of updated) byId.set(project.id, project);
             const next = snapshot.projectIds ? snapshot.projectIds.map(id => byId.get(id)).filter((project): project is Project => Boolean(project)) : updated;
             return next.length === current.length && next.every((project, index) => project === current[index]) ? current : next;
@@ -369,7 +370,10 @@ export function App() {
 
   function upsertProject(project: Project, select = true) {
     setReturnProjectId(project.id);
-    setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
+    setProjects((current) => {
+      const existing = current.find(item => item.id === project.id);
+      return existing && existing.updatedAt > project.updatedAt ? current : [project, ...current.filter(item => item.id !== project.id)];
+    });
     if (select) setSelectedProjectId(project.id);
   }
 
@@ -385,7 +389,10 @@ export function App() {
 
   async function refresh() {
     const [items, channelItems, tasks] = await Promise.all([api.listProjects(), api.listChannelProfiles(), api.getQueue()]);
-    setProjects(items);
+    setProjects(current => {
+      const byId = new Map(current.map(project => [project.id, project]));
+      return items.map(project => (byId.get(project.id)?.updatedAt ?? "") > project.updatedAt ? byId.get(project.id)! : project);
+    });
     setChannels(channelItems);
     setQueue(tasks);
     setSelectedProjectId((current) => (current && items.some((project) => project.id === current) ? current : (items[0]?.id ?? null)));
@@ -430,6 +437,7 @@ export function App() {
         }
       });
       let updated = await api.updateProject(project.id, {
+        expectedUpdatedAt: project.updatedAt,
         settings: {
           ...project.settings,
           ...(mediaMode === "stock" && input.stockSettings ? input.stockSettings : {}),
@@ -461,7 +469,7 @@ export function App() {
         const applied = await api.useChannelCharacterReference(updated.id, profile.primaryCharacter.versionId);
         updated = applied.project;
         if (input.imageStyle?.trim() && updated.settings.image.style !== input.imageStyle.trim()) {
-          updated = await api.updateProject(updated.id, { settings: {
+          updated = await api.updateProject(updated.id, { expectedUpdatedAt: updated.updatedAt, settings: {
             ...updated.settings, image: { ...updated.settings.image, style: input.imageStyle.trim() },
           } });
         }
@@ -552,9 +560,10 @@ export function App() {
     if (!project) return;
     try {
       const updated = await api.updateProject(projectId, {
+        expectedUpdatedAt: project.updatedAt,
         scenes: project.scenes.map((scene) => (scene.id === sceneId ? { ...scene, includeInAssembly: include } : scene))
       });
-      setProjects((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+      upsertProject(updated, false);
       setNotice(include ? "Сцена возвращена в сборку." : "Сцена исключена из сборки — нажмите «Пересобрать Final.mp4».");
     } catch (reason) {
       setError(errorMessage(reason));
@@ -566,11 +575,18 @@ export function App() {
   async function saveProject(id: string, input: UpdateProjectInput) {
     setError(null);
     try {
-      const project = await api.updateProject(id, input);
+      const expectedUpdatedAt = input.expectedUpdatedAt ?? projects.find(project => project.id === id)?.updatedAt;
+      const project = await api.updateProject(id, { ...input, expectedUpdatedAt });
+      savesNeedingConfirmationRef.current.delete(id);
       upsertProject(project);
       return project;
     } catch (reason) {
+      savesNeedingConfirmationRef.current.add(id);
       setError(errorMessage(reason));
+      // Rebase local editor changes onto fresh data before the user retries.
+      // Never retry the stale payload automatically.
+      const latest = await api.getProject(id).catch(() => undefined);
+      if (latest) upsertProject(latest);
       throw reason;
     }
   }
@@ -757,11 +773,40 @@ export function App() {
       ? leaveGuardsRef.current[activeSection]
       : undefined;
     try {
-      return guard ? await guard() : true;
+      const timelineGuard = leaveGuardsRef.current.timeline;
+      if (timelineGuard && !(await timelineGuard())) return false;
+      if (guard && !(await guard())) return false;
+      // A registry write can succeed while its backup fails. Even if the fresh
+      // registry now equals the draft, leaving must retry the durable backup.
+      for (const id of savesNeedingConfirmationRef.current) {
+        const latest = await api.getProject(id);
+        if (latest) {
+          const saved = await api.updateProject(id, { expectedUpdatedAt: latest.updatedAt });
+          upsertProject(saved);
+        }
+        savesNeedingConfirmationRef.current.delete(id);
+      }
+      return true;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      return false;
     } finally {
       navigationInFlightRef.current = false;
     }
   }
+
+  const closeGuardRef = useRef<() => Promise<boolean>>(async () => false);
+  closeGuardRef.current = canLeaveActiveEditor;
+  useEffect(() => api.onWindowCloseRequested?.(async () => {
+    try {
+      const allowed = await closeGuardRef.current();
+      if (!allowed) setNotice("Окно оставлено открытым: дождитесь сохранения или устраните ошибку и повторите закрытие.");
+      return allowed;
+    } catch (reason) {
+      setError(errorMessage(reason));
+      return false;
+    }
+  }), [api]);
 
   async function navigateSafely(section: SectionKey) {
     if (section === "director") {
@@ -924,6 +969,7 @@ export function App() {
           onOpenFolder={() => void openProjectFolder(overlayProject.id)}
           onAssemble={() => reassembleProject(overlayProject.id)}
           onSave={saveProject}
+          onRegisterLeaveGuard={registerLeaveGuard}
           onNavigateStage={(stage) => openProjectWorkflowStage(overlayProject.id, stage)}
           onEditScenario={() => {
             setOverlay(null);
@@ -1797,6 +1843,8 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
 }) {
   const api = window.goldWork ?? fallbackApi;
   const [draft, setDraft] = useState<Project | null>(() => project ? structuredClone(project) : null);
+  const latestDraftRef = useRef(draft);
+  latestDraftRef.current = draft;
   const previousProjectRef = useRef(project);
   const leaveGuardRef = useRef<() => Promise<boolean>>(async () => true);
   const [saving, setSaving] = useState(false);
@@ -1827,10 +1875,11 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
   const setSettings = (patch: Partial<ProjectSettings>) => setDraft((current) => (current ? { ...current, settings: { ...current.settings, ...patch } } : current));
   const hasUnsavedChanges = !project || projectEditorSnapshot(draft) !== projectEditorSnapshot(project);
   const save = async (): Promise<Project | undefined> => {
+    if (saving) return undefined;
     if (!hasUnsavedChanges) return project ?? draft;
     setSaving(true);
     try {
-      const input: UpdateProjectInput = {};
+      const input: UpdateProjectInput = { expectedUpdatedAt: draft.updatedAt };
       if (!project || draft.title !== project.title) input.title = draft.title;
       if (!project || draft.topic !== project.topic) input.topic = draft.topic;
       if (!project || draft.language !== project.language) input.language = draft.language;
@@ -1840,8 +1889,9 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
       if (!project || JSON.stringify(draft.settings) !== JSON.stringify(project.settings)) input.settings = draft.settings;
       if (draft.chatTopicId !== project?.chatTopicId && draft.chatTopicId !== undefined) input.chatTopicId = draft.chatTopicId;
       const saved = await onSave(draft.id, input);
-      setDraft(structuredClone(saved));
-      return saved;
+      const changedWhileSaving = latestDraftRef.current && projectEditorSnapshot(latestDraftRef.current) !== projectEditorSnapshot(draft);
+      setDraft(current => mergeProjectEditorDraft(current, draft, saved));
+      return changedWhileSaving ? undefined : saved;
     } catch {
       // Корневой компонент уже показывает понятное сообщение об ошибке.
       return undefined;
@@ -3375,6 +3425,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
   const api = window.goldWork ?? fallbackApi;
   // Edits below are immutable. Do not clone all candidates on each progress render.
   const [scenes, setScenes] = useState<Scene[]>(() => project?.scenes ?? []);
+  const [sceneRevision, setSceneRevision] = useState(project?.updatedAt);
   const leaveGuardRef = useRef<() => Promise<boolean>>(async () => true);
   const loadedProjectIdRef = useRef(project?.id);
   const sceneBaselineRef = useRef<Scene[]>(project?.scenes ?? []);
@@ -3392,6 +3443,8 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
   const [heroError, setHeroError] = useState<string | null>(null);
   const [heroPreview, setHeroPreview] = useState<NonNullable<Project["characterReference"]> | null>(null);
   const [visualStyle, setVisualStyle] = useState(project?.settings.image.style ?? "");
+  const latestScenarioDraftRef = useRef({ scenes, visualStyle });
+  latestScenarioDraftRef.current = { scenes, visualStyle };
   const [characterPrompt, setCharacterPrompt] = useState(project?.characterReference?.characterPrompt ?? project?.characterReference?.prompt ?? "");
   useEffect(() => onRegisterLeaveGuard("scenario", () => leaveGuardRef.current()), [onRegisterLeaveGuard]);
   useEffect(() => setView(initialView), [initialView]);
@@ -3411,6 +3464,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
   }, [heroBuilding]);
   useEffect(() => {
     if (!project) {
+      setSceneRevision(undefined);
       loadedProjectIdRef.current = undefined;
       sceneBaselineRef.current = [];
       setScenes([]);
@@ -3421,6 +3475,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
       return;
     }
     if (loadedProjectIdRef.current !== project.id) {
+      setSceneRevision(project.updatedAt);
       loadedProjectIdRef.current = project.id;
       const next = project.scenes;
       sceneBaselineRef.current = next;
@@ -3437,6 +3492,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
     const incoming = project.scenes;
     sceneBaselineRef.current = incoming;
     setScenes(current => mergeScenarioDraft(current, previous, incoming));
+    setSceneRevision(project.updatedAt);
     setSelectedId((current) => current ?? project.scenes[0]?.id ?? null);
   }, [project?.id, project?.updatedAt]);
   useEffect(() => {
@@ -3547,6 +3603,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
   const styleChanges = visualStyle.trim() !== project.settings.image.style.trim();
   const hasUnsavedChanges = sceneChanges || styleChanges;
   const save = async () => {
+    if (saving) return false;
     if (!hasUnsavedChanges) return true;
     setSaving(true);
     try {
@@ -3556,11 +3613,12 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
         || (sceneChanges && Boolean(project.referenceAnalysis || project.videoBrief?.creationMode === "script"))
       ));
       await onSave(project.id, {
+        expectedUpdatedAt: sceneRevision,
         ...(sceneChanges ? { scenes: reindex(scenes) } : {}),
         ...(styleChanges ? { settings: { ...project.settings, image: { ...project.settings.image, style: visualStyle.trim() } } } : {}),
         status: sceneChanges ? needsReview ? "draft" : "ready" : project.status,
       });
-      return true;
+      return latestScenarioDraftRef.current.scenes === scenes && latestScenarioDraftRef.current.visualStyle === visualStyle;
     } catch { return false; } finally { setSaving(false); }
   };
   const copyFullNarration = async () => {
@@ -3582,6 +3640,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
         characterPrompt: requestedPrompt || undefined,
       });
       await onSave(project.id, {
+        expectedUpdatedAt: result.project.updatedAt,
         // Новая версия показывается как candidate и не заменяет
         // подтверждённого героя до кнопки «Использовать этого героя».
         characterReference: result.project.characterReference,
@@ -3609,6 +3668,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
     try {
       const result = await api.confirmChannelCharacterReference(project.id, heroPreview.versionId);
       await onSave(project.id, {
+        expectedUpdatedAt: result.project.updatedAt,
         characterReference: result.project.characterReference,
         settings: result.project.settings,
         status: result.project.status,
@@ -3787,7 +3847,7 @@ function ScenarioEditor({ project, initialView, hasQueueTasks, busy, progress, o
         </div>
       )}
       {isAiProject && <StoryCharactersPanel project={{ ...project, scenes }} api={api} disabled={busy || saving || heroBuilding || hasUnsavedChanges}
-        onUpdated={async updated => { await onSave(project.id, { storyCharacters: updated.storyCharacters, storyCharacterPlan: updated.storyCharacterPlan,
+        onUpdated={async updated => { await onSave(project.id, { expectedUpdatedAt: updated.updatedAt, storyCharacters: updated.storyCharacters, storyCharacterPlan: updated.storyCharacterPlan,
           storyCharacterSheet: updated.storyCharacterSheet, status: updated.status }); }} />}
       {scenes.length === 0 ? (
         <EmptyState icon={<FileText size={34} />} title="Сценарий пуст" text="Добавьте первую сцену. Для каждой сцены можно задать текст, изображение и движение." action="Добавить сцену" onAction={addScene} />
@@ -4855,12 +4915,17 @@ const RemotionLivePreview = forwardRef<PreviewControls, { timeline: UniversalTim
   );
 });
 
-function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenFolder, onAssemble, onSave, onRegenerate, onNavigateStage }: { project: Project; hasQueueTasks: boolean; onClose: () => void; onShowScenes: () => void; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onRegenerate: (sceneId: string | string[], target?: TimelineRegenerateTarget) => Promise<void>; onNavigateStage: (stage: ProjectWorkflowStage) => void }) {
+function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenFolder, onAssemble, onSave, onRegenerate, onNavigateStage, onRegisterLeaveGuard }: { project: Project; hasQueueTasks: boolean; onClose: () => void; onShowScenes: () => void; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onRegenerate: (sceneId: string | string[], target?: TimelineRegenerateTarget) => Promise<void>; onNavigateStage: (stage: ProjectWorkflowStage) => void; onRegisterLeaveGuard: RegisterLeaveGuard }) {
   const api = window.goldWork ?? fallbackApi;
   const initialScenes = () => [...project.scenes].sort((a, b) => a.order - b.order) as TimelineScene[];
   const [scenes, setScenes] = useState<TimelineScene[]>(initialScenes);
+  const [sceneRevision, setSceneRevision] = useState(project.updatedAt);
+  const leaveGuardRef = useRef<() => Promise<boolean>>(async () => false);
+  useEffect(() => onRegisterLeaveGuard("timeline", () => leaveGuardRef.current()), [onRegisterLeaveGuard]);
   const isDocumentary = project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2;
   const [music,setMusic]=useState(project.settings.music);
+  const latestTimelineDraftRef = useRef({ scenes, music });
+  latestTimelineDraftRef.current = { scenes, music };
   const [musicOpen,setMusicOpen]=useState(false);
   const [musicImporting,setMusicImporting]=useState(false);
   const [selectedMusicId,setSelectedMusicId]=useState<string>();
@@ -5056,11 +5121,12 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
     const previous = previousProjectScenesRef.current;
     previousProjectScenesRef.current = project.scenes;
     setScenes(current => dirty ? mergeScenarioDraft(current, previous, incoming,[...materialHistorySceneIds.current]) as TimelineScene[] : incoming);
+    setSceneRevision(project.updatedAt);
     setSelectedIds((current) => {
       const valid = current.filter((id) => incoming.some((scene) => scene.id === id));
       return valid.length > 0 ? valid : incoming[0] ? [incoming[0].id] : [];
     });
-  }, [project.id, project.scenes]);
+  }, [project.id, project.updatedAt, project.scenes]);
 
   useEffect(() => {
     // Stock already has measured speech timing and probed source metadata from main.
@@ -5332,13 +5398,17 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
     setDirty(true);
   };
   const persist = async (next = scenes) => {
+    if (saving || musicImporting) return false;
     const normalized = reindex(next);
+    const beforeSave = latestTimelineDraftRef.current;
     setScenes(normalized);
     setSaving(true);
     try {
-      await onSave(project.id, { scenes: normalized, ...(isDocumentary?{settings:{...project.settings,...stockMusicEditorPatch(project.settings,music)}}:{}) });
-      setDirty(false);
-      return true;
+      await onSave(project.id, { expectedUpdatedAt: sceneRevision, scenes: normalized, ...(isDocumentary?{settings:{...project.settings,...stockMusicEditorPatch(project.settings,music)}}:{}) });
+      const changedWhileSaving = latestTimelineDraftRef.current.scenes !== beforeSave.scenes
+        && latestTimelineDraftRef.current.scenes !== normalized || latestTimelineDraftRef.current.music !== beforeSave.music;
+      if (!changedWhileSaving) setDirty(false);
+      return !changedWhileSaving;
     } catch {
       return false;
     } finally {
@@ -5347,13 +5417,12 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
   };
   const mutateAndPersist = async (updater: (current: TimelineScene[]) => TimelineScene[]) => {
     if (busy) return false;
-    const previous = scenes;
     if (isDocumentary) { setUndoStack(current => [...current.slice(-39), {scenes,music}]); setRedoStack([]); }
     const next = reindex(updater(scenes));
     setScenes(next);
-    const saved = await persist(next);
-    if (!saved) setScenes(previous);
-    return saved;
+    setDirty(true);
+    // A rejected save leaves the user's edit available for retry or Undo.
+    return persist(next);
   };
   const toggleSelected = () => {
     if (busy || selectedIds.length === 0) return;
@@ -5604,9 +5673,11 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
     await onAssemble();
   };
   const leaveTimeline = async (action: () => void) => {
+    if (saving || musicImporting) return;
     if (dirty && !await persist()) return;
     action();
   };
+  leaveGuardRef.current = async () => !saving && !musicImporting && (!dirty || await persist());
   const montageMenuScene = menu ? scenes.find((scene) => scene.id === menu.sceneId) : undefined;
   const liveForeground = visibleLayouts.at(-1);
   const sceneUsesVideo = (scene: TimelineScene) => Boolean(
@@ -6004,7 +6075,7 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
   );
 }
 
-function ProjectPreviewModal({ project, mode, onModeChange, hasQueueTasks, onClose, onRegenerate, onOpenFolder, onAssemble, onSave, onNavigateStage, onEditScenario, onToggleScene }: { project: Project; mode: "preview" | "timeline"; onModeChange: (mode: "preview" | "timeline") => void; hasQueueTasks: boolean; onClose: () => void; onRegenerate: (sceneId: string | string[], target?: "image" | "video" | "audio" | "all") => Promise<void>; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onNavigateStage: (stage: ProjectWorkflowStage) => void; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void }) {
+function ProjectPreviewModal({ project, mode, onModeChange, hasQueueTasks, onClose, onRegenerate, onOpenFolder, onAssemble, onSave, onNavigateStage, onEditScenario, onToggleScene, onRegisterLeaveGuard }: { project: Project; mode: "preview" | "timeline"; onModeChange: (mode: "preview" | "timeline") => void; hasQueueTasks: boolean; onClose: () => void; onRegenerate: (sceneId: string | string[], target?: "image" | "video" | "audio" | "all") => Promise<void>; onOpenFolder: () => void; onAssemble: () => Promise<void>; onSave: (id: string, input: UpdateProjectInput) => Promise<Project>; onNavigateStage: (stage: ProjectWorkflowStage) => void; onEditScenario: () => void; onToggleScene: (sceneId: string, include: boolean) => void; onRegisterLeaveGuard: RegisterLeaveGuard }) {
   const api = window.goldWork ?? fallbackApi;
   const [menu, setMenu] = useState<{ x: number; y: number; scene: Scene } | null>(null);
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
@@ -6026,7 +6097,7 @@ function ProjectPreviewModal({ project, mode, onModeChange, hasQueueTasks, onClo
   const finalVisualBeats = project.lastRender?.visualBeatCount ?? visualBeats;
   const finalTemplates = project.lastRender ? project.lastRender.templates : templates;
   if (mode === "timeline") {
-    return <TimelineEditor project={project} hasQueueTasks={hasQueueTasks} onClose={onClose} onShowScenes={() => onModeChange("preview")} onOpenFolder={onOpenFolder} onAssemble={onAssemble} onSave={onSave} onRegenerate={onRegenerate} onNavigateStage={onNavigateStage} />;
+    return <TimelineEditor project={project} hasQueueTasks={hasQueueTasks} onClose={onClose} onShowScenes={() => onModeChange("preview")} onOpenFolder={onOpenFolder} onAssemble={onAssemble} onSave={onSave} onRegenerate={onRegenerate} onNavigateStage={onNavigateStage} onRegisterLeaveGuard={onRegisterLeaveGuard} />;
   }
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
