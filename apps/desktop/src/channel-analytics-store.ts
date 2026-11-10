@@ -31,7 +31,8 @@ function label(value: unknown, max: number, fallback = ""): string {
 /** Independent local tracking file; never edits production channels or projects. */
 export class ChannelAnalyticsStore {
   private writes: Promise<unknown> = Promise.resolve();
-  private refreshInFlight?: Promise<TrackedYouTubeChannel[]>;
+  private refreshQueue: Promise<unknown> = Promise.resolve();
+  private readonly pendingRefreshes = new Map<string, Promise<TrackedYouTubeChannel[]>>();
 
   constructor(private readonly path: string,
     private readonly fetchStats: (ref: YouTubeChannelRef) => Promise<PublicYouTubeChannelStats>,
@@ -98,17 +99,23 @@ export class ChannelAnalyticsStore {
     });
   }
 
-  refresh(input: { id?: string; automatic?: boolean } = {}): Promise<TrackedYouTubeChannel[]> {
-    // Calls from multiple windows share the same refresh; no duplicate API requests.
-    if (this.refreshInFlight) return this.refreshInFlight;
-    const run = this.performRefresh(input).finally(() => { this.refreshInFlight = undefined; });
-    this.refreshInFlight = run;
+  refresh({ id, automatic = false }: { id?: string; automatic?: boolean } = {}): Promise<TrackedYouTubeChannel[]> {
+    const key = `${automatic ? "auto" : "manual"}:${id || ""}`;
+    const pending = this.pendingRefreshes.get(key);
+    if (pending) return pending;
+
+    // Recheck eligibility after earlier refreshes have saved their attempts.
+    const run = this.refreshQueue.then(() => this.performRefresh(id, automatic)).finally(() => {
+      this.pendingRefreshes.delete(key);
+    });
+    this.pendingRefreshes.set(key, run);
+    this.refreshQueue = run.catch(() => undefined);
     return run;
   }
 
-  private async performRefresh(input: { id?: string; automatic?: boolean }): Promise<TrackedYouTubeChannel[]> {
-    const interval = input.automatic ? ANALYTICS_AUTO_REFRESH_MS : ANALYTICS_MANUAL_REFRESH_MS;
-    const candidates = (await this.list()).filter(c => (!input.id || c.id === input.id)
+  private async performRefresh(id: string | undefined, automatic: boolean): Promise<TrackedYouTubeChannel[]> {
+    const interval = automatic ? ANALYTICS_AUTO_REFRESH_MS : ANALYTICS_MANUAL_REFRESH_MS;
+    const candidates = (await this.list()).filter(c => (!id || c.id === id)
       && (!c.lastAttemptAt || this.now() - Date.parse(c.lastAttemptAt) >= interval));
     const update = async (candidate: TrackedYouTubeChannel) => {
       const capturedAt = new Date(this.now()).toISOString();
@@ -141,7 +148,12 @@ export class ChannelAnalyticsStore {
         });
       }
     };
-    for (let offset = 0; offset < candidates.length; offset += 3) await Promise.all(candidates.slice(offset, offset + 3).map(update));
+    for (let offset = 0; offset < candidates.length; offset += 3) {
+      // Even if a write fails, finish the started batch before the next refresh begins.
+      const results = await Promise.allSettled(candidates.slice(offset, offset + 3).map(update));
+      const failed = results.find(result => result.status === "rejected");
+      if (failed) throw failed.reason;
+    }
     return this.list();
   }
 }
