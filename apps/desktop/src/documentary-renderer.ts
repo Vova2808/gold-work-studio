@@ -30,6 +30,7 @@ import {prepareDocumentaryOptionalRenderMedia} from './documentary-optional-rend
 import {prepareDocumentaryArtworkMedia} from './documentary-artwork-materials.js';
 import {prepareDocumentaryDiagrams} from './documentary-media-cache.js';
 import {remotionBinariesDirectory} from './remotion-binaries.js';
+import {projectForDisplay} from './project-display.js';
 
 /** A failed system Chrome launch must not strand an otherwise renderable film. */
 export async function openDocumentaryRenderBrowser(executable?:string,signal?:AbortSignal,open:typeof openBrowser=openBrowser) {
@@ -73,6 +74,9 @@ export async function withDocumentaryDecoderRecovery<T>(render:(retry:boolean)=>
 
 export async function renderDocumentary(input: MontageRenderInput, options: { projectDirectory: string; entryPoint: string; browserExecutable?: string; renderWorkers?: number; decoderCacheBytes?: number }): Promise<MontageRenderResult> {
   const started=Date.now(),metrics:Record<string,unknown>={};
+  // Local render preparation can mutate derived graphic fields. Bind the
+  // publication to its original persisted inputs, without candidate histories.
+  const publicationProject = input.beforePublish ? structuredClone(projectForDisplay(input.project)) : undefined;
   let project = documentaryExportProject(input.project,options.projectDirectory);
   await startDocumentaryMetrics(project.id,options.projectDirectory,'export');
   const trackedRenderStart=Date.now();
@@ -272,7 +276,7 @@ export async function renderDocumentary(input: MontageRenderInput, options: { pr
     if(hasAudio)await assertDocumentaryStreamDuration(checked,'audio',timeline.durationInFrames/timeline.fps,input.signal);
     input.signal?.throwIfAborted();
     input.onProgress?.("Экспорт: завершаю сохранение файла", 99);
-    await input.beforePublish?.(input.project);
+    if (publicationProject) await input.beforePublish?.(publicationProject);
     input.signal?.throwIfAborted();
     await rename(checked, input.outputPath);
     addDocumentaryInterval(project.id,'render',trackedRenderStart,Date.now());
