@@ -9,6 +9,7 @@ import {
   type AnalyzeReferenceInput,
   type CreateReferenceProjectInput,
   type CreateProjectInput,
+  type DocumentaryMotionGraphic,
   type Project,
   type ProjectSettings,
   type QueueTask,
@@ -361,6 +362,9 @@ export class ProjectService {
       const active = current.status === "generating" || current.status === "paused";
       const scenes=input.scenes??current.scenes;
       let status=input.status??(contentChanged&&!active?scenes.length?"ready":"draft":current.status);
+      // An explicitly invalidated export must not be recovered from an older
+      // Final.mp4 merely because the previous status still says complete.
+      if (outputPathProvided && !input.outputPath && status === "complete") status = scenes.length ? "ready" : "draft";
       // Timeline/settings saves must not turn an incomplete Stock v2 attempt
       // into "ready" merely because it contains planned scenes.
       if(status==='ready'&&(input.mediaMode??current.mediaMode)==='stock'
@@ -463,10 +467,11 @@ export class ProjectService {
           manualReview: undefined, illustrationLabelInEditorOnly: undefined,
           reviewNote: "", searchError: undefined, checksum: undefined, visualHash: undefined,
           visualReview: undefined, autoError: undefined, nativeFallback: undefined, searchRecovery: undefined,
-          motionGraphic: undefined, cuts: undefined, cutsOrigin: undefined, autoTransitionStyle: undefined,
+          motionGraphic: duplicateMotionGraphic(scene.documentary.motionGraphic, sceneIds),
+          cuts: undefined, cutsOrigin: undefined, autoTransitionStyle: undefined,
           template: scene.documentary.templateOrigin === "automatic" ? undefined : scene.documentary.template,
           templateOrigin: scene.documentary.templateOrigin === "automatic" ? undefined : scene.documentary.templateOrigin,
-          templateTiming: undefined,
+          templateTiming: scene.documentary.templateOrigin === "automatic" ? undefined : scene.documentary.templateTiming,
           comparison: scene.documentary.comparison && sceneIds.has(scene.documentary.comparison.sceneId)
             ? { ...scene.documentary.comparison, sceneId: sceneIds.get(scene.documentary.comparison.sceneId)! } : undefined,
           effects: (scene.documentary.effects ?? []).filter(effect => effect.origin !== "automatic").map(effect => ({
@@ -490,6 +495,30 @@ export class ProjectService {
     if (!project) throw new Error(`Проект ${id} не найден`);
     return project;
   }
+}
+
+/** Preserve authored graphics while dropping files and timing derived from the source production. */
+function duplicateMotionGraphic(graphic: DocumentaryMotionGraphic | undefined, sceneIds: Map<string, string>): DocumentaryMotionGraphic | undefined {
+  if (!graphic || graphic.origin === "automatic") return undefined;
+  return {
+    ...graphic,
+    reading: undefined, readingError: undefined, cutoutPath: undefined,
+    detail: undefined, detailError: undefined,
+    sourceChecksum: undefined, sourceTrimStartSeconds: undefined, sourcePlaybackRate: undefined,
+    sequenceId: undefined,
+    explanation: graphic.explanation ? { ...graphic.explanation, sequence: undefined } : undefined,
+    artworkSpan: graphic.artworkSpan && sceneIds.has(graphic.artworkSpan.endSceneId)
+      ? { endSceneId: sceneIds.get(graphic.artworkSpan.endSceneId)! } : undefined,
+    panels: graphic.panels?.filter(panel => sceneIds.has(panel.sceneId))
+      .map(panel => ({ ...panel, sceneId: sceneIds.get(panel.sceneId)! })),
+    cards: graphic.cards?.map(card => ({ ...card, sceneId: card.sceneId ? sceneIds.get(card.sceneId) : undefined })),
+    artwork: graphic.artwork ? {
+      ...graphic.artwork,
+      layers: graphic.artwork.layers.map(layer => ({
+        ...layer, sourceSceneId: layer.sourceSceneId ? sceneIds.get(layer.sourceSceneId) : undefined,
+      })),
+    } : undefined,
+  };
 }
 
 export class MemoryProjectRepository implements ProjectRepository {

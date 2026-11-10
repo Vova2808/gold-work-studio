@@ -1828,7 +1828,7 @@ export class MockGenerationPipeline {
   private async updateSubmission(taskId: string, checkpoint: QueueTask["pendingSubmission"]): Promise<void> {
     await this.mutate(async () => {
       const task = this.tasks.find((candidate) => candidate.id === taskId);
-      if (!task || (checkpoint && !["running", "paused"].includes(task.status))) {
+      if (!task || (checkpoint && (this.stopping.has(task.projectId) || !["running", "paused"].includes(task.status)))) {
         throw new Error(`${NO_RETRY_MARKER}Задача остановлена до отправки платного запроса.`);
       }
       if (checkpoint && (task.pendingSubmission || hasPaidReceipt(task))) {
@@ -1840,6 +1840,22 @@ export class MockGenerationPipeline {
       catch (error) {
         task.pendingSubmission = previous;
         throw new QueueSubmissionCheckpointError(`${NO_RETRY_MARKER}Не удалось сохранить контрольную точку отправки. ${cleanErrorMessage(error instanceof Error ? error.message : String(error))}`);
+      }
+      if (this.stopping.has(task.projectId)) {
+        // Stop can arrive during the durable pre-submit write. The caller has
+        // not sent this request yet, so clear that checkpoint before refusing.
+        if (checkpoint) {
+          task.pendingSubmission = undefined;
+          try { await this.persist(); }
+          catch (error) {
+            task.pendingSubmission = checkpoint;
+            throw new QueueSubmissionCheckpointError(`${NO_RETRY_MARKER}Не удалось сохранить отмену отправки. ${cleanErrorMessage(error instanceof Error ? error.message : String(error))}`);
+          }
+        }
+        // A definite rejection also reaches this branch with no checkpoint.
+        // Do not allow model fallback/account rotation to submit after Stop.
+        this.executionControllers.get(task.id)?.abort(new Error("Остановлено до следующей отправки"));
+        if (checkpoint) throw new Error(`${NO_RETRY_MARKER}Задача остановлена до отправки платного запроса.`);
       }
     });
   }
