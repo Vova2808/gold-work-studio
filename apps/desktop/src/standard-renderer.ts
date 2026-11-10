@@ -95,6 +95,8 @@ export interface MontageRenderInput {
   outputPath: string;
   onProgress?: (stage: string, progress: number) => void;
   signal?:AbortSignal;
+  /** Validate the exact prepared Stock project before replacing its saved Final. */
+  beforePublish?: (project: Project) => Promise<void>;
 }
 
 export interface MontageRenderResult {
@@ -740,7 +742,7 @@ export class StandardRenderer {
     return outputPath;
   }
 
-  async render(project: Project, onProgress?: (stage: string, progress: number) => void, signal?:AbortSignal): Promise<string> {
+  async render(project: Project, onProgress?: (stage: string, progress: number) => void, signal?:AbortSignal, beforePublish?: (project: Project) => Promise<void>): Promise<string> {
     const missing = missingAssemblyInputs(project, [], path => {
       try { const file = statSync(path); return file.isFile() && file.size > 0; }
       catch { return false; }
@@ -753,7 +755,7 @@ export class StandardRenderer {
       if (!this.montageRenderer) throw new Error("Движок Stock Documentary недоступен");
       // V2 has one shared visual/audio composition. A legacy fallback would silently drop effects.
       signal?.throwIfAborted();
-      const rendered = await this.montageRenderer.render({ project, clips: [], audioMasterPath: "", outputPath: this.storage.finalPath(project.id), onProgress, signal });
+      const rendered = await this.montageRenderer.render({ project, clips: [], audioMasterPath: "", outputPath: this.storage.finalPath(project.id), onProgress, signal, beforePublish });
       const outputPath = typeof rendered === "string" ? rendered : rendered.outputPath;
       this.renderReports.set(project.id, { ...renderReportBase(project), completedAt: new Date().toISOString(), buildId: APP_BUILD_ID,
         engine: "remotion", requestedPlanner: "local", plannerUsed: "local", visualBeatCount: project.scenes.filter(scene => scene.includeInAssembly !== false).length, templates: ["full-media"],warnings:typeof rendered==='string'?undefined:rendered.warnings });

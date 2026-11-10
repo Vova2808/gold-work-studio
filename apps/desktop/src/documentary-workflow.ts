@@ -52,6 +52,7 @@ export async function runDocumentaryWorkflow(projectId: string, options: {
   try {
     let project = await projects.get(projectId, { omitCandidates: true });
     if (!project || !isDocumentaryWorkflow(project)) throw new Error('Полный запуск доступен только для Stock Documentary.');
+    phase = project.stockProduction?.phase === 'export' ? 'export' : 'script';
     const resumeExport = project.stockProduction?.phase === 'export' && projectEditorReady(project)
       && (!usesContinuousDocumentaryNarration(project) || await hasPreparedDocumentaryNarration(project));
     signal.throwIfAborted();

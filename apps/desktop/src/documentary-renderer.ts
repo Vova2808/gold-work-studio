@@ -272,6 +272,8 @@ export async function renderDocumentary(input: MontageRenderInput, options: { pr
     if(hasAudio)await assertDocumentaryStreamDuration(checked,'audio',timeline.durationInFrames/timeline.fps,input.signal);
     input.signal?.throwIfAborted();
     input.onProgress?.("Экспорт: завершаю сохранение файла", 99);
+    await input.beforePublish?.(input.project);
+    input.signal?.throwIfAborted();
     await rename(checked, input.outputPath);
     addDocumentaryInterval(project.id,'render',trackedRenderStart,Date.now());
     await finishDocumentaryMetrics(project.id,'complete');

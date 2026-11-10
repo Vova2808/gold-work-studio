@@ -1,7 +1,6 @@
-import { access, readFile, mkdir, writeFile } from "node:fs/promises";
+import { access, readFile, mkdir, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { projectForDisplay } from "./project-display.js";
 import { withDiagnosticContext } from "./diagnostics.js";
 import {measureDocumentaryStage,finishDocumentaryMetrics} from './documentary-metrics.js';
@@ -110,7 +109,7 @@ export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
 };
 
 /** Local queue checkpoint; no provider inputs or credentials are copied into queue.json. */
-type PersistedQueueTask = QueueTask & { failedAssemblyInputHash?: string };
+type PersistedQueueTask = QueueTask & { failedAssemblyInputHash?: string; assemblyInputHash?: string };
 
 function assemblyInputHash(project: Project): string {
   const scenes = projectForDisplay(project).scenes.map(scene => ({
@@ -1092,6 +1091,14 @@ export class MockGenerationPipeline {
         const current = this.tasks.find((candidate) => candidate.id === snapshot.id);
         if (!current || current.status === "cancelled") return;
         const nowTime = Date.now();
+        if (failure === undefined && current.kind === "assemble" && !current.prepareOnly && current.assemblyInputHash) {
+          try {
+            const latest = await this.requireProject(current.projectId);
+            if (current.assemblyInputHash !== assemblyInputHash(latest)) {
+              failure = new Error(`${NO_RETRY_MARKER}Данные проекта изменились во время экспорта. Файл сохранён, но не отмечен как актуальный результат. Запустите экспорт текущего монтажа.`);
+            }
+          } catch (error) { failure = error; }
+        }
         const pendingBeforeCompletion = current.pendingSubmission;
         const completesPaidTask = failure === undefined && Boolean(pendingBeforeCompletion || hasPaidReceipt(current));
         current.updatedAt = new Date(nowTime).toISOString();
@@ -1350,32 +1357,39 @@ export class MockGenerationPipeline {
     if (task.kind === "assemble") {
       if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
         await this.updateTaskRuntime(task.id, 1, "Монтаж: связываю кадры с готовой озвучкой");
+        const timingInputHash = assemblyInputHash(project);
         const scenes = await prepareDocumentaryTiming(projectForDisplay(project), this.storage);
-        project = await this.projects.mutate(project.id, () => ({ scenes: planDocumentaryMontage({ ...project, scenes }) }));
+        signal?.throwIfAborted();
+        project = await this.projects.mutate(project.id, current => {
+          if (assemblyInputHash(current) !== timingInputHash) throw new Error(`${NO_RETRY_MARKER}Сцены или настройки изменились во время подготовки тайминга. Правки сохранены; повторите экспорт текущего монтажа.`);
+          return { scenes: planDocumentaryMontage({ ...current, scenes }) };
+        });
         const readingSnapshot=projectForDisplay(project).scenes;
         if(readingSnapshot.some(s=>s.documentary?.motionGraphic?.enabled&&s.documentary.motionGraphic.kind==='quote'&&s.documentary.motionGraphic.quoteMode!=='phrase')){
+          const readingInputHash = assemblyInputHash(project);
           const reading=await prepareDocumentaryReading(projectForDisplay(project),join(this.storage.projectDirectory(project.id),'Documentary','Reading'),message=>{void this.updateTaskRuntime(task.id,2,message);},signal);
           project=await this.projects.mutate(project.id,current=>{
-            if(!isDeepStrictEqual(projectForDisplay(current).scenes,readingSnapshot))throw new Error('Монтаж изменился во время синхронизации текста; озвучка сохранена');
+            if(assemblyInputHash(current)!==readingInputHash)throw new Error(`${NO_RETRY_MARKER}Монтаж или настройки изменились во время синхронизации текста; озвучка и правки сохранены. Повторите экспорт.`);
             return {scenes:reading.scenes};
           });
         }
-        const before = projectForDisplay(project).scenes;
+        const excerptInputHash = assemblyInputHash(project);
         const compacted = await prepareDocumentaryExcerpts(projectForDisplay(project), this.storage.projectDirectory(project.id),
           (done, total) => { void this.updateTaskRuntime(task.id, 2, `Монтаж: подготавливаю выбранные фрагменты ${done}/${total}`); }, signal, join(dirname(this.storage.rootPath), "Materials"));
         signal?.throwIfAborted();
         if (compacted.count) project = await this.projects.mutate(project.id, current => {
-          if (!isDeepStrictEqual(projectForDisplay(current).scenes, before)) throw new Error("Монтаж изменился во время сохранения фрагментов; исходники оставлены, повторите сборку");
+          if (assemblyInputHash(current) !== excerptInputHash) throw new Error(`${NO_RETRY_MARKER}Монтаж или настройки изменились во время сохранения фрагментов; исходники и правки оставлены, повторите экспорт.`);
           return rebaseDocumentaryExcerptMontage(current,compacted.scenes);
         });
         if(project.scenes.some(s=>s.includeInAssembly!==false&&s.documentary?.motionGraphic?.enabled&&(s.documentary.motionGraphic.kind==='map-route'||s.documentary.motionGraphic.kind==='map-locator'&&s.documentary.motionGraphic.cityDetail!==false))){
           await this.updateTaskRuntime(task.id,3,"Монтаж: подготавливаю карты и географические подписи");
           // Compare against the persisted form: JSON omits undefined fields from the new montage.
-          const snapshot=projectForDisplay(await this.requireProject(project.id)).scenes;
+          const mapInputHash = assemblyInputHash(project);
+          const snapshot=projectForDisplay(project).scenes;
           const mapped=await prepareDocumentaryMaps(this.storage.projectDirectory(project.id),snapshot);
           signal?.throwIfAborted();
           project=await this.projects.mutate(project.id,current=>{
-            if(!isDeepStrictEqual(projectForDisplay(current).scenes,snapshot))throw new Error("Монтаж изменился во время подготовки карты; данные сохранены, повторите сборку");
+            if(assemblyInputHash(current)!==mapInputHash)throw new Error(`${NO_RETRY_MARKER}Монтаж или настройки изменились во время подготовки карты; данные сохранены, повторите экспорт.`);
             return {scenes:mapped};
           });
           for(const scene of mapped)if(scene.documentary?.motionGraphic?.detailError)this.emit('warn','documentary.map.overview',{projectId:project.id,sceneId:scene.id,reason:scene.documentary.motionGraphic.detailError});
@@ -1396,7 +1410,19 @@ export class MockGenerationPipeline {
         if (key === previousProgress) return;
         previousProgress = key;
         void this.updateTaskRuntime(task.id, progress, stage);
-      },signal);
+      },signal, async renderedProject => {
+        signal?.throwIfAborted();
+        const inputHash = assemblyInputHash(renderedProject);
+        const assertCurrent = async () => {
+          if (assemblyInputHash(await this.requireProject(project.id)) !== inputHash) {
+            throw new Error(`${NO_RETRY_MARKER}Сцены или настройки изменились во время экспорта. Final.mp4 не заменён; запустите экспорт текущего монтажа.`);
+          }
+        };
+        await assertCurrent();
+        await this.checkpointAssemblyInputs(task.id, inputHash);
+        signal?.throwIfAborted();
+        await assertCurrent();
+      });
     }
     if (task.kind === "director") return `local://${project.id}/scenario.json`;
     const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
@@ -1825,6 +1851,17 @@ export class MockGenerationPipeline {
     });
   }
 
+  private async checkpointAssemblyInputs(taskId: string, inputHash: string): Promise<void> {
+    await this.mutate(async () => {
+      const task = this.tasks.find(candidate => candidate.id === taskId);
+      if (!task || !["running", "paused"].includes(task.status)) throw new Error("Экспорт остановлен до сохранения результата.");
+      const previous = task.assemblyInputHash;
+      task.assemblyInputHash = inputHash;
+      try { await this.persist(); }
+      catch (error) { task.assemblyInputHash = previous; throw error; }
+    });
+  }
+
   private async updateSubmission(taskId: string, checkpoint: QueueTask["pendingSubmission"]): Promise<void> {
     await this.mutate(async () => {
       const task = this.tasks.find((candidate) => candidate.id === taskId);
@@ -1942,20 +1979,32 @@ export class MockGenerationPipeline {
       // queue. Rewriting the whole project registry on each heartbeat flooded
       // renderer updates even though no project media/status had changed.
       const taskState = JSON.stringify(tasks.map(task => [task.id, task.runId, task.sceneId, task.narrationSceneIds,
-        task.kind, task.status, task.label, task.scope, task.prepareOnly, task.resultPath, task.resultFallback]));
+        task.kind, task.status, task.label, task.scope, task.prepareOnly, task.resultPath, task.resultFallback, task.assemblyInputHash]));
       if (this.syncedTaskStates.get(projectId) === taskState) continue;
       try {
         const completedRenderReport = this.renderer.lastRenderReport?.(projectId);
+        const finishedAssembly = tasks.find(task => task.kind === "assemble" && !task.prepareOnly && task.status === "done");
+        const completedOutputAvailable = !finishedAssembly || Boolean(finishedAssembly.resultPath
+          && await stat(finishedAssembly.resultPath).then(file => file.isFile() && file.size > 0, () => false));
         const syncedProject = await this.projects.mutate(projectId, (project) => {
-          const finishedAssembly = tasks.find(task => task.kind === "assemble" && !task.prepareOnly && task.status === "done");
           if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2
             && finishedAssembly && tasks.every(task => task.status === "done")
             && (project.scenes.some(scene => scene.includeInAssembly !== false && !documentaryMaterialUsable(scene))
-              || !project.outputPath && Date.parse(project.updatedAt) > Date.parse(finishedAssembly.updatedAt))) {
+              || !completedOutputAvailable
+              || (finishedAssembly.assemblyInputHash ? finishedAssembly.assemblyInputHash !== assemblyInputHash(project)
+                : !project.outputPath && Date.parse(project.updatedAt) > Date.parse(finishedAssembly.updatedAt)))) {
             // Restart must not resurrect an old Final after a new selection or
             // explicit output invalidation. A genuinely newer completed render
             // can still be reconciled after a crash between queue/project saves.
-            return { status: project.status === "complete" ? "ready" : project.status, outputPath: undefined, lastRender: undefined };
+            return {
+              status: project.status === "complete" ? "ready" : project.status, outputPath: undefined, lastRender: undefined,
+              ...(project.stockProduction?.phase === "export" ? { stockProduction: {
+                ...project.stockProduction, status: "failed" as const, updatedAt: new Date().toISOString(),
+                message: !completedOutputAvailable
+                  ? "Файл завершённого экспорта отсутствует или пуст. Готовые сцены сохранены; повторите экспорт."
+                  : "Данные монтажа изменились после этого экспорта. Старый файл не отмечен как актуальный; повторите экспорт текущего проекта.",
+              } } : {}),
+            };
           }
           const trackedSceneIds = new Set(tasks.flatMap(task => task.narrationSceneIds ?? (task.sceneId ? [task.sceneId] : [])));
           // Ран без сценных задач: либо обычная пересборка, либо stock-ролик без озвучки.
