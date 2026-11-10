@@ -137,6 +137,7 @@ export interface AutoStockFailure {
   sceneNumber: number;
   category: "no-results" | "content-rejected" | "budget-exhausted" | "analysis" | "download" | "cdn" | "invalid-key" | "provider-temporary" | "unknown";
   message: string;
+  nextAction?: string;
 }
 
 export interface AutoStockSelectionResult {
@@ -1102,6 +1103,8 @@ export interface StockProductionRun {
   message: string;
   updatedAt: string;
   assemblyTaskId?: string;
+  /** Snapshot of the last incomplete material selection, not current approval. */
+  failures?: AutoStockFailure[];
 }
 
 export type ScenarioQualityIssue = "missing" | "stale" | "incomplete";

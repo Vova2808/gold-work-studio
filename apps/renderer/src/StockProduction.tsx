@@ -118,6 +118,14 @@ export function StockProductionOverview({ project, tasks, progress, onReviseArtw
       {project.settings.assembly.documentary?.semanticMontageStatus?.status==='local'&&<p>{project.settings.assembly.documentary.semanticMontageStatus.message}</p>}
       {project.settings.assembly.documentary?.motionArtworkStatus&&project.settings.assembly.documentary.semanticMontageStatus?.status!=='local'&&<p>{project.settings.assembly.documentary.motionArtworkStatus.message}</p>}
       <strong>{next}</strong>
+      {failed&&Boolean(project.stockProduction?.failures?.length)&&<details>
+        <summary>Причины последней остановки по сценам ({project.stockProduction!.failures!.length})</summary>
+        <p>Состояние на момент остановки. После ручного изменения сцены её актуальный материал показан в «Видео и фото».</p>
+        <ol>{project.stockProduction!.failures!.map(failure=><li key={failure.sceneId}>
+          <strong>Сцена №{failure.sceneNumber}</strong>: {failure.message}
+          {failure.nextAction&&<p>{failure.nextAction}</p>}
+        </li>)}</ol>
+      </details>}
       {!finalReady && <small>Редактор доступен для правок по желанию. Для автоматического монтажа открывать его не требуется.</small>}
     </div>
     <div className="stock-production-coverage">

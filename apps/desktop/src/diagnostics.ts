@@ -51,6 +51,7 @@ export function diagnoseFailure(error: unknown): { category: string; summary: st
   visit(error);
   const text = parts.join(" ");
   const make = (category: string, summary: string, nextAction: string) => ({ category, summary, nextAction, codes: [...new Set(codes)] });
+  if(parts.includes('DocumentarySelectionIncompleteError'))return make('material-selection', 'Подбор материалов не завершён', 'Откройте обзор производства: причины и дальнейшие действия сохранены по каждой незавершённой сцене. Готовые материалы и озвучку не удаляйте.');
   if (/CompletionUncertain|SubmissionUncertain|результат.*неизвест|неопределён|unknown.*submission/i.test(text)) return make("uncertain-submission", "Результат отправленного запроса неизвестен", "Не отправляйте платное задание повторно вслепую. Проверьте сохранённый ID и статус заказа у провайдера.");
   if (/AbortError|\baborted\b|отмен[аё]н/i.test(text)) return make("cancelled", "Операция отменена", "Проверьте, нажимались ли пауза или остановка. Это не обязательно сбой сервиса.");
   if (/ENOSPC|disk.*full|мест[ао].*диск/i.test(text)) return make("disk-full", "Недостаточно места на диске", "Освободите место на диске проекта и во временной папке, затем продолжите незавершённую задачу.");

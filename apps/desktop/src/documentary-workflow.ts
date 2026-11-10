@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import type { ProjectService } from '@gold-work/core';
 import { documentaryMaterialUsable, projectEditorReady, type Project, type QueueTask, type StockProductionRun } from '@gold-work/shared';
 import { hasPreparedDocumentaryNarration, usesContinuousDocumentaryNarration } from './documentary-narration.js';
+import { DocumentarySelectionIncompleteError } from './documentary-production.js';
 
 type Projects = Pick<ProjectService, 'get' | 'mutate' | 'list'>;
 export const isDocumentaryWorkflow = (project: Project) => project.mediaMode === 'stock' && project.settings.assembly.documentary?.version === 2;
@@ -47,8 +48,8 @@ export async function runDocumentaryWorkflow(projectId: string, options: {
 }): Promise<QueueTask[]> {
   const { projects, signal } = options;
   let phase: StockProductionRun['phase'] = 'script';
-  const save = (status: StockProductionRun['status'], message: string, assemblyTaskId?: string) =>
-    saveDocumentaryWorkflow(projects, projectId, { phase, status, message, assemblyTaskId, updatedAt: new Date().toISOString() });
+  const save = (status: StockProductionRun['status'], message: string, assemblyTaskId?: string, failures?: StockProductionRun['failures']) =>
+    saveDocumentaryWorkflow(projects, projectId, { phase, status, message, assemblyTaskId, failures, updatedAt: new Date().toISOString() });
   try {
     let project = await projects.get(projectId, { omitCandidates: true });
     if (!project || !isDocumentaryWorkflow(project)) throw new Error('Полный запуск доступен только для Stock Documentary.');
@@ -75,7 +76,8 @@ export async function runDocumentaryWorkflow(projectId: string, options: {
   } catch (error) {
     const message = signal.aborted ? 'Производство остановлено. Готовые сцены, материалы и озвучка сохранены.'
       : error instanceof Error ? error.message : String(error);
-    await save(signal.aborted ? 'stopped' : 'failed', message);
+    await save(signal.aborted ? 'stopped' : 'failed', message, undefined,
+      !signal.aborted && error instanceof DocumentarySelectionIncompleteError ? error.failures : undefined);
     throw error;
   }
 }

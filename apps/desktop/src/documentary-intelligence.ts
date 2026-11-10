@@ -327,6 +327,7 @@ export function documentaryJson(text: string): Record<string, unknown> {
   return parsed.result;
 }
 const completedGatewaySignature='[Error] The upstream provider is temporarily unavailable. Try again shortly.';
+const emptyVisualResponseMessage='Анализ материала не завершён: модель завершила визуальную проверку пустым ответом. Ответ получен без результата анализа; этот платный запрос автоматически не повторяется. Выберите другой материал или проверьте кандидат вручную.';
 function confirmedGatewayUnavailable(saved:{state:string;rejection?:string;raw?:string;completedAt?:string;completedGatewayError?:boolean}|undefined):boolean {
   // The old writer already marked this exact terminal result as rejected and
   // completed. A matching string in pending/partial content is never sufficient.
@@ -342,6 +343,16 @@ export async function readAnalysisCheckpoint(path: string): Promise<{ state: str
     value = JSON.parse(content);
     if (!value || typeof value !== "object" || typeof value.state !== "string") throw new Error("Invalid checkpoint");
   } catch { throw new Error("Контрольная точка анализа повреждена; платный повтор отключён"); }
+  // Older versions settled an empty terminal response as a completed uncertain
+  // verdict. It is transport completion, never a completed pixel analysis.
+  // Keep the exact paid receipt guarded; only its explicit structural marker
+  // establishes this legacy case, not an ordinary uncertain model verdict.
+  if(value.purpose==='visual-illustration'&&value.state==='complete'
+    &&value.completion?.disposition==='empty'&&value.completion.receivedCharacters===0
+    &&value.raw===''&&value.result?.status==='uncertain'){
+    value={...value,state:'rejected',rejection:'empty-response',error:emptyVisualResponseMessage};
+    await atomicWrite(path,JSON.stringify(value));
+  }
   if(value.state==='received'&&value.purpose==='candidate-relevance'&&typeof value.raw==='string'){
     const result=receivedDocumentaryRanking(value.raw);
     if(result)return {...value,state:'complete',result};
@@ -1091,6 +1102,7 @@ export class DocumentaryIntelligence {
     }
     const path = join(root, `${key}.json`);
     const saved = await readAnalysisCheckpoint(path);
+    if(saved?.rejection==='empty-response')throw new DocumentaryAnalysisError(saved.error??emptyVisualResponseMessage,'pending',purpose);
     const retryScope=documentarySelectionRetry.getStore();
     const cachedSelection=retryScope&&'cached' in retryScope?retryScope.cached:undefined;
     const matchesSelectionCache=(receipt:typeof saved,revision:string|undefined)=>{
@@ -1174,6 +1186,7 @@ export class DocumentaryIntelligence {
       const previousKey = documentaryCheckpointKey(purpose,previous.system,previous.input,images);
       const previousState = await readAnalysisCheckpoint(join(root, `${previousKey}.json`));
       if(singleReviewModel&&previousState?.model!==singleReviewModel)continue;
+      if(previousState?.rejection==='empty-response')throw new DocumentaryAnalysisError(previousState.error??emptyVisualResponseMessage,'pending',purpose);
       if(previousState?.rejection==='model-refusal')throw new DocumentaryAnalysisError(previousState.error??'Модель отказалась анализировать материал.','pending',purpose);
       if (previousState && previousState.state !== "failed" && !(previousState.state === "rejected" && previousState.rejection === "model-unavailable") && (previousState.state !== "complete" || !previousState.result)) throw new DocumentaryAnalysisError("Предыдущая проверка этого материала имеет неизвестный результат. Новый контекст не запускает платный повтор; проверьте журнал AnyModel.", "pending", purpose);
       // Old unknown requests still guard their pixels. A settled old verdict
@@ -1464,14 +1477,14 @@ export class DocumentaryIntelligence {
       if(purpose==='visual-illustration'&&!received&&error instanceof AnyModelOutputFormatError
         &&error.completionConfirmed&&!error.partial.trim()&&!partial.trim()
         &&completionMetadata?.receivedCharacters===error.partial.length){
-        // The transport finished. There is no model verdict, but this exact
-        // paid attempt is settled and must not quarantine the source as unknown.
-        const result={status:'uncertain',reason:'Модель завершила визуальную проверку пустым ответом. Кандидат не подтверждён.'};
+        // A terminal response settles transport, not the visual task. Preserve
+        // its known paid outcome without returning a fabricated model verdict
+        // or permitting another automatic submission of these same frames.
         this.consecutiveConnectionFailures=0;
         this.connectionRecoveries=0;
-        await atomicWrite(path,JSON.stringify({state:'complete',purpose,...previewMetadata,model,overviewSamplingVersion,
-          raw:error.partial,result,completion:{...completionMetadata,disposition:'empty'},createdAt,completedAt:new Date().toISOString()}));
-        return result;
+        await atomicWrite(path,JSON.stringify({state:'rejected',rejection:'empty-response',purpose,...previewMetadata,model,overviewSamplingVersion,
+          raw:error.partial,error:emptyVisualResponseMessage,completion:{...completionMetadata,disposition:'empty'},createdAt,completedAt:new Date().toISOString()}));
+        throw new DocumentaryAnalysisError(emptyVisualResponseMessage,'pending',purpose);
       }
       if(error instanceof DocumentaryModelRefusal){
         this.consecutiveConnectionFailures=0;
@@ -2865,6 +2878,8 @@ export class DocumentaryIntelligence {
       const sameVisualQuestion=sameFrames&&binding.quality?.target===qualityTarget&&binding.quality.narration===scene.narration;
       if(sameTask&&receipt?.purpose==='visual-illustration'&&receipt.state==='complete'&&receipt.result)completedCurrentTask=true;
       if(sameTask&&receipt?.rejection==='model-refusal')throw new DocumentaryAnalysisError(receipt.error??'Модель отказалась анализировать материал.','pending',receipt.purpose);
+      if((sameTask||sameVisualQuestion)&&receipt?.rejection==='empty-response')
+        throw new DocumentaryAnalysisError(receipt.error??emptyVisualResponseMessage,'pending',receipt.purpose);
       if(receipt&&(!binding||sameTask||sameVisualQuestion)
         &&/^(?:visual-|catalog-|video-)/.test(receipt.purpose??'')&&receipt.state!=='complete'&&receipt.state!=='failed'
         &&!(receipt.state==='rejected'&&receipt.rejection==='model-unavailable')){

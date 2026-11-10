@@ -1566,6 +1566,10 @@ export class DocumentaryProjectService {
   }
   private sourceSelections = new Map<string, Promise<void>>();
   private sourceChecksums = new Map<string, string>();
+  private selectionResumeBinding(project:Project,scene:Scene) {
+    return createHash('sha256').update(JSON.stringify([scene.narration,scene.documentary?.requirement,
+      documentarySceneContext(project,scene),project.aspectRatio,scene.documentary?.layout])).digest('hex');
+  }
   private stockRangePausedUntil = new Map<string, number>();
   private selectedEvidence?: Promise<Map<string, string>>;
   private selectedSearchHint(scene:Scene) {
@@ -2450,6 +2454,16 @@ export class DocumentaryProjectService {
       })};
     },{candidateSceneIds:[]});
     let skipped = 0, completed = 0, selected = 0;
+    // Read the persisted shortlist once, before concurrent workers mutate the
+    // project. Display views intentionally omit it; an empty display array is
+    // not evidence that discovery has never completed for this scene.
+    const savedCandidatePools=new Map<string,{binding:string;candidates:DocumentaryCandidate[]}>();
+    if(!options.force){
+      const saved=await this.projects.get(projectId);
+      for(const scene of saved?.scenes??[])if(scene.documentary&&inScope(scene)&&scene.includeInAssembly!==false
+        &&!scene.documentary.pinned&&!documentaryMaterialUsable(scene))
+        savedCandidatePools.set(scene.id,{binding:this.selectionResumeBinding(saved!,scene),candidates:scene.documentary.candidates});
+    }
     const activeScenes = new Set<string>();
     const budgetKinds=new Map<string,'image'|'video'>();
     const canAttempt=(sceneId:string,kind:'image'|'video')=>session.canAttempt(sceneId,kind)
@@ -2672,6 +2686,16 @@ export class DocumentaryProjectService {
         if((await documentaryLegacyMotionRefusals(this.storage.projectDirectory(projectId),scene)).size)
           rejectionScope=createHash('sha256').update(JSON.stringify([rejectionScope,'physical-subject-motion-v2'])).digest('hex');
         const sceneRoot=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'));
+        const preparedSources:Array<DocumentaryCandidate&{checksum:string;selectionBinding?:string}>=[];
+        if(!options.force)for(const name of await readdir(sceneRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
+          if(!/^[a-f0-9]{64}\.source\.json$/.test(name))continue;
+          const source=await readFile(join(sceneRoot,name),'utf8').then(text=>{
+            try{return JSON.parse(text) as DocumentaryCandidate&{checksum:string;selectionBinding?:string};}catch{return undefined;}
+          });
+          if(source&&source.checksum===name.slice(0,64)&&source.localPath&&typeof source.id==='string'
+            &&(source.kind==='video'||source.kind==='image')&&Array.isArray(source.concerns)
+            &&await stat(source.localPath).then(info=>info.isFile()&&info.size>0,()=>false))preparedSources.push(source);
+        }
         let rejectionPath=join(sceneRoot,'rejected-candidates.json');
         let rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
         // A Creative Commons video's HD hint does not guarantee an MP4 format
@@ -2775,6 +2799,16 @@ export class DocumentaryProjectService {
           if(reservePhoto&&(pendingVideoReview||session.budget(scene.id,'image').attempts))break;
           const taskScene=reservePhoto?projectPrimaryPhoto(scene):scene;
           const requirement=reservePhoto?taskScene.documentary!.requirement:discoveryRequirement;
+          const resumeBinding=this.selectionResumeBinding(project,taskScene);
+          const savedPool=savedCandidatePools.get(scene.id);
+          const previousCandidates=savedPool?.binding===resumeBinding?savedPool.candidates:[];
+          const sameDiscoverySource=(candidate:DocumentaryCandidate,source:DocumentaryCandidate)=>candidate.id===source.id
+            &&candidate.provider===source.provider&&candidate.kind===source.kind&&candidate.downloadUrl===source.downloadUrl;
+          const savedSources=preparedSources.filter(source=>source.kind===kind
+            &&(source.selectionBinding?source.selectionBinding===resumeBinding:previousCandidates.some(candidate=>sameDiscoverySource(candidate,source))));
+          const savedChecksums=new Map(savedSources.map(source=>[retryCandidateKey(source),source.checksum]));
+          const resumedCandidates=[...savedSources,...previousCandidates.filter(candidate=>candidate.kind===kind
+            &&!savedSources.some(source=>sameDiscoverySource(candidate,source)))];
           const searchSubjects=documentarySearchSubjects(requirement);
           if(reservePhoto){
             const parts=[scopeFor(taskScene,requirement),project.aspectRatio,requirement.preferredKind,taskScene.documentary?.layout];
@@ -2840,7 +2874,7 @@ export class DocumentaryProjectService {
             for (const query of queries) pool.push(...(await this.localCandidates(query)).filter(item => item.kind === "video"));
             if (pool.length) foundThisRun = true;
           }
-          if (quick) {
+          if (quick&&!resumedCandidates.length) {
             // These same queries/providers belong to the broad search below;
             // its existing provider cache reuses them if this attempt fails.
             // Only a locally obvious candidate is eligible, never a paid rank
@@ -2947,11 +2981,14 @@ export class DocumentaryProjectService {
           let retryDirectStill=false;
           let waitedForNamedSource=false;
           let readyBatch:DocumentaryCandidate[]|undefined;
+          // Both provider generators are lazy. Let saved candidates reach the
+          // existing download/cache/inspection gates before starting discovery.
+          let resumeBatch=resumedCandidates.length?resumedCandidates:undefined;
           try {
           selectionBatches: while(!accepted&&canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
           waitingAt=Date.now();
           let batch:IteratorResult<DocumentaryCandidate[]>;
-          try { batch=readyBatch?{done:false,value:readyBatch}:await batches.next();readyBatch=undefined; }
+          try { batch=resumeBatch?{done:false,value:resumeBatch}:readyBatch?{done:false,value:readyBatch}:await batches.next();resumeBatch=undefined;readyBatch=undefined; }
           finally { session.accountSearch(scene.id,kind,Date.now()-waitingAt); }
           if(batch.done){
             if(!retryDirectStill)break;
@@ -3114,7 +3151,7 @@ export class DocumentaryProjectService {
                 currentSceneId: scene.id, currentSceneNumber: scene.order + 1,
                 message: `Кадр ${scene.order + 1}: источник ограничил скачивание. Продолжу автоматически через ${seconds} с; ничего нажимать не нужно.` }), Date.now()+session.remaining(scene.id,kind),
                 message=>this.publish({projectId,phase:'preparing',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,currentSceneNumber:scene.order+1,message:`Кадр ${scene.order+1}: ${message}`}),false,undefined,failedTransfers,
-                {retryChecksum:selectionRetry?.checksum,onLocalReuse:reservePhoto?()=>{reusedLocalCopy=true;}:undefined}); }
+                {retryChecksum:selectionRetry?.checksum??savedChecksums.get(retryCandidateKey(candidate)),binding:resumeBinding,onLocalReuse:reservePhoto?()=>{reusedLocalCopy=true;}:undefined}); }
               catch (error) {
                 if (error instanceof DocumentaryStorageUnavailableError || (error as NodeJS.ErrnoException)?.code === "ENOSPC") throw error;
                 if(error instanceof DocumentaryAnalysisError&&error.kind!=='pending')throw error;
@@ -4013,7 +4050,7 @@ export class DocumentaryProjectService {
     return project;
   }
 
-  private async apply(projectId: string, sceneId: string, candidate: DocumentaryCandidate, commit = true, onDownloadProgress?: (bytes: number) => void, onDownloadWait?: (seconds: number) => void, downloadDeadline?: number,onPreview?:(message:string)=>void,manualStage=false,fallback?:{signal?:AbortSignal;thematicProjection?:{scene:Scene;binding:string}},failedTransfers?:DocumentaryTransferFailures,selection?:{retryChecksum?:string;onLocalReuse?:()=>void}): Promise<Project> {
+  private async apply(projectId: string, sceneId: string, candidate: DocumentaryCandidate, commit = true, onDownloadProgress?: (bytes: number) => void, onDownloadWait?: (seconds: number) => void, downloadDeadline?: number,onPreview?:(message:string)=>void,manualStage=false,fallback?:{signal?:AbortSignal;thematicProjection?:{scene:Scene;binding:string}},failedTransfers?:DocumentaryTransferFailures,selection?:{retryChecksum?:string;binding?:string;onLocalReuse?:()=>void}): Promise<Project> {
     const key = `${projectId}:${sceneId}`;
     if (this.active.has(key)) throw new Error("Для этого кадра уже скачивается материал");
     this.active.add(key);
@@ -4309,7 +4346,8 @@ export class DocumentaryProjectService {
       const visualHash = prepared.poster ? await documentaryVisualHash(join(root, prepared.poster)) : undefined;
       const similar = project.scenes.filter(other => other.id !== sceneId && (other.documentary?.checksum === checksum || visualHash && other.documentary?.visualHash && visualHashDistance(visualHash, other.documentary.visualHash) <= 6));
       if (similar.length) selected.concerns = [...selected.concerns, `Похожий или повторный материал уже есть в кадрах: ${similar.map(other => other.order + 1).join(", ")}. Проверьте разнообразие и выбранный диапазон.`];
-      await atomicWrite(join(root, `${checksum}.source.json`), JSON.stringify({ ...selected, checksum, metadata: prepared.metadata }, null, 2));
+      await atomicWrite(join(root, `${checksum}.source.json`), JSON.stringify({ ...selected, checksum, metadata: prepared.metadata,
+        selectionBinding:selection?.binding??this.selectionResumeBinding(project,scene) }, null, 2));
       const updateScene = (current: Scene): Scene => {
         if (current.narration !== scene.narration) throw new Error("Сцена изменилась во время загрузки; материал сохранён, выберите его заново");
         return { ...current, imagePath: candidate.kind === "image" ? prepared.proxy ? join(root, prepared.proxy) : path : prepared.poster ? join(root, prepared.poster) : undefined,

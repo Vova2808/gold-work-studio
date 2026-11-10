@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectService } from "@gold-work/core";
-import type { Project, QueueTask, Scene } from "@gold-work/shared";
+import type { AutoStockFailure, Project, QueueTask, Scene } from "@gold-work/shared";
 import {documentaryAutomaticMaterialReady, documentaryMissingSelectedMaterialMessage} from './documentary-auto-readiness.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import type { LocalProjectStorage } from "./local-project-storage.js";
@@ -9,12 +9,12 @@ import type {DocumentaryProjectService} from './documentary-project-service.js';
 import {AnyModelModelUnavailableError} from './anymodel-text-fallback.js';
 import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {measureDocumentaryStage} from './documentary-metrics.js';
-import {documentarySelectionFailureSummary} from './documentary-selection-failure.js';
+import {documentarySelectionFailures,documentarySelectionFailureSummary} from './documentary-selection-failure.js';
 
 /** A bounded selection needs user attention, not cancellation of saved jobs. */
 export class DocumentarySelectionIncompleteError extends Error {
   readonly recoverable = true;
-  constructor(message:string) { super(message); this.name='DocumentarySelectionIncompleteError'; }
+  constructor(message:string,readonly failures:AutoStockFailure[] = []) { super(message); this.name='DocumentarySelectionIncompleteError'; }
 }
 
 /** A scene can choose its final range as soon as its own paid voice is saved.
@@ -111,7 +111,8 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
       +(missingFiles.size?` Недоступны сохранённые файлы материалов: ${missingFiles.size}.`:'')
       +(manual.length?` Сохранены для ручной проверки: ${manual.length}; из них ${pending} без завершённого результата. Это не готовые сцены автоматического ролика.`:'')
       +documentarySelectionFailureSummary(unfinished,result?.failures)
-      +' Ограниченный поиск завершён. Выберите материал вручную или продолжите подбор; готовые кадры, озвучка и ответы сервисов сохранены.');
+      +' Ограниченный поиск завершён. Причины по всем сценам указаны в обзоре производства. Выберите материал вручную или продолжите подбор; готовые кадры, озвучка и ответы сервисов сохранены.',
+      documentarySelectionFailures(unfinished,result?.failures));
   }
   signal.throwIfAborted();
   // Only an otherwise complete timeline can benefit from replacing stills.
