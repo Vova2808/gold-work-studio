@@ -355,6 +355,8 @@ export class ProjectService {
         throw new Error("Нельзя менять состав сцен во время активной генерации. Сначала остановите очередь.");
       }
       const lastRenderProvided = Object.prototype.hasOwnProperty.call(input, "lastRender");
+      const outputPathProvided = Object.prototype.hasOwnProperty.call(input, "outputPath");
+      const outputChanged = outputPathProvided && input.outputPath !== current.outputPath;
       const contentChanged = input.topic !== undefined || input.aspectRatio !== undefined || input.language !== undefined || input.mode !== undefined || input.scenes !== undefined || input.settings !== undefined || input.chatTopicId !== undefined || input.characterReference !== undefined || input.channelProfileId !== undefined || input.mediaMode !== undefined || input.motionTemplate !== undefined || input.videoBrief !== undefined || input.montagePlan !== undefined;
       const active = current.status === "generating" || current.status === "paused";
       const scenes=input.scenes??current.scenes;
@@ -368,8 +370,8 @@ export class ProjectService {
       return {
         ...input,
         status,
-        outputPath: contentChanged ? input.outputPath : input.outputPath ?? current.outputPath,
-        lastRender: lastRenderProvided ? input.lastRender : contentChanged ? undefined : current.lastRender,
+        outputPath: contentChanged || outputPathProvided ? input.outputPath : current.outputPath,
+        lastRender: lastRenderProvided ? input.lastRender : contentChanged || outputChanged ? undefined : current.lastRender,
         montagePlan: input.scenes !== undefined ? input.montagePlan : input.montagePlan ?? current.montagePlan
       };
     });
@@ -411,6 +413,8 @@ export class ProjectService {
   async duplicate(id: string): Promise<Project> {
     const source = await this.require(id);
     const now = new Date().toISOString();
+    const sceneIds = new Map(source.scenes.map(scene => [scene.id, createId("scene")]));
+    const documentary = source.settings.assembly.documentary;
     const duplicate = normalizeProject({
       ...structuredClone(source),
       id: createId("project"),
@@ -421,17 +425,56 @@ export class ProjectService {
       outputPath: undefined,
       lastRender: undefined,
       montagePlan: undefined,
+      stockProduction: undefined,
+      settings: {
+        ...source.settings,
+        assembly: { ...source.settings.assembly, documentary: documentary ? {
+          ...documentary,
+          semanticMontageStatus: undefined, motionArtworkStatus: undefined,
+          artworkFeedback: undefined, activeArtworkFeedback: undefined, offlinePrimaryRecovery: undefined,
+          resolvedBackground: undefined, resolvedBackgrounds: undefined,
+        } : undefined },
+      },
       storyCharacters: source.storyCharacters?.map(character => ({ ...character, imagePath: undefined, candidate: undefined, pendingGeneration: undefined, error: undefined, status: "draft" })),
+      storyCharacterPlan: undefined,
       storyCharacterSheet: undefined,
       scenes: source.scenes.map((scene, order) => ({
         ...scene,
-        id: createId("scene"),
+        id: sceneIds.get(scene.id)!,
         order,
         status: "draft",
         visualBeats: undefined,
         imagePath: undefined,
         videoPath: undefined,
-        audioPath: undefined
+        audioPath: undefined,
+        narrationSlice: undefined,
+        videoFallback: undefined,
+        stockSource: undefined,
+        stockAlternates: undefined,
+        autoTransition: undefined, autoTransitionDurationSeconds: undefined,
+        autoKenBurnsDirection: undefined, autoKenBurnsFocus: undefined, autoKenBurnsZoom: undefined,
+        trimStartSeconds: undefined, trimEndSeconds: undefined,
+        documentary: scene.documentary ? {
+          ...scene.documentary,
+          semanticMontage: undefined, semanticMontageInputHash: undefined,
+          narrationAlignment: undefined, timing: undefined,
+          candidates: [], candidatesDeferred: undefined, candidateCount: undefined, selected: undefined,
+          verified: false, pinned: false, illustrative: false, selectionPlan: undefined,
+          manualReview: undefined, illustrationLabelInEditorOnly: undefined,
+          reviewNote: "", searchError: undefined, checksum: undefined, visualHash: undefined,
+          visualReview: undefined, autoError: undefined, nativeFallback: undefined, searchRecovery: undefined,
+          motionGraphic: undefined, cuts: undefined, cutsOrigin: undefined, autoTransitionStyle: undefined,
+          template: scene.documentary.templateOrigin === "automatic" ? undefined : scene.documentary.template,
+          templateOrigin: scene.documentary.templateOrigin === "automatic" ? undefined : scene.documentary.templateOrigin,
+          templateTiming: undefined,
+          comparison: scene.documentary.comparison && sceneIds.has(scene.documentary.comparison.sceneId)
+            ? { ...scene.documentary.comparison, sceneId: sceneIds.get(scene.documentary.comparison.sceneId)! } : undefined,
+          effects: (scene.documentary.effects ?? []).filter(effect => effect.origin !== "automatic").map(effect => ({
+            ...effect,
+            boundary: effect.boundary && sceneIds.has(effect.boundary.from) && sceneIds.has(effect.boundary.to)
+              ? { ...effect.boundary, from: sceneIds.get(effect.boundary.from)!, to: sceneIds.get(effect.boundary.to)! } : undefined,
+          })),
+        } : undefined,
       }))
     });
     await this.projects.save(duplicate);
