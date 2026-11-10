@@ -2,6 +2,7 @@ import { safeStorage } from "electron";
 import { readFile } from "node:fs/promises";
 import { atomicWrite } from "./fs-utils.js";
 import { parseProxyUrl, proxyDisplayName } from "./proxy-utils.js";
+import { hasInvalidVoicerApiKeyCharacters, INVALID_VOICER_API_KEY_MESSAGE } from "./voicer-api-key.js";
 import type { SaveVoicerSettingsInput, VoicerSettings } from "@gold-work/shared";
 
 const defaults: Pick<VoicerSettings, "baseUrl"> = {
@@ -54,9 +55,11 @@ export class VoicerStore {
       encryptedProxyUrl: current.encryptedProxyUrl,
       proxyDisplayName: current.proxyDisplayName
     };
-    if (input.apiKey?.trim()) {
+    const apiKey = input.apiKey?.trim();
+    if (apiKey) {
+      if (hasInvalidVoicerApiKeyCharacters(apiKey)) throw new Error(INVALID_VOICER_API_KEY_MESSAGE);
       if (!safeStorage.isEncryptionAvailable()) throw new Error("Защищённое хранилище Windows недоступно");
-      next.encryptedApiKey = safeStorage.encryptString(input.apiKey.trim()).toString("base64");
+      next.encryptedApiKey = safeStorage.encryptString(apiKey).toString("base64");
     }
     if (input.clearProxy) {
       delete next.encryptedProxyUrl;

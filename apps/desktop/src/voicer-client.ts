@@ -5,6 +5,7 @@ import { voiceCalibrationSampleText, type VoicerTemplate } from "@gold-work/shar
 import { atomicWrite } from "./fs-utils.js";
 import { NO_RETRY_MARKER } from "./google-errors.js";
 import { parseProxyUrl, proxyRequest, ProxyConnectError, type ProxyResponse } from "./proxy-utils.js";
+import { hasInvalidVoicerApiKeyCharacters, INVALID_VOICER_API_KEY_MESSAGE } from "./voicer-api-key.js";
 import type { VoicerStore } from "./voicer-store.js";
 import { observeNetwork, recordDiagnosticEvent } from "./diagnostics.js";
 
@@ -314,6 +315,8 @@ export class VoicerClient {
     }
     let order: LumeanOrder | undefined;
     if (!orderId) {
+      // Не отмечаем платную отправку, если текущий ключ невозможно передать.
+      await this.requireApiKey(signal);
       // Единственный небезопасный для повтора запрос во всём цикле. request() намеренно
       // выполняет POST /orders ровно один раз даже при timeout/network error.
       await lifecycle.onBeforeOrderCreate?.();
@@ -515,9 +518,7 @@ export class VoicerClient {
     throw lastError;
   }
 
-  private async requestOnce<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    throwIfAborted(signal);
-    const settings = await this.store.publicSettings();
+  private async requireApiKey(signal?: AbortSignal): Promise<string> {
     const key = await this.store.apiKey();
     throwIfAborted(signal);
     if (!key) {
@@ -526,6 +527,19 @@ export class VoicerClient {
         { code: "configuration", retryable: false, creationUncertain: false }
       );
     }
+    if (hasInvalidVoicerApiKeyCharacters(key)) {
+      throw new VoicerClientError(
+        INVALID_VOICER_API_KEY_MESSAGE,
+        { code: "configuration", retryable: false, creationUncertain: false }
+      );
+    }
+    return key;
+  }
+
+  private async requestOnce<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    throwIfAborted(signal);
+    const settings = await this.store.publicSettings();
+    const key = await this.requireApiKey(signal);
     if (!settings.baseUrl.trim()) {
       throw new VoicerClientError(
         "Укажите Base URL Lumean в Настройки → AI и сценарии",
