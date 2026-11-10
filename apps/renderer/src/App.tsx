@@ -160,6 +160,7 @@ export function App() {
   const pendingEditorProjectsRef = useRef(new Set<string>());
   const leaveGuardsRef = useRef<Partial<Record<"project" | "scenario" | "timeline", () => Promise<boolean>>>>({});
   const navigationInFlightRef = useRef(false);
+  const editingSurfaceRef = useRef<HTMLDivElement>(null);
   const savesNeedingConfirmationRef = useRef(new Set<string>());
   const [directorProgress, setDirectorProgress] = useState<string | null>(null);
   const [directorRefreshToken, setDirectorRefreshToken] = useState(0);
@@ -769,6 +770,8 @@ export function App() {
   async function canLeaveActiveEditor(): Promise<boolean> {
     if (navigationInFlightRef.current) return false;
     navigationInFlightRef.current = true;
+    // Keep every editor stable until all guards and backup writes finish.
+    editingSurfaceRef.current?.setAttribute("inert", "");
     const guard = activeSection === "project" || activeSection === "scenario"
       ? leaveGuardsRef.current[activeSection]
       : undefined;
@@ -792,6 +795,7 @@ export function App() {
       return false;
     } finally {
       navigationInFlightRef.current = false;
+      editingSurfaceRef.current?.removeAttribute("inert");
     }
   }
 
@@ -891,7 +895,7 @@ export function App() {
 
   return (
     <ScenarioPreparationContext.Provider value={new Set(Object.entries(scenarioBuilds).filter(([, build]) => build.running).map(([id, build]) => build.projectId ?? id))}>
-    <div className="desktop-frame" data-renderer-build-id={APP_BUILD_ID}>
+    <div className="desktop-frame" ref={editingSurfaceRef} data-renderer-build-id={APP_BUILD_ID}>
       <TitleBar appInfo={appInfo} />
       <div className="app-body">
         <Sidebar active={activeSection} appInfo={appInfo} onNavigate={(section) => void navigateSafely(section)} onRestoreVideo={returnProject && returnDockHidden ? () => setReturnDockHidden(false) : undefined} onRestoreStock={autoStockProgress && autoStockHidden ? () => setAutoStockHidden(false) : undefined} onOpenHealth={window.goldWork ? () => setHealthOpenRequest(v => v + 1) : undefined} />
@@ -2061,6 +2065,7 @@ function ProjectEditor({ project, currentStage, busy, autoStockProgress, autoSto
       if (readyScript) {
         const durationMinutes = Math.max(0.5, estimateNarrationDurationSeconds(readyScript, result.calibration) / 60);
         calibratedProject = await onSave(calibratedProject.id, {
+          expectedUpdatedAt: calibratedProject.updatedAt,
           settings: { ...calibratedProject.settings, durationMinutes },
         });
       }
@@ -3259,7 +3264,7 @@ function ScenarioMaterials({ project, hasQueueTasks, onBack, onSave, onRegenerat
           scene={stockScene}
           onClose={() => setStockSceneId(null)}
           onApplied={async (updated) => {
-            await onSave(updated.id, { scenes: updated.scenes, outputPath: undefined });
+            await onSave(updated.id, { expectedUpdatedAt: updated.updatedAt, scenes: updated.scenes, outputPath: undefined });
           }}
         />
       )}
@@ -3282,7 +3287,7 @@ function ScenarioMaterials({ project, hasQueueTasks, onBack, onSave, onRegenerat
           <div>
             <strong>{project.settings.assembly.documentary?.version === 2 ? "Софт подбирает и проверяет материалы автоматически" : "Здесь не нужно заполнять сцены вручную"}</strong>
             <p>{project.settings.assembly.documentary?.version === 2 ? "Автоподбор проверяет реальные кадры и источник, сохраняет готовые сцены и помечает иллюстрации. Здесь можно подобрать пропущенные материалы или вручную заменить отдельный кадр." : "Автоподбор выполняется при нажатии главной кнопки сборки. Этот экран нужен только если вы хотите проверить или заменить отдельный кадр."}</p>
-            {project.settings.assembly.documentary?.version===2&&<DocumentaryAutoSelection api={api} project={project} disabled={generationBusy||regeneratingSceneId!==null} onSelected={async updated=>{await onSave(updated.id,{});}}/>}
+            {project.settings.assembly.documentary?.version===2&&<DocumentaryAutoSelection api={api} project={project} disabled={generationBusy||regeneratingSceneId!==null} onSelected={async updated=>{await onSave(updated.id,{expectedUpdatedAt:updated.updatedAt});}}/>}
           </div>
           <button className="outline-button small" onClick={onBack}>Вернуться к сборке</button>
         </section>
@@ -5801,7 +5806,7 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
         cutId={materialPicker.cutId}
         project={materialPicker.project} scene={materialPicker.project.scenes.find(s=>s.id===materialPicker.sceneId)!}
         onClose={()=>setMaterialPicker(undefined)} onApplied={async updated=>{
-          const saved=await onSave(updated.id,{scenes:updated.scenes,outputPath:undefined});
+          const saved=await onSave(updated.id,{expectedUpdatedAt:updated.updatedAt,scenes:updated.scenes,outputPath:undefined});
           materialHistorySceneIds.current.add(materialPicker.sceneId);
           setUndoStack(current=>[...current.slice(-39),{scenes:materialPicker.project.scenes,music,materialSceneIds:[materialPicker.sceneId]}]);setRedoStack([]);
           setScenes([...saved.scenes].sort((a,b)=>a.order-b.order));setDirty(false);setMediaMode('live');
