@@ -2112,7 +2112,21 @@ export class MockGenerationPipeline {
             }
             const imageTask = sceneTasks.find((task) => task.kind === "image" && task.status === "done");
             const videoTask = sceneTasks.find((task) => task.kind === "video" && task.status === "done");
-            const speechTask = sceneTasks.find((task) => task.kind === "speech" && task.status === "done");
+            let speechTask = sceneTasks.find((task) => task.kind === "speech" && task.status === "done");
+            if (speechTask && project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
+              // Continuous narration attaches every slice together. Replaying its
+              // first task must not attach the whole track to only one scene.
+              // Keep an explicit replacement and do not resurrect cleared legacy
+              // audio whose text/voice identity was never recorded in the queue.
+              if (speechTask.narrationSceneIds
+                || scene.audioPath && scene.audioPath !== speechTask.resultPath
+                || !speechTask.stockNarrationInput && !scene.audioPath
+                  && Date.parse(project.updatedAt) > Date.parse(speechTask.updatedAt)) speechTask = undefined;
+              else {
+                try { this.assertStockNarrationTaskInput(project, speechTask); }
+                catch { speechTask = undefined; }
+              }
+            }
             const status = sceneTasks.some((task) => task.status === "failed" || task.status === "blocked" || task.status === "cancelled")
               ? "failed"
               : sceneTasks.every((task) => task.status === "done")
