@@ -596,7 +596,8 @@ export class MockGenerationPipeline {
       this.assertNotStopping(projectId);
       if (!(["image", "video", "audio", "all"] as const).includes(target)) throw new Error("Неизвестный режим перегенерации");
       const project = await this.requireProject(projectId);
-      if (project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
+      const documentaryStock = project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2;
+      if (documentaryStock) {
         if (target === "image" || target === "video") throw new Error("В Stock Documentary замените реальный материал через подбор кадров");
         if (target === "all") target = "audio";
       }
@@ -634,7 +635,7 @@ export class MockGenerationPipeline {
       const removedIds = new Set(removed.map(task => task.id));
       this.tasks = this.tasks.filter(task => !removedIds.has(task.id));
       const remainingProjectTasks = this.tasks.filter((task) => task.projectId === projectId);
-      const created: QueueTask[] = [];
+      const created: PersistedQueueTask[] = [];
       const findTask = (candidateId: string, kind: TaskKind) =>
         created.find((task) => task.sceneId === candidateId && task.kind === kind)
         ?? remainingProjectTasks.find((task) => task.sceneId === candidateId && task.kind === kind);
@@ -644,7 +645,8 @@ export class MockGenerationPipeline {
       for (const scene of selectedScenes) {
         const imageDependencies: string[] = [];
         if ((target === "all" || target === "audio") && project.settings.voice.enabled) {
-          const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now);
+          const speech: PersistedQueueTask = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${scene.order + 1}`, [], now);
+          if (documentaryStock) speech.stockNarrationInput = documentaryNarrationInput(project, scene.narration);
           created.push(speech);
         }
         if (target === "all" || target === "image") {
@@ -714,8 +716,8 @@ export class MockGenerationPipeline {
                 imagePath: target === "all" || target === "image" ? undefined : candidate.imagePath,
                 videoPath: target === "all" || target === "video" ? undefined : candidate.videoPath,
                 videoFallback: target === "all" || target === "video" ? undefined : candidate.videoFallback,
-                audioPath: target === "all" || target === "audio" ? undefined : candidate.audioPath,
-                narrationSlice: target === "all" || target === "audio" ? undefined : candidate.narrationSlice,
+                audioPath: !documentaryStock && (target === "all" || target === "audio") ? undefined : candidate.audioPath,
+                narrationSlice: !documentaryStock && (target === "all" || target === "audio") ? undefined : candidate.narrationSlice,
                 stockSource: target === "all" || target === "image" ? undefined : candidate.stockSource
               }
             : candidate
@@ -1373,8 +1375,9 @@ export class MockGenerationPipeline {
 
   private assertStockNarrationTaskInput(project: Project, task: PersistedQueueTask): void {
     const scene = project.scenes.find(scene => scene.id === task.sceneId);
+    const sceneReplacement = task.scope === "scenes" && !task.narrationSceneIds;
     if (!project.settings.voice.enabled || !scene || scene.includeInAssembly === false
-      || Boolean(task.narrationSceneIds) !== usesContinuousDocumentaryNarration(project)) {
+      || !sceneReplacement && Boolean(task.narrationSceneIds) !== usesContinuousDocumentaryNarration(project)) {
       throw new Error(`${NO_RETRY_MARKER}Состав озвучки Stock изменился. Исходная задача и её заказ сохранены.`);
     }
     const text = documentaryNarrationText(project, task);
@@ -1605,6 +1608,17 @@ export class MockGenerationPipeline {
           const audioPath = join(directory, documentarySceneNarrationFilename(project, scene, audio));
           await atomicWrite(audioPath, audio, { durable: true, allowCopyFallback: false });
           this.assertStockNarrationTaskInput(await this.requireProject(project.id), stockTask);
+          if (task.scope === "scenes") await this.projects.mutate(project.id, current => {
+            this.assertStockNarrationTaskInput(current, stockTask);
+            return { scenes: current.scenes.map(latest => {
+              if (latest.id !== scene.id) return latest;
+              if (latest.audioPath !== scene.audioPath || JSON.stringify(latest.narrationSlice) !== JSON.stringify(scene.narrationSlice)) {
+                throw new Error(`${NO_RETRY_MARKER}Привязка озвучки изменена во время замены. Новый файл сохранён, текущий звук сцены оставлен.`);
+              }
+              return { ...latest, audioPath, narrationSlice: undefined,
+                documentary: latest.documentary ? { ...latest.documentary, timing: undefined } : undefined };
+            }) };
+          });
           return audioPath;
         }
         const audioPath = join(directory, `${createHash("sha256").update(audio).digest("hex")}.mp3`);
@@ -2053,7 +2067,8 @@ export class MockGenerationPipeline {
             // explicit output invalidation. A genuinely newer completed render
             // can still be reconciled after a crash between queue/project saves.
             return {
-              status: project.status === "complete" ? "ready" : project.status, outputPath: undefined, lastRender: undefined,
+              status: ["complete", "generating", "paused"].includes(project.status) ? "ready" : project.status,
+              outputPath: undefined, lastRender: undefined,
               ...(project.stockProduction?.phase === "export" ? { stockProduction: {
                 ...project.stockProduction, status: "failed" as const, updatedAt: new Date().toISOString(),
                 message: !completedOutputAvailable

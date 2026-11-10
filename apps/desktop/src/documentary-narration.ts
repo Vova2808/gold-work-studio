@@ -28,16 +28,23 @@ export function usesContinuousDocumentaryNarration(project: Project): boolean {
     && project.settings.voice.singleTrack;
 }
 
-/** Reuse only the complete track for this exact text and voice, including after a restart. */
+/** Reuse an exact shared track, including explicit scene replacements, after a restart. */
 export async function hasPreparedDocumentaryNarration(project: Project): Promise<boolean> {
   const scenes = project.scenes.filter(scene => scene.includeInAssembly !== false).sort((a, b) => a.order - b.order);
-  const path = scenes[0]?.audioPath;
-  if (!path || scenes.some(scene => scene.audioPath !== path || !scene.narrationSlice)) return false;
+  const path = scenes.find(scene => scene.narrationSlice)?.audioPath;
+  if (!path) {
+    const prepared = await preparedDocumentarySceneNarrationIds(project);
+    return scenes.length > 0 && scenes.every(scene => !scene.narration.trim() || prepared.has(scene.id));
+  }
+  if (scenes.some(scene => scene.narrationSlice && scene.audioPath !== path)) return false;
   try {
     const source = JSON.parse(await readFile(`${path}.json`, "utf8"));
+    const separate = scenes.filter(scene => !scene.narrationSlice);
+    const prepared = separate.length ? await preparedDocumentarySceneNarrationIds({ ...project, scenes: separate }) : new Set<string>();
     return source.text === scenes.map(scene => scene.narration).join("")
       && source.voice === project.settings.voice.voice && source.provider === project.settings.voice.provider
       && JSON.stringify(source.sceneIds) === JSON.stringify(scenes.map(scene => scene.id))
+      && separate.every(scene => prepared.has(scene.id))
       && await nonemptyAudio(path);
   } catch { return false; }
 }
