@@ -23,7 +23,7 @@ import {documentarySceneSeconds} from './documentary-sequences.js';
 import {DocumentarySelectionSession,type DocumentaryTransferFailures} from './documentary-selection-session.js';
 import {documentarySelectionFailure} from './documentary-selection-failure.js';
 import {documentarySelectionRetry,DocumentarySelectionRetryProbePassed,readDocumentarySelectionRetryEvidence,type DocumentarySelectionRetryGrant} from './documentary-retry.js';
-import {documentaryAutomaticMaterialReady} from './documentary-auto-readiness.js';
+import {documentaryAutomaticMaterialReady,documentaryMissingSelectedMaterialMessage,documentarySelectedMaterialMissing} from './documentary-auto-readiness.js';
 import {claimDocumentaryThematicRecovery,documentaryThematicRecoveryBinding,documentaryThematicDiscoveryRequirement,repairDocumentaryGeographicReserve} from './documentary-automatic-thematic-recovery.js';
 import {applyDocumentaryAutomaticNativeFallback,documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import {completeDocumentaryVideoQuota,documentaryVideoQuotaCurrent,documentaryVideoQuotaMet,documentaryVideoQuotaProtectedTarget} from './documentary-automatic-video-quota.js';
@@ -651,6 +651,14 @@ function formatQueryIssues(issues:DocumentaryQueryPlanIssue[]):string {
 export class DocumentaryPlanningIncompleteError extends Error {
   readonly recoverable=true;
   constructor(message:string){super(message);this.name='DocumentaryPlanningIncompleteError';}
+}
+
+function samePlannedVisualTask(previous:Scene,next:Scene):boolean {
+  const before=previous.documentary?.requirement,after=next.documentary?.requirement;
+  const old=before?.aiSearchPlan,plan=after?.aiSearchPlan;
+  return Boolean(old&&plan&&before?.text===after?.text&&old.visualTarget===plan.visualTarget
+    &&old.subject===plan.subject&&old.visualScope===plan.visualScope&&isDeepStrictEqual(old.years,plan.years)
+    &&isDeepStrictEqual(before?.footageFallback,after?.footageFallback));
 }
 
 export interface DocumentaryCandidatePriority {
@@ -1750,7 +1758,7 @@ export class DocumentaryProjectService {
     return this.planSearch(projectId,[sceneId],undefined,{refreshReady:true,retryToken});
   }
 
-  async planSearch(projectId: string, sceneIds?: string[],signal?:AbortSignal,options?:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean}): Promise<Project> {
+  async planSearch(projectId: string, sceneIds?: string[],signal?:AbortSignal,options?:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean}): Promise<Project> {
     const controller=new AbortController();
     const controllers=this.planningControllers.get(projectId)??new Set<AbortController>();
     const runs=this.planningRuns.get(projectId)??new Set<Promise<Project>>();
@@ -1775,7 +1783,7 @@ export class DocumentaryProjectService {
   private async queryRefreshScope(project:Project,scenes:Scene[],signal?:AbortSignal):Promise<Set<string>>{
     const eligible=scenes.filter(scene=>{
       const doc=scene.documentary;
-      if(!doc?.autoError||doc.verified||doc.pinned||doc.manualReview||doc.visualReview?.status==='accepted'
+      if(!doc?.autoError||doc.autoError===documentaryMissingSelectedMaterialMessage||doc.verified||doc.pinned||doc.manualReview||doc.visualReview?.status==='accepted'
         ||!currentDocumentaryAiSearchPlan(project,scene))return false;
       // A transient service or transfer error says nothing about the settled search goal.
       const {category}=documentarySelectionFailure(scene,{fallbackCategory:'no-results'});
@@ -1834,16 +1842,38 @@ export class DocumentaryProjectService {
     return ids;
   }
 
-  private async planSearchPrepared(projectId:string,sceneIds?:string[],signal?:AbortSignal,options:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean}={}):Promise<Project>{
+  private async markMissingAutomaticMaterials(project:Project,sceneIds?:string[],signal?:AbortSignal):Promise<Project>{
+    const missing=new Map<string,Scene>();
+    for(const scene of project.scenes){
+      signal?.throwIfAborted();
+      if(scene.includeInAssembly!==false&&(!sceneIds||sceneIds.includes(scene.id))&&scene.documentary?.verified
+        &&!scene.documentary.pinned&&await documentarySelectedMaterialMissing(scene))missing.set(scene.id,scene);
+    }
+    if(!missing.size)return project;
+    return this.projects.mutate(project.id,current=>{
+      signal?.throwIfAborted();
+      return {scenes:current.scenes.map(scene=>{
+        const before=missing.get(scene.id),doc=scene.documentary;
+        if(!before||!doc?.verified||doc.pinned||scene.includeInAssembly===false||scene.imagePath!==before.imagePath
+          ||scene.videoPath!==before.videoPath||doc.checksum!==before.documentary?.checksum
+          ||doc.selected?.kind!==before.documentary?.selected?.kind)return scene;
+        return {...scene,documentary:{...doc,verified:false,autoError:documentaryMissingSelectedMaterialMessage}};
+      })};
+    },{candidateSceneIds:[]});
+  }
+
+  private async planSearchPrepared(projectId:string,sceneIds?:string[],signal?:AbortSignal,options:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean}={}):Promise<Project>{
     const {refreshReady,retryToken,cachedOnly}=options;
     signal?.throwIfAborted();
     let project = await this.projects.get(projectId);
     if (!project) throw new Error("Проект не найден");
     if (project.mediaMode !== "stock" || project.settings.assembly.documentary?.version !== 2) throw new Error("Откройте Stock Documentary v2");
-    if (project.status === "generating" || project.status === "paused") throw new Error("Сначала остановите производство");
+    const busy = (current: Project) => !options.allowActiveNarration && ['generating','paused'].includes(current.status);
+    if (busy(project)) throw new Error("Сначала остановите производство");
     if (sceneIds?.some(id => !project!.scenes.some(scene => scene.id === id))) throw new Error("Сцена для подбора больше не существует");
     const inScope = (scene: Scene) => !sceneIds || sceneIds.includes(scene.id);
     if(cachedOnly&&(!this.queryPlanner?.readCached||!this.queryPlanner.readIssues))throw new Error('Чтение сохранённых AI-планов недоступно.');
+    if(!cachedOnly)project=await this.markMissingAutomaticMaterials(project,sceneIds,signal);
     const recoverableRoutes=new Map<string,Scene>();
     if(!refreshReady&&!cachedOnly)for(const scene of project.scenes){
       if(!inScope(scene)||documentaryRouteApprovalCandidate(project,scene)===scene)continue;
@@ -1853,7 +1883,7 @@ export class DocumentaryProjectService {
     if(recoverableRoutes.size){
       project=await this.projects.mutate(projectId,current=>{
         signal?.throwIfAborted();
-        if(current.status==='generating'||current.status==='paused')throw new Error('Сначала остановите производство');
+        if(busy(current))throw new Error('Сначала остановите производство');
         return {scenes:current.scenes.map(scene=>isDeepStrictEqual(scene,recoverableRoutes.get(scene.id))?documentaryRouteApprovalCandidate(current,scene):scene)};
       },{candidateSceneIds:[...recoverableRoutes.keys()]});
     }
@@ -1882,8 +1912,9 @@ export class DocumentaryProjectService {
       project=await this.projects.mutate(projectId,current=>{
         signal?.throwIfAborted();
         if(JSON.stringify(documentaryAiPlanContext(current))!==input
-          ||['generating','paused'].includes(current.status))throw new Error('Проект изменился во время подготовки AI-запросов');
-        return {scenes:groundDocumentaryScenes(current.scenes).map(scene=>{
+          ||busy(current))throw new Error('Проект изменился во время подготовки AI-запросов');
+        const stalePlans=new Map<string,Scene>();
+        const scenes=groundDocumentaryScenes(current.scenes).map(scene=>{
           const requirement=plan.get(scene.id),original=current.scenes.find(item=>item.id===scene.id)!;
           if(!inScope(scene)||scene.includeInAssembly===false||scene.documentary?.pinned)return original;
           if(refreshSceneIds.has(scene.id)){
@@ -1901,9 +1932,16 @@ export class DocumentaryProjectService {
             ||(fallback.narration??requirement.text)!==scene.narration))delete normalized.footageFallback;
           const updated=applyDocumentaryRequirement(scene,normalized);
           if(!currentDocumentaryAiSearchPlan(current,updated))throw new Error('AI-план не соответствует текущему сценарию. Материалы и озвучка сохранены.');
-          const changed=Boolean(original.documentary?.requirement.aiSearchPlan&&!currentDocumentaryAiSearchPlan(current,original));
-          return changed&&updated.documentary&&!updated.documentary.pinned?{...updated,documentary:{...updated.documentary,verified:false,
-            autoError:'Контекст сценария изменился. Материал и озвучка сохранены; требуется проверка новой цели.'}}:updated;
+          if(original.documentary?.requirement.aiSearchPlan&&!currentDocumentaryAiSearchPlan(current,original))stalePlans.set(scene.id,original);
+          return updated;
+        });
+        const updatedProject={...current,scenes};
+        return {scenes:scenes.map(scene=>{
+          const original=stalePlans.get(scene.id),doc=scene.documentary;
+          if(!original||!doc||doc.pinned)return scene;
+          if(doc.verified&&doc.selected&&samePlannedVisualTask(original,scene)&&!documentarySavedContextIssue(updatedProject,scene))return scene;
+          return {...scene,documentary:{...doc,verified:false,
+            autoError:'Контекст сценария изменился. Материал и озвучка сохранены; требуется проверка новой цели.'}};
         })};
       },{candidateSceneIds:[]});
       await this.storage.ensureProject(project);
@@ -1954,7 +1992,7 @@ export class DocumentaryProjectService {
     if (!pending.length && !this.intelligence?.resolveIdentities) return project;
     if (!this.intelligence) throw new Error("Автоматический смысловой анализ Stock недоступен");
     const saveBatch = (plan: Map<string, DocumentaryRequirement>) => this.projects.mutate(projectId, current => {
-      if (current.videoBrief?.readyScript !== project!.videoBrief?.readyScript || current.status === "generating" || current.status === "paused") throw new Error("Проект изменился во время анализа");
+      if (current.videoBrief?.readyScript !== project!.videoBrief?.readyScript || busy(current)) throw new Error("Проект изменился во время анализа");
       return { scenes: groundDocumentaryScenes(current.scenes.map(scene => {
         const requirement = plan.get(scene.id);
         return requirement && scene.narration === requirement.text && scene.documentary && !scene.documentary.pinned
@@ -2129,7 +2167,8 @@ export class DocumentaryProjectService {
         const retried=await this.selectAll(projectId,{...options,sceneIds:retryIds,force:false},false,attempts,session);
         const failures=new Map(result.failures.filter(item=>!retryIds.includes(item.sceneId)).map(item=>[item.sceneId,item]));
         for(const item of retried.failures)failures.set(item.sceneId,item);
-        for(const scene of retried.project.scenes)if(documentaryAutomaticMaterialReady(scene))failures.delete(scene.id);
+        for(const scene of retried.project.scenes)if(documentaryAutomaticMaterialReady(scene)
+          &&failures.get(scene.id)?.message!==documentaryMissingSelectedMaterialMessage)failures.delete(scene.id);
         result={...result,project:retried.project,selected:result.selected+retried.selected,
           failures:[...failures.values()],failed:failures.size};
       }
@@ -2239,6 +2278,7 @@ export class DocumentaryProjectService {
     this.publish({ projectId, phase: "preparing", completed: 0, total: 0, selected: 0, skipped: 0, failed: 0, message: "Подготавливаю поиск и проверку материалов…" });
     const waitForNarration=this.narrationWaits.get(projectId);
     let project=waitForNarration?(await this.projects.get(projectId,{omitCandidates:true}))!:await this.planSearch(projectId,options.sceneIds,undefined,{beforeSelection:reserveFallback&&!videoOnly});
+    if(waitForNarration&&project)project=await this.markMissingAutomaticMaterials(project,options.sceneIds,this.downloadControllers.get(projectId)?.signal);
     // Production with parallel narration needs the same current local targets.
     if(waitForNarration&&!this.queryPlanner&&this.intelligence?.simpleSelection)project=await this.projects.mutate(projectId,current=>({scenes:current.scenes.map(scene=>{
       if(!options.sceneIds||options.sceneIds.includes(scene.id))scene=resetStaleDocumentaryFootageFallback(scene);
@@ -2426,6 +2466,11 @@ export class DocumentaryProjectService {
       if (this.stopRequested.has(projectId)) return;
       let project = (await this.projects.get(projectId,{omitCandidates:true}))!;
       scene=project.scenes.find(item=>item.id===scene.id)!;
+      if(scene.documentary?.pinned&&await documentarySelectedMaterialMissing(scene)){
+        failures.push(documentarySelectionFailure(scene,{message:documentaryMissingSelectedMaterialMessage,fallbackCategory:'download'}));
+        completed++;
+        return;
+      }
       if(!this.intelligence?.simpleSelection&&!options.force&&documentaryManualReviewReady(scene)){
         const path=scene.documentary!.manualReview!.mediaPath;
         if(await stat(path).then(info=>info.isFile()&&info.size>0,()=>false)){skipped++;completed++;return;}
@@ -2446,6 +2491,7 @@ export class DocumentaryProjectService {
       // Replay a completed actual-frame check first, with POSTs disabled.
       if(scene.documentary&&!scene.documentary.verified&&!scene.documentary.pinned&&(!scene.documentary.visualReview||scene.documentary.visualReview.status==='accepted')
         &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force
+        &&!await documentarySelectedMaterialMissing(scene)
         &&(this.intelligence.simpleSelection||!documentaryContradictoryModelYear(scene.documentary.selected,scene.documentary.requirement,documentarySceneContext(project,scene)))
         &&!documentarySavedIdentityIssue({...scene,documentary:{...scene.documentary,verified:true}})){
         try{

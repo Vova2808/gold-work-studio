@@ -19,14 +19,18 @@ export async function prepareDocumentaryTiming(project: Project, storage: LocalP
     const audioPath = project.settings.voice.enabled ? scene.audioPath : undefined;
     if (!audioPath) {
       if (project.settings.voice.enabled && scene.narration.trim()) throw new Error(`Сцена ${scene.order + 1}: озвучка ещё не готова`);
-      scenes.push({ ...scene, documentary: { ...scene.documentary, timing: { sourceKey: "silent", durationInFrames: Math.ceil(Math.max(scene.durationSeconds, scene.durationOverrideSeconds ?? 0) * 30), speechSeconds: 0 } } });
+      const durationInFrames = Math.ceil(Math.max(scene.durationSeconds, scene.durationOverrideSeconds ?? 0) * 30);
+      const existing = scene.documentary.timing;
+      scenes.push(existing?.sourceKey === "silent" && existing.durationInFrames === durationInFrames ? scene
+        : { ...scene, documentary: { ...scene.documentary, timing: { sourceKey: "silent", durationInFrames, speechSeconds: 0 } } });
       continue;
     }
     const info = await stat(audioPath);
+    if (!info.isFile() || !info.size) throw new Error(`Сцена ${scene.order + 1}: файл озвучки пуст или недоступен`);
     const keyFor = (prepared: boolean) => createHash("sha256").update(JSON.stringify([5, prepared, audioPath, info.size, info.mtimeMs, scene.narrationSlice, scene.durationOverrideSeconds, project.settings.assembly.audioNormalize])).digest("hex");
     const sourceKey = keyFor(prepareAudio);
     const existing = scene.documentary.timing;
-    if (existing && (existing.sourceKey === sourceKey || !prepareAudio && existing.sourceKey === keyFor(true)) && existing.audioPath && await stat(existing.audioPath).then(file => file.size > 0, () => false)) { scenes.push(scene); continue; }
+    if (existing && (existing.sourceKey === sourceKey || !prepareAudio && existing.sourceKey === keyFor(true)) && existing.audioPath && await stat(existing.audioPath).then(file => file.isFile() && file.size > 0, () => false)) { scenes.push(scene); continue; }
     // Going back to selection must not discard a prepared WAV. Going forward
     // can reuse the measured source range instead of scanning all voices again.
     const measuredRange = prepareAudio && existing?.sourceKey === keyFor(false) && existing.audioStartSeconds !== undefined && existing.audioEndSeconds !== undefined;

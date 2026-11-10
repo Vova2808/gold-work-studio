@@ -1,6 +1,23 @@
-import { countNarrationCharacters, type Project, type QueueTask, type Scene } from "@gold-work/shared";
+import { countNarrationCharacters, ttsLanguageCode, type Project, type QueueTask, type Scene } from "@gold-work/shared";
 import type { NarrationTiming } from "./narration-timing.js";
 import { readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+
+export function documentaryNarrationInput(project: Project, text: string): string {
+  const { provider, voice } = project.settings.voice;
+  const selected = voice?.trim() || "";
+  const voiceInput = provider !== "elevenlabs" && selected === "custom" ? "" : selected;
+  return createHash("sha256").update(JSON.stringify([text, provider, voiceInput, provider === "elevenlabs" ? null : ttsLanguageCode(project.language)])).digest("hex");
+}
+
+export function documentarySceneNarrationFilename(project: Project, scene: Scene, audio: Buffer): string {
+  const input = documentaryNarrationInput(project, scene.narration);
+  const content = createHash("sha256").update(audio).digest("hex");
+  return `scene-voice-${input}-${content}.mp3`;
+}
+
+const nonemptyAudio = (path: string) => stat(path).then(file => file.isFile() && file.size > 0, () => false);
 
 /** Undefined is the pre-scene-narration format and must keep its paid shared voice intact. */
 export function usesContinuousDocumentaryNarration(project: Project): boolean {
@@ -21,18 +38,35 @@ export async function hasPreparedDocumentaryNarration(project: Project): Promise
     return source.text === scenes.map(scene => scene.narration).join("")
       && source.voice === project.settings.voice.voice && source.provider === project.settings.voice.provider
       && JSON.stringify(source.sceneIds) === JSON.stringify(scenes.map(scene => scene.id))
-      && (await stat(path)).size > 0;
+      && await nonemptyAudio(path);
   } catch { return false; }
 }
 
-/** Scene files are already project-owned and keep the exact narration during Stock script splitting. */
+/** New voices carry their input identity. Older attached/imported files are kept. */
 export async function preparedDocumentarySceneNarrationIds(project: Project): Promise<Set<string>> {
   const prepared = new Set<string>();
   for (const scene of project.scenes) {
     if (scene.includeInAssembly === false || !scene.audioPath || scene.narrationSlice) continue;
-    if (await stat(scene.audioPath).then(file => file.size > 0, () => false)) prepared.add(scene.id);
+    const input = /^scene-voice-([a-f0-9]{64})-[a-f0-9]{64}\.mp3$/i.exec(basename(scene.audioPath))?.[1];
+    if (input && input !== documentaryNarrationInput(project, scene.narration)) continue;
+    if (await nonemptyAudio(scene.audioPath)) prepared.add(scene.id);
   }
   return prepared;
+}
+
+export function invalidateChangedDocumentaryNarration(before: Project, after: Project): Scene[] | undefined {
+  if (after.mediaMode !== "stock" || after.settings.assembly.documentary?.version !== 2) return;
+  const previous = new Map(before.scenes.map(scene => [scene.id, scene]));
+  let changed = false;
+  const scenes = after.scenes.map(scene => {
+    const saved = previous.get(scene.id);
+    if (!saved?.audioPath || scene.audioPath !== saved.audioPath
+      || documentaryNarrationInput(before, saved.narration) === documentaryNarrationInput(after, scene.narration)) return scene;
+    changed = true;
+    return { ...scene, audioPath: undefined, narrationSlice: undefined,
+      documentary: scene.documentary ? { ...scene.documentary, timing: undefined } : undefined };
+  });
+  return changed ? scenes : undefined;
 }
 
 export function documentaryNarrationText(project: Project, task: Pick<QueueTask, "sceneId" | "narrationSceneIds">): string {

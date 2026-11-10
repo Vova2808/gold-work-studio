@@ -16,7 +16,7 @@ import { createId, type ProjectService, type TaskRepository } from "@gold-work/c
 import { sceneImageReferences, sceneStoryCharacters, createNarrationTimingBudget, projectScenarioQualityIssue, ttsLanguageCode, type LogLevel, type Project, type QueuePolicy, type QueueTask, type Scene, type ScenarioQualityIssue, type TaskKind } from "@gold-work/shared";
 import { LocalProjectStorage } from "./local-project-storage.js";
 import { StandardRenderer, inspectNarration } from "./standard-renderer.js";
-import { documentaryNarrationText, distributeDocumentaryNarration, hasPreparedDocumentaryNarration, preparedDocumentarySceneNarrationIds, usesContinuousDocumentaryNarration } from "./documentary-narration.js";
+import { documentaryNarrationInput, documentaryNarrationText, documentarySceneNarrationFilename, distributeDocumentaryNarration, hasPreparedDocumentaryNarration, preparedDocumentarySceneNarrationIds, usesContinuousDocumentaryNarration } from "./documentary-narration.js";
 import { DocumentaryIntelligence } from "./documentary-intelligence.js";
 import { atomicWrite } from "./fs-utils.js";
 import { AnyModelClient, findSceneIssues, inspectScenarioReadiness, inspectGeneratedScenarioReadiness, scenarioFingerprint } from "./anymodel-client.js";
@@ -109,7 +109,7 @@ export const DEFAULT_QUEUE_POLICY: QueuePolicy = {
 };
 
 /** Local queue checkpoint; no provider inputs or credentials are copied into queue.json. */
-type PersistedQueueTask = QueueTask & { failedAssemblyInputHash?: string; assemblyInputHash?: string };
+type PersistedQueueTask = QueueTask & { failedAssemblyInputHash?: string; assemblyInputHash?: string; stockNarrationInput?: string };
 
 function assemblyInputHash(project: Project): string {
   const scenes = projectForDisplay(project).scenes.map(scene => ({
@@ -317,9 +317,10 @@ export class MockGenerationPipeline {
     return this.mutate(async () => structuredClone(this.tasks).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   }
 
-  async start(projectId: string, target: "all" | "narration" = "all"): Promise<QueueTask[]> {
+  async start(projectId: string, target: "all" | "narration" = "all", signal?: AbortSignal): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      signal?.throwIfAborted();
       this.assertNotStopping(projectId);
       let project = await this.requireProject(projectId);
       const narrationOnly = target === "narration";
@@ -327,15 +328,29 @@ export class MockGenerationPipeline {
       const continuousStock = usesContinuousDocumentaryNarration(project);
       if (target !== "all" && target !== "narration") throw new Error("Неизвестный этап производства");
       if (narrationOnly && !documentaryStock) throw new Error("Отдельная озвучка доступна для Stock Documentary v2");
+      if (narrationOnly) {
+        const active = this.tasks.filter(task => task.projectId === projectId
+          && (["pending", "running", "retry_wait", "paused"].includes(task.status) || this.executing.has(task.id)));
+        if (active.length) {
+          if (active.some(task => task.kind !== "speech")) throw new Error("Сначала завершите текущую работу проекта.");
+          for (const task of active) {
+            const reason = pendingSubmissionReason(task) ?? (hasPaidReceipt(task) ? undefined : task.retryBlockedReason);
+            if (reason && !this.executing.has(task.id)) throw new Error(`${NO_RETRY_MARKER}${reason}`);
+            this.assertStockNarrationTaskInput(project, task);
+          }
+          return this.forProject(projectId).filter(task => task.kind === "speech");
+        }
+      }
       this.assertNoUncertainSubmission(projectId);
       if(project.mediaMode==='ai'&&project.settings.voice.enabled&&project.settings.voice.provider!=='elevenlabs'
         &&project.scenes.some(scene=>scene.includeInAssembly!==false&&!scene.audioPath))
         throw new Error('Перед генерацией AI Story выберите шаблон Lumean для озвучки. Сохранённые материалы остаются в проекте.');
-      const reuseNarration = Boolean(continuousStock && await hasPreparedDocumentaryNarration(project));
-      const preparedSceneNarration = !continuousStock && documentaryStock
+      const reuseNarration = documentaryStock && await hasPreparedDocumentaryNarration(project);
+      const preparedSceneNarration = documentaryStock && !reuseNarration && !continuousStock
         ? await preparedDocumentarySceneNarrationIds(project)
         : new Set<string>();
-      if (narrationOnly && (reuseNarration || preparedSceneNarration.size === project.scenes.filter(scene => scene.includeInAssembly !== false).length)) return [];
+      if (narrationOnly && (reuseNarration || !project.settings.voice.enabled || project.scenes.every(scene =>
+        scene.includeInAssembly === false || !scene.narration.trim() || preparedSceneNarration.has(scene.id)))) return [];
       await this.storage.ensureProject(project);
       if (project.scenes.length === 0) throw new Error("Сначала добавьте хотя бы одну сцену");
       if (project.storyCharacterPlan && project.storyCharacterPlan.status !== "ready") throw new Error("Завершите подготовку персонажей на этапе «Сценарий».");
@@ -438,18 +453,23 @@ export class MockGenerationPipeline {
         : [];
       const now = new Date().toISOString();
       const runId = createId("run");
-      const created: QueueTask[] = [];
+      const created: PersistedQueueTask[] = [];
       const images: Array<QueueTask | undefined> = [];
       if (continuousStock && !reuseNarration) {
         const narrated = project.scenes.filter(scene => scene.includeInAssembly !== false).sort((a, b) => a.order - b.order);
-        if (narrated[0]) created.push({ ...this.makeTask(runId, project, narrated[0], "speech", "Непрерывная озвучка документального ролика", [], now), narrationSceneIds: narrated.map(scene => scene.id) });
+        if (narrated[0] && narrated.some(scene => scene.narration.trim())) created.push({
+          ...this.makeTask(runId, project, narrated[0], "speech", "Непрерывная озвучка документального ролика", [], now),
+          narrationSceneIds: narrated.map(scene => scene.id), stockNarrationInput: documentaryNarrationInput(project, narrated.map(scene => scene.narration).join(""))
+        });
       }
 
       for (const [index, scene] of project.scenes.entries()) {
         if (scene.includeInAssembly === false) continue;
         const imageDependencies: string[] = [];
-        if (project.settings.voice.enabled && !continuousStock && !preparedSceneNarration.has(scene.id)) {
-          const speech = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${index + 1}`, [], now);
+        if (project.settings.voice.enabled && !reuseNarration && !continuousStock && !preparedSceneNarration.has(scene.id)
+          && (!documentaryStock || scene.narration.trim())) {
+          const speech: PersistedQueueTask = this.makeTask(runId, project, scene, "speech", `Озвучка · сцена ${index + 1}`, [], now);
+          if (documentaryStock) speech.stockNarrationInput = documentaryNarrationInput(project, scene.narration);
           created.push(speech);
         }
 
@@ -485,6 +505,7 @@ export class MockGenerationPipeline {
         const previous = savedSpeech.find(saved => !saved.retryBlockedReason && saved.sceneId === task.sceneId
           && JSON.stringify(saved.narrationSceneIds) === JSON.stringify(task.narrationSceneIds));
         if (previous) {
+          this.assertStockNarrationTaskInput(project, previous);
           task.lumeanOrder = previous.lumeanOrder;
           carriedOrderTasks.add(previous.id);
         }
@@ -497,23 +518,33 @@ export class MockGenerationPipeline {
         });
         this.emit("info", "scenario.timing.calibrated", { projectId, scenes: project.scenes.length });
       }
+      const speechSceneIds = new Set(created.filter(task => task.kind === "speech").flatMap(task => task.narrationSceneIds ?? (task.sceneId ? [task.sceneId] : [])));
+      await this.projects.mutate(projectId, (current) => {
+        signal?.throwIfAborted();
+        if (documentaryStock) {
+          if (scenarioFingerprint(current.scenes) !== scenarioFingerprint(project.scenes)
+            || usesContinuousDocumentaryNarration(current) !== continuousStock) throw new Error("Проект изменился во время подготовки озвучки.");
+          for (const task of created) if (task.kind === "speech") this.assertStockNarrationTaskInput(current, task);
+        }
+        return {
+          status: "generating",
+          outputPath: undefined,
+          lastRender: undefined,
+          scenes: current.scenes.map((scene) => scene.includeInAssembly === false || narrationOnly && !speechSceneIds.has(scene.id) ? scene : ({
+            ...scene,
+            status: "queued",
+            imagePath: narrationOnly || usesStockMedia(project, scene) ? scene.imagePath : undefined,
+            videoPath: narrationOnly || usesStockMedia(project, scene) ? scene.videoPath : undefined,
+            videoFallback: narrationOnly ? scene.videoFallback : undefined,
+            audioPath: reuseNarration || preparedSceneNarration.has(scene.id) ? scene.audioPath : undefined,
+            narrationSlice: reuseNarration ? scene.narrationSlice : undefined,
+            documentary: narrationOnly && scene.documentary ? { ...scene.documentary, timing: undefined } : scene.documentary,
+            stockSource: narrationOnly || usesStockMedia(project, scene) ? scene.stockSource : undefined
+          }))
+        };
+      });
       this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
       this.tasks.push(...created);
-      await this.projects.mutate(projectId, (current) => ({
-        status: "generating",
-        outputPath: undefined,
-        lastRender: undefined,
-        scenes: current.scenes.map((scene) => scene.includeInAssembly === false ? scene : ({
-          ...scene,
-          status: "queued",
-          imagePath: narrationOnly || usesStockMedia(project, scene) ? scene.imagePath : undefined,
-          videoPath: narrationOnly || usesStockMedia(project, scene) ? scene.videoPath : undefined,
-          videoFallback: undefined,
-          audioPath: reuseNarration || preparedSceneNarration.has(scene.id) ? scene.audioPath : undefined,
-          narrationSlice: reuseNarration ? scene.narrationSlice : undefined,
-          stockSource: narrationOnly || usesStockMedia(project, scene) ? scene.stockSource : undefined
-        }))
-      }));
       await this.persist();
       this.emit("info", "queue.project.started", {
         projectId,
@@ -1340,7 +1371,21 @@ export class MockGenerationPipeline {
     return Boolean(scene && `${scene.imagePrompt}\n${scene.animationPrompt}`.includes("[FAIL]"));
   }
 
-  private async executeTask(task: QueueTask, signal?: AbortSignal): Promise<string> {
+  private assertStockNarrationTaskInput(project: Project, task: PersistedQueueTask): void {
+    const scene = project.scenes.find(scene => scene.id === task.sceneId);
+    if (!project.settings.voice.enabled || !scene || scene.includeInAssembly === false
+      || Boolean(task.narrationSceneIds) !== usesContinuousDocumentaryNarration(project)) {
+      throw new Error(`${NO_RETRY_MARKER}Состав озвучки Stock изменился. Исходная задача и её заказ сохранены.`);
+    }
+    const text = documentaryNarrationText(project, task);
+    if (task.stockNarrationInput && task.stockNarrationInput !== documentaryNarrationInput(project, text)
+      || task.lumeanOrder && (project.settings.voice.provider !== "elevenlabs"
+        || task.lumeanOrder.inputFingerprint !== speechOrderFingerprint(text, project.settings.voice.voice))) {
+      throw new Error(`${NO_RETRY_MARKER}Текст или голос изменён после постановки озвучки в очередь. Исходная задача и её заказ сохранены.`);
+    }
+  }
+
+  private async executeTask(task: PersistedQueueTask, signal?: AbortSignal): Promise<string> {
     task.resultFallback = undefined;
     let project = await this.requireProject(task.projectId);
     // New AI Story media always uses connected Flow accounts, including older
@@ -1550,9 +1595,18 @@ export class MockGenerationPipeline {
     }
     if (task.kind === "speech") {
       const speechText = documentaryNarrationText(project, task);
+      const documentaryStock = project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2;
+      const stockTask = documentaryStock ? { ...task, stockNarrationInput: task.stockNarrationInput ?? documentaryNarrationInput(project, speechText) } : undefined;
+      if (stockTask) this.assertStockNarrationTaskInput(project, stockTask);
       const saveSpeech = async (audio: Buffer): Promise<string> => {
-        if (!task.narrationSceneIds) return this.storage.saveGeneratedAudio(project, scene, audio);
+        if (!task.narrationSceneIds && !stockTask) return this.storage.saveGeneratedAudio(project, scene, audio);
         const directory = join(this.storage.projectDirectory(project.id), "Documentary", "Narration"); await mkdir(directory, { recursive: true });
+        if (!task.narrationSceneIds && stockTask) {
+          const audioPath = join(directory, documentarySceneNarrationFilename(project, scene, audio));
+          await atomicWrite(audioPath, audio, { durable: true, allowCopyFallback: false });
+          this.assertStockNarrationTaskInput(await this.requireProject(project.id), stockTask);
+          return audioPath;
+        }
         const audioPath = join(directory, `${createHash("sha256").update(audio).digest("hex")}.mp3`);
         await writeFile(audioPath, audio);
         await atomicWrite(join(directory, `${task.id}.json`), JSON.stringify({ text: speechText, sceneIds: task.narrationSceneIds, orderId: this.tasks.find(item => item.id === task.id)?.lumeanOrder?.orderId, audioPath }));
@@ -1560,6 +1614,7 @@ export class MockGenerationPipeline {
         const timing = await inspectNarration(audioPath);
         // Attach the actual voice before optional word alignment so a provider failure cannot hide it.
         await this.projects.mutate(project.id, current => {
+          if (stockTask) this.assertStockNarrationTaskInput(current, stockTask);
           if (documentaryNarrationText(current, task) !== speechText) throw new Error("Текст изменился; общая озвучка сохранена, повторная отправка запрещена");
           return { scenes: distributeDocumentaryNarration(current, task.narrationSceneIds!, audioPath, timing) };
         });
@@ -1569,6 +1624,7 @@ export class MockGenerationPipeline {
           return undefined;
         }) : undefined;
         await this.projects.mutate(project.id, current => {
+          if (stockTask) this.assertStockNarrationTaskInput(current, stockTask);
           if (documentaryNarrationText(current, task) !== speechText) throw new Error("Текст изменился; общая озвучка сохранена, автоматическая повторная отправка запрещена");
           return { scenes: distributeDocumentaryNarration(current, task.narrationSceneIds!, audioPath, timing, alignment) };
         });

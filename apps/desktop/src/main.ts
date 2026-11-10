@@ -52,6 +52,7 @@ import { DocumentarySearch } from "./documentary-search.js";
 import {createDocumentarySourceFetcher} from './documentary-source-fetch.js';
 import { DocumentaryProjectService, DocumentaryPlanningIncompleteError } from "./documentary-project-service.js";
 import { documentaryNarrationReadiness } from "./documentary-production.js";
+import { invalidateChangedDocumentaryNarration } from "./documentary-narration.js";
 import { startDocumentaryMetrics,finishDocumentaryMetrics } from "./documentary-metrics.js";
 import {prepareDocumentaryProduction,DocumentarySelectionIncompleteError} from './documentary-production.js';
 import {isDocumentaryWorkflow,runDocumentaryWorkflow,reconcileDocumentaryWorkflows,startDocumentaryWorkflowExport} from './documentary-workflow.js';
@@ -435,6 +436,15 @@ function registerIpc(): void {
   // Scenario authorship and reference-analysis chat have been retired. Existing projects remain readable.
   handleIpc("projects:update", async (_event, id: string, input: UpdateProjectInput) => {
     if (!input.expectedUpdatedAt) throw new Error("Не указана версия редактируемого проекта. Откройте его заново перед сохранением.");
+    if (input.scenes || input.settings || input.language !== undefined) {
+      const before = await projectService.get(id, { omitCandidates: true });
+      if (before && before.updatedAt === input.expectedUpdatedAt) {
+        const scenes = invalidateChangedDocumentaryNarration(before, { ...before,
+          mediaMode: input.mediaMode ?? before.mediaMode, language: input.language ?? before.language,
+          settings: input.settings ?? before.settings, scenes: input.scenes ?? before.scenes });
+        if (scenes) input = { ...input, scenes };
+      }
+    }
     const saved = await projectService.update(id, input);
     try {
       await projectStorage.ensureProject(saved);
@@ -498,8 +508,13 @@ function registerIpc(): void {
   handleIpc("queue:list", () => pipeline.list());
   const startQueue = async (event: IpcMainInvokeEvent, projectId: string, target: "all" | "narration" = "all") => {
     if (target !== "all" && target !== "narration") throw new Error("Неизвестный этап производства");
+    const startStockNarration = (signal?: AbortSignal) => mutateQueue(async () => {
+      const tasks = await pipeline.start(projectId, 'narration', signal);
+      signal?.throwIfAborted();
+      return tasks.some(task => task.status === 'paused') ? (await pipeline.resume(projectId)).filter(task => task.kind === 'speech') : tasks;
+    });
     const project = await projectService.get(projectId, { omitCandidates: true });
-    if (target === "narration") return mutateQueue(() => pipeline.start(projectId, target));
+    if (target === "narration") return startStockNarration();
     if (project?.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2) {
       const active = documentaryProductions.get(projectId);
       if (active) return active.run;
@@ -509,6 +524,8 @@ function registerIpc(): void {
       if (activeExport) return activeExport.status === 'paused' ? mutateQueue(() => pipeline.resume(projectId)) : savedTasks;
       if (savedTasks.some(task => task.kind === 'assemble' && ['pending', 'running', 'retry_wait', 'paused'].includes(task.status)))
         throw new Error('Сначала завершите или остановите текущую подготовку редактора.');
+      const activeTasks = savedTasks.filter(task => ['pending', 'running', 'retry_wait', 'paused'].includes(task.status));
+      const allowActiveNarration = activeTasks.length > 0 && activeTasks.every(task => task.kind === 'speech');
       const concurrent = documentaryProductions.get(projectId);
       if (concurrent) return concurrent.run;
       if (scenarioPreparations.has(projectId)) throw new Error('Дождитесь подготовки сценария этого проекта.');
@@ -516,9 +533,6 @@ function registerIpc(): void {
       const run = (async () => {
         try {
           await startDocumentaryMetrics(projectId,projectStorage.projectDirectory(projectId));
-          // Explicit continuation resumes saved voice jobs; their unknown paid submissions
-          // remain protected by the queue's normal start/recovery checks.
-          if (savedTasks.some(task => task.status === 'paused')) await mutateQueue(() => pipeline.resume(projectId));
           return await runDocumentaryWorkflow(projectId, {
             projects: projectService, signal: controller.signal,
             prepareScript: async () => {
@@ -527,11 +541,14 @@ function registerIpc(): void {
               finally { scenarioPreparations.delete(projectId); }
             },
             prepareProduction: () => prepareDocumentaryProduction(projectId,{
-            projects:projectService,documentary:documentaryService,signal:controller.signal,
-            startNarration:async()=>{
-              const tasks=project.settings.voice.enabled?await mutateQueue(()=>pipeline.start(projectId,'narration')):[];
-              return documentaryNarrationReadiness({projectId,projects:projectService,storage:projectStorage,tasks,list:()=>pipeline.list(),signal:controller.signal});
-            },
+              projects:projectService,documentary:documentaryService,signal:controller.signal,allowActiveNarration,
+              startNarration:async()=>{
+                controller.signal.throwIfAborted();
+                const current = await projectService.get(projectId, { omitCandidates: true });
+                if (!current) throw new Error('Проект не найден');
+                const tasks=current.settings.voice.enabled?await startStockNarration(controller.signal):[];
+                return documentaryNarrationReadiness({projectId,projects:projectService,storage:projectStorage,tasks,list:()=>pipeline.list(),signal:controller.signal});
+              },
             }),
             startExport: () => mutateQueue(() => pipeline.assembleOnly(projectId)),
           });

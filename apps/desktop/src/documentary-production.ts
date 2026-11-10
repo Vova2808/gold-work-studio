@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectService } from "@gold-work/core";
-import type { QueueTask } from "@gold-work/shared";
-import {documentaryAutomaticMaterialReady} from './documentary-auto-readiness.js';
+import type { Project, QueueTask, Scene } from "@gold-work/shared";
+import {documentaryAutomaticMaterialReady, documentaryMissingSelectedMaterialMessage} from './documentary-auto-readiness.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import type { LocalProjectStorage } from "./local-project-storage.js";
 import { prepareDocumentaryTiming } from "./documentary-timing.js";
@@ -28,7 +28,9 @@ export function documentaryNarrationReadiness(input: {
   signal: AbortSignal;
 }): (sceneId?: string) => Promise<void> {
   const ids = new Set(input.tasks.map(task => task.id));
-  const measured = new Map<string, Promise<void>>();
+  const measured = new Map<string, { key: string; pending: Promise<void> }>();
+  const timingInput = (project: Project, scene: Scene) => JSON.stringify([scene.narration, scene.audioPath, scene.narrationSlice,
+    scene.durationSeconds, scene.durationOverrideSeconds, scene.includeInAssembly, project.settings.voice.enabled, project.settings.assembly.audioNormalize]);
   return async sceneId => {
     const requiredIds = sceneId ? new Set(input.tasks.filter(task => task.sceneId === sceneId || task.narrationSceneIds?.includes(sceneId)).map(task => task.id)) : ids;
     while (true) {
@@ -40,28 +42,29 @@ export function documentaryNarrationReadiness(input: {
       if (required.every(task => task.status === "done")) break;
       await delay(300, undefined, { signal: input.signal });
     }
-    if (sceneId && measured.has(sceneId)) return measured.get(sceneId)!;
     const project = await input.projects.get(input.projectId, { omitCandidates: true });
     if (!project) throw new Error("Проект не найден");
     const scenes = project.scenes.filter(scene => scene.includeInAssembly !== false && (!sceneId || scene.id === sceneId));
     for (const scene of scenes) {
       input.signal.throwIfAborted();
-      let pending = measured.get(scene.id);
-      if (!pending) {
-        pending = (async () => {
+      const key = timingInput(project, scene);
+      let saved = measured.get(scene.id);
+      if (saved?.key !== key) {
+        const pending = (async () => {
           const [timed] = await prepareDocumentaryTiming({ ...project, scenes: [scene] }, input.storage, { prepareAudio: false });
           // A resumed production usually already has measured, unchanged audio.
           // Do not clone/write the entire candidate history for every such scene.
           if (timed === scene) return;
           await input.projects.mutate(project.id, current => ({ scenes: current.scenes.map(latest => {
             if (latest.id !== scene.id) return latest;
-            if (latest.narration !== scene.narration || latest.audioPath !== scene.audioPath || JSON.stringify(latest.narrationSlice) !== JSON.stringify(scene.narrationSlice)) throw new Error("Озвучка изменилась во время измерения; диапазон не выбран");
+            if (!latest.documentary || timingInput(current, latest) !== key) throw new Error("Озвучка или длительность изменились во время измерения; диапазон не выбран");
             return { ...latest, documentary: { ...latest.documentary!, timing: timed!.documentary!.timing } };
           }) }));
         })();
-        measured.set(scene.id, pending);
+        saved = { key, pending };
+        measured.set(scene.id, saved);
       }
-      await pending;
+      await saved.pending;
     }
   };
 }
@@ -71,12 +74,13 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
   projects:Pick<ProjectService,'get'|'update'>;
   documentary:Pick<DocumentaryProjectService,'planSearch'|'autoSelect'> & Partial<Pick<DocumentaryProjectService,'prepareMontage'|'automaticVideoQuotaRequired'|'completeWithVideoQuota'|'prepareRouteComparisons'>>;
   signal:AbortSignal;
+  allowActiveNarration?:boolean;
   startNarration:()=>Promise<(sceneId?:string)=>Promise<void>>;
 }) {
   const {projects,documentary,signal}=options;
   signal.throwIfAborted();
   await projects.update(projectId,{outputPath:undefined,lastRender:undefined});
-  await measureDocumentaryStage('planning',{projectId},()=>documentary.planSearch(projectId,undefined,signal));
+  await measureDocumentaryStage('planning',{projectId},()=>documentary.planSearch(projectId,undefined,signal,{allowActiveNarration:options.allowActiveNarration}));
   signal.throwIfAborted();
   await projects.update(projectId,{status:'generating'});
   const waitForNarration=await options.startNarration();
@@ -95,7 +99,8 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
   const selectedProject=await projects.get(projectId,{omitCandidates:true});
   if(!selectedProject)throw new Error('Проект не найден');
   let project=selectedProject;
-  const unfinished=project.scenes.filter(s=>s.includeInAssembly!==false&&!documentaryAutomaticMaterialReady(s));
+  const missingFiles=new Set(result?.failures.filter(failure=>failure.message===documentaryMissingSelectedMaterialMessage).map(failure=>failure.sceneId));
+  const unfinished=project.scenes.filter(scene=>scene.includeInAssembly!==false&&(!documentaryAutomaticMaterialReady(scene)||missingFiles.has(scene.id)));
   const numbers=unfinished.map(s=>s.order+1);
   if(numbers.length){
     const manual=unfinished.filter(s=>s.documentary?.manualReview),pending=manual.filter(s=>['pending','unknown','error'].includes(s.documentary!.manualReview!.analysis?.status??'pending')).length;
@@ -103,6 +108,7 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
       ?`Подбор приостановлен: сервис проверки материалов недоступен. ${sourceOutage} Ожидают завершения ${numbers.length} сцен: `
       :`Не найдены подходящие материалы для ${numbers.length} сцен: `)
       +`${numbers.slice(0,12).map(n=>`№${n}`).join(', ')}${numbers.length>12?'…':''}.`
+      +(missingFiles.size?` Недоступны сохранённые файлы материалов: ${missingFiles.size}.`:'')
       +(manual.length?` Сохранены для ручной проверки: ${manual.length}; из них ${pending} без завершённого результата. Это не готовые сцены автоматического ролика.`:'')
       +documentarySelectionFailureSummary(unfinished,result?.failures)
       +' Ограниченный поиск завершён. Выберите материал вручную или продолжите подбор; готовые кадры, озвучка и ответы сервисов сохранены.');
