@@ -540,7 +540,13 @@ export class VoicerClient {
     try {
       const proxy = parseProxyUrl(await this.configuredProxyUrl());
       const url = `${settings.baseUrl.replace(/\/+$/, "")}${path}`;
-      const headers = { "X-API-KEY": key, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) };
+      const headers = {
+        "X-API-KEY": key,
+        // The connection check needs the documented error language for the
+        // fixed allowlist below. Do not change template/voice list languages.
+        ...(method === "GET" && path === "/user" ? { "X-Locale": "en" } : {}),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      };
       const serializedBody = body === undefined ? undefined : JSON.stringify(body);
       const operation = proxy
         ? this.options.proxyRequestImpl(url, {
