@@ -1,6 +1,7 @@
 import { GoogleStore } from "./google-store.js";
-import { parseProxyUrl, proxyRequest, type ProxyResponse } from "./proxy-utils.js";
-import { describeNetworkError, googleError } from "./google-errors.js";
+import { parseProxyUrl, proxyRequest, ProxyConnectError, type ProxyResponse } from "./proxy-utils.js";
+import { describeNetworkError, googleError, isDefiniteMediaRejection, type PaidMediaSubmission } from "./google-errors.js";
+import type { ProviderVideoJob } from "@gold-work/shared";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 const REQUEST_TIMEOUT_MS = 15 * 60_000;
@@ -30,6 +31,9 @@ interface VeoOperation {
     };
   };
 }
+
+type VeoVideoJob = Extract<ProviderVideoJob, { provider: "veo" }>;
+type VeoSubmission = PaidMediaSubmission & { resumeJob?: VeoVideoJob; onJobKnown(job: VeoVideoJob): Promise<void> };
 
 /**
  * Видео из картинки через Google AI Studio.
@@ -63,22 +67,27 @@ export class VeoClient {
   }
 
   /** Оживляет кадр сцены: промпт + стартовая картинка. Возвращает MP4. */
-  async generateVideo(prompt: string, aspectRatio: string, sourceImage?: Buffer): Promise<Buffer> {
-    const settings = await this.store.publicSettings();
-    const model = settings.veoModel?.trim() || "veo-3.1-lite-generate-preview";
-    const ratio = aspectRatio === "9:16" ? "9:16" : "16:9";
-    const text = prompt.trim() || "Gentle cinematic camera motion, natural movement of the subject, single continuous shot";
+  async generateVideo(prompt: string, aspectRatio: string, sourceImage?: Buffer, submission?: VeoSubmission): Promise<Buffer> {
     try {
+      if (submission?.resumeJob) {
+        return await this.downloadOperation(submission.resumeJob.operationName, {}, await this.requiredKey());
+      }
+      const settings = await this.store.publicSettings();
+      const model = settings.veoModel?.trim() || "veo-3.1-lite-generate-preview";
+      const ratio = aspectRatio === "9:16" ? "9:16" : "16:9";
+      const text = prompt.trim() || "Gentle cinematic camera motion, natural movement of the subject, single continuous shot";
       return model.startsWith("veo")
-        ? await this.generateWithVeo(model, text, ratio, sourceImage)
-        : await this.generateWithOmni(model, text, ratio, sourceImage);
+        ? await this.generateWithVeo(model, text, ratio, sourceImage, submission)
+        : await this.generateWithOmni(model, text, ratio, sourceImage, submission);
     } catch (error) {
-      throw new Error(describeNetworkError(error));
+      const message = describeNetworkError(error);
+      if (error instanceof Error && error.message === message) throw error;
+      throw new Error(message);
     }
   }
 
   /** Interactions API (gemini-omni-flash-preview): синхронный ответ, видео inline base64 или по uri. */
-  private async generateWithOmni(model: string, prompt: string, ratio: string, sourceImage?: Buffer): Promise<Buffer> {
+  private async generateWithOmni(model: string, prompt: string, ratio: string, sourceImage?: Buffer, submission?: VeoSubmission): Promise<Buffer> {
     const key = await this.requiredKey();
     const input: Array<Record<string, unknown>> = [];
     if (sourceImage) input.push({ type: "image", data: sourceImage.toString("base64"), mime_type: "image/png" });
@@ -97,7 +106,7 @@ export class VeoClient {
         background: false,
         stream: false
       })
-    });
+    }, submission);
     if (!response.ok) throw new Error(googleError(response));
     const interaction = response.json<InteractionResponse>();
     if (interaction.error?.message) throw new Error(`Omni Flash: ${interaction.error.message}`);
@@ -138,7 +147,7 @@ export class VeoClient {
   }
 
   /** Классический Veo: predictLongRunning + поллинг операции. */
-  private async generateWithVeo(model: string, prompt: string, ratio: string, sourceImage?: Buffer): Promise<Buffer> {
+  private async generateWithVeo(model: string, prompt: string, ratio: string, sourceImage?: Buffer, submission?: VeoSubmission): Promise<Buffer> {
     const key = await this.requiredKey();
     const startResponse = await this.request(`${BASE}/models/${encodeURIComponent(model)}:predictLongRunning`, {
       method: "POST",
@@ -151,15 +160,20 @@ export class VeoClient {
         }],
         parameters: { aspectRatio: ratio }
       })
-    });
+    }, submission);
     if (!startResponse.ok) throw new Error(googleError(startResponse));
     const started = startResponse.json<VeoOperation>();
-    if (!started.name) throw new Error("Veo не вернул идентификатор операции");
+    if (typeof started.name !== "string" || !started.name.trim()) throw new Error("Veo не вернул идентификатор операции");
+    await submission?.onJobKnown({ provider: "veo", operationName: started.name });
+    return this.downloadOperation(started.name, started, key);
+  }
+
+  private async downloadOperation(name: string, started: VeoOperation, key: string): Promise<Buffer> {
     const startedAt = Date.now();
     let operation: VeoOperation = started;
     while (!operation.done && Date.now() - startedAt < 12 * 60_000) {
       await sleep(6_000);
-      const poll = await this.request(`${BASE}/${started.name}`, {
+      const poll = await this.request(`${BASE}/${name}`, {
         headers: { "x-goog-api-key": key },
         timeoutMs: 30_000
       });
@@ -185,9 +199,18 @@ export class VeoClient {
   }
 
   /** Единая точка выхода в Google: при заданном прокси запрос идёт через SOCKS5-туннель. */
-  private async request(url: string, init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<ProxyResponse> {
+  private async request(url: string, init: Parameters<typeof proxyRequest>[1], submission?: PaidMediaSubmission): Promise<ProxyResponse> {
     const { proxyUrl } = await this.store.publicSettings();
-    return proxyRequest(url, init, parseProxyUrl(proxyUrl));
+    const proxy = parseProxyUrl(proxyUrl);
+    await submission?.beforeSubmit();
+    let response: ProxyResponse;
+    try { response = await proxyRequest(url, submission ? { ...init, redirect: "error" } : init, proxy); }
+    catch (error) {
+      if (error instanceof ProxyConnectError) await submission?.onRejected();
+      throw error;
+    }
+    if (isDefiniteMediaRejection(response.status)) await submission?.onRejected();
+    return response;
   }
 }
 

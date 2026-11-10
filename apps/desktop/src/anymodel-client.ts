@@ -7,7 +7,8 @@ import { allocateAiStorySceneDurations, allocateSceneDurations, countNarrationCh
 import { createId } from "@gold-work/core";
 import { AnyModelStore } from "./anymodel-store.js";
 import { AnyModelModelUnavailableError, AnyModelTextFallback, type TextModelSwitch } from "./anymodel-text-fallback.js";
-import { NO_RETRY_MARKER } from "./google-errors.js";
+import { isDefiniteMediaRejection, NO_RETRY_MARKER, type PaidMediaSubmission } from "./google-errors.js";
+import type { ProviderVideoJob } from "@gold-work/shared";
 import { applyMontagePlanToScenes, createLocalMontagePlan, type MontagePlan, type MontagePlannerOptions } from "./montage-planner.js";
 import { parseProxyUrl, proxyFetch, ProxyConnectError } from "./proxy-utils.js";
 import { normalizeReadyScriptText, readyScriptVisualPlan, splitReadyScriptNarration } from "./ready-script.js";
@@ -28,6 +29,8 @@ interface ScenarioRepairExecution extends ScenarioRepairOptions {
   contextFingerprint: string;
   onStage?: (stage: string) => void;
 }
+
+type AnyModelVideoJob = Extract<ProviderVideoJob, { provider: "anymodel" }>;
 
 interface GeneratedScene {
   title?: string;
@@ -1930,7 +1933,8 @@ export class AnyModelClient {
     prompt: string,
     size: string,
     references: string[] = [],
-    preferredModel: "primary" | "reference" = "primary"
+    preferredModel: "primary" | "reference" = "primary",
+    submission?: PaidMediaSubmission
   ): Promise<Buffer> {
     const settings = await this.store.publicSettings();
     const refs = references.map((ref) => ref.trim()).filter(Boolean).slice(0, 3);
@@ -1953,10 +1957,10 @@ export class AnyModelClient {
           model, prompt, n: 1, size: effectiveSize, quality: "auto", background: "auto", image_detail: "high", output_format: "png",
           ...(image !== undefined ? { image } : {})
         })
-      });
+      }, 0, false, submission);
       if (!response.ok) {
         const raw = await response.clone().text().catch(() => "");
-        if (isTemporaryModelUnavailable(raw)) {
+        if (isTemporaryModelUnavailable(raw) && (!submission || isDefiniteMediaRejection(response.status))) {
           unavailableError = raw;
           if (index < models.length - 1) continue;
           const retryMs = parseProviderRetryAfterMs(response.headers.get("retry-after"), raw);
@@ -1982,14 +1986,15 @@ export class AnyModelClient {
   }
 
   /** Озвучка текста через AnyModel. Голос проекта (overrideModel) важнее глобальной настройки. Возвращает MP3. */
-  async textToSpeech(text: string, languageCode: string, overrideModel?: string): Promise<Buffer> {
+  async textToSpeech(text: string, languageCode: string, overrideModel?: string, submission?: PaidMediaSubmission): Promise<Buffer> {
     const input = text.trim().slice(0, 5_000);
     if (!input) throw new Error("Пустой текст для озвучки");
     const settings = await this.store.publicSettings();
+    const model = ttsModelId(overrideModel?.trim() || settings.ttsModel, languageCode);
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
-      body: JSON.stringify({ model: ttsModelId(overrideModel?.trim() || settings.ttsModel, languageCode), input })
-    });
+      body: JSON.stringify({ model, input })
+    }, 0, false, model === "edge-tts" || model.startsWith("edge-tts/") ? undefined : submission);
     if (!response.ok) throw new Error(await this.error(response));
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
@@ -2128,7 +2133,9 @@ export class AnyModelClient {
     return audio.toString("base64");
   }
 
-  async generateVideo(prompt: string, duration: number, aspectRatio: string, sourceImage?: Buffer): Promise<Buffer> {
+  async generateVideo(prompt: string, duration: number, aspectRatio: string, sourceImage?: Buffer,
+    submission?: PaidMediaSubmission & { resumeJob?: AnyModelVideoJob; onJobKnown(job: AnyModelVideoJob): Promise<void> }): Promise<Buffer> {
+    if (submission?.resumeJob) return this.downloadVideoJob(submission.resumeJob);
     const settings = await this.store.publicSettings();
     const create = await this.request("/v1/videos/generations", { method: "POST", headers: { "Idempotency-Key": randomUUID() }, body: JSON.stringify({
       model: settings.videoModel,
@@ -2138,15 +2145,21 @@ export class AnyModelClient {
       aspect_ratio: aspectRatio,
       // Задел под image-to-video: стартовый кадр сцены; точное имя параметра сверим при подключении видео-провайдера.
       ...(sourceImage ? { input_image: `data:image/png;base64,${sourceImage.toString("base64")}` } : {})
-    }) });
+    }) }, 0, false, submission);
     if (!create.ok) throw new Error(await this.error(create));
     const ticket = create.headers.get("x-9router-connection-id");
     const created = await create.json() as { request_id?: string; id?: string };
     const id = created.request_id || created.id;
-    if (!id || !ticket) throw new Error("AnyModel не вернул идентификатор видео-задачи");
+    if (typeof id !== "string" || !id.trim() || !ticket?.trim()) throw new Error("AnyModel не вернул идентификатор видео-задачи");
+    const job: AnyModelVideoJob = { provider: "anymodel", jobId: id, connectionId: ticket };
+    await submission?.onJobKnown(job);
+    return this.downloadVideoJob(job);
+  }
+
+  private async downloadVideoJob(job: AnyModelVideoJob): Promise<Buffer> {
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      const poll = await this.request(`/v1/videos/${encodeURIComponent(id)}`, { headers: { "x-9router-connection-id": ticket } });
+      const poll = await this.request(`/v1/videos/${encodeURIComponent(job.jobId)}`, { headers: { "x-9router-connection-id": job.connectionId } });
       if (!poll.ok) throw new Error(await this.error(poll));
       const status = await poll.json() as { status?: string; url?: string; result_url?: string; error?: string };
       const url = status.result_url || status.url;
@@ -2387,7 +2400,7 @@ export class AnyModelClient {
     return this.fetchTransport(url, init, await this.configuredProxy());
   }
 
-  private async request(path: string, init: RequestInit = {}, attempt = 0, singleAttempt=false): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, attempt = 0, singleAttempt=false, submission?: PaidMediaSubmission): Promise<Response> {
     const settings = await this.store.publicSettings();
     const key = await this.store.apiKey();
     if (!key) throw new Error("Сначала сохраните новый API-ключ AnyModel в настройках");
@@ -2400,10 +2413,18 @@ export class AnyModelClient {
     const host = (() => { try { return new URL(base).host; } catch { return "anymodel.org"; } })();
     const nonReplayableCompletion = init.method?.toUpperCase() === "POST"
       && /\/chat\/completions\/?$/i.test(normalizedPath);
+    const mediaProxy = submission ? await this.configuredProxy() : undefined;
+    await submission?.beforeSubmit();
     let response: Response;
     try {
-      response = await this.fetchWithConfiguredProxy(url, { ...init, headers });
+      response = submission
+        ? await this.fetchTransport(url, { ...init, headers, redirect: "error" }, mediaProxy)
+        : await this.fetchWithConfiguredProxy(url, { ...init, headers });
     } catch (networkError) {
+      if (submission) {
+        if (networkError instanceof ProxyConnectError) await submission.onRejected();
+        throw networkError;
+      }
       // Only the transport's top-level tunnel error proves that no destination
       // HTTP request was sent. Redirect failures wrap it because an earlier
       // request already reached the server. Never infer this from text/causes.
@@ -2461,7 +2482,8 @@ export class AnyModelClient {
     // Короткий сбой повторяем здесь. Если провайдер просит ждать минуты или часы,
     // немедленно возвращаем ответ вызывающему коду: он сможет переключить модель,
     // поставить задачу в очередь или показать понятную ошибку, не подвешивая IPC.
-    if (!nonReplayableCompletion && AnyModelClient.RETRIABLE_STATUSES.has(response.status) && attempt < AnyModelClient.MAX_RETRIES) {
+    if (submission && isDefiniteMediaRejection(response.status)) await submission.onRejected();
+    if (!submission && !nonReplayableCompletion && AnyModelClient.RETRIABLE_STATUSES.has(response.status) && attempt < AnyModelClient.MAX_RETRIES) {
       const bodyText = await response.clone().text().catch(() => "");
       const providerDelay = parseProviderRetryAfterMs(response.headers.get("retry-after"), bodyText);
       if (providerDelay !== null && providerDelay > 60_000) return response;

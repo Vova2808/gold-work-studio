@@ -618,6 +618,7 @@ export async function proxyRequest(
     body?: string | Buffer;
     timeoutMs?: number;
     signal?: AbortSignal;
+    redirect?: RequestRedirect;
   },
   proxy: ProxyConfig | undefined
 ): Promise<ProxyResponse> {
@@ -629,6 +630,7 @@ export async function proxyRequest(
     method: init.method,
     headers: init.headers,
     body: init.body as BodyInit | undefined,
+    redirect: init.redirect,
     signal
   }, proxy);
   const body = Buffer.from(await response.arrayBuffer());

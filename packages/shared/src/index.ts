@@ -1154,6 +1154,10 @@ export interface VoiceCalibrationResult {
   sampleAudioBase64: string;
 }
 
+export type ProviderVideoJob =
+  | { provider: "anymodel"; jobId: string; connectionId: string }
+  | { provider: "veo"; operationName: string };
+
 export interface QueueTask {
   id: string;
   runId: string;
@@ -1188,13 +1192,15 @@ export interface QueueTask {
   /** Уже отправленное удалённое Flow-задание. Позволяет продолжить polling/скачивание без повторной генерации. */
   remoteJob?: FlowRemoteVideoJob | FlowRemoteImageJob;
   /** Written before a paid POST; without a receipt its result is unknown after a crash. */
-  pendingSubmission?: { provider: "flow" | "lumean"; kind: "image" | "video" | "speech"; accountId?: string; startedAt: string };
+  pendingSubmission?: { provider: "flow" | "lumean" | "anymodel" | "veo" | "legacy-media"; kind: "image" | "video" | "speech"; accountId?: string; startedAt: string };
   /** Existing paid speech order; retry polls/downloads this ID instead of buying another. */
   lumeanOrder?: { orderId: string; inputFingerprint: string };
+  /** Existing video receipt for the legacy AnyModel and Google AI Studio routes. */
+  providerVideoJob?: ProviderVideoJob;
   /** One continuous Stock narration order shared by these exact, ordered scene IDs. */
   narrationSceneIds?: string[];
-  /** Distinguishes pre-submit work in the checkpoint-aware runtime from legacy in-flight requests. */
-  submissionTrackingVersion?: 1;
+  /** Version 1 tracked Flow/Lumean only. Version 2 also tracks AnyModel and Google video. */
+  submissionTrackingVersion?: 1 | 2;
 }
 
 export interface CreateProjectInput {

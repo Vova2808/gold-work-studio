@@ -4455,16 +4455,16 @@ function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onAppl
         title={workflowProject ? "Производство" : "Очередь"}
         subtitle={workflowProject ? `${workflowProject.title} · живой прогресс по этапам` : "Локальный конвейер, прогресс и повторные попытки"}
         actions={<>
-          <button className="ghost-button" disabled={tasks.every((task) => !["done", "failed", "cancelled", "blocked"].includes(task.status))} onClick={onClear}>
+          <button className="ghost-button" disabled={tasks.every((task) => !["done", "failed", "cancelled", "blocked"].includes(task.status))} title="Задачи с данными незавершённых платных заказов останутся в очереди." onClick={onClear}>
             <Trash2 size={15} />
             Очистить завершённые
           </button>
           <button
             className="ghost-button danger"
             disabled={tasks.length === 0}
-            title="Убрать все задачи из очереди. Проекты и файлы останутся."
+            title="Очистить очередь, когда в ней нет незавершённых платных операций."
             onClick={() => {
-              if (window.confirm("Убрать все задачи из очереди? Проекты, медиафайлы и Final.mp4 останутся. Уже отправленный запрос провайдеру может завершить текущий файл в фоне.")) onClearAll();
+              if (window.confirm("Очистить очередь? Проекты, медиафайлы и Final.mp4 останутся. Если медиа-задача ещё выполняется или в очереди есть незавершённый платный заказ, очистка будет отменена.")) onClearAll();
             }}
           >
             <Trash2 size={14} />
@@ -4549,8 +4549,10 @@ function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onAppl
           stock ? <p className="production-preflight-note">{stockTab === "assemble" ? "Сборка начнётся автоматически, когда озвучка и подходящие материалы будут готовы." : "Готовая озвучка сохраняется в сценах. Новые задачи появятся при запуске производства."}</p> : <EmptyState icon={<ListPlus size={34} />} title="Очередь пуста" text="Откройте проект и нажмите «Генерировать видео»." action="Готово" onAction={() => undefined} />
         ) : (
           <div className="queue-cards">
-            {visibleTasks.map((task) => (
-              <article key={task.id} className={`queue-task status-${task.status}`}>
+            {visibleTasks.map((task) => {
+              const knownOrder = Boolean(task.remoteJob || task.lumeanOrder || task.providerVideoJob);
+              const canRetry = task.status === "failed" || (task.status === "cancelled" && knownOrder);
+              return <article key={task.id} className={`queue-task status-${task.status}`}>
                 <div className="queue-card-head">
                   <span>{icons[task.kind]}</span>
                   <div>
@@ -4568,18 +4570,18 @@ function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onAppl
                   </span>
                   {task.stage && <span className="queue-stage">{task.stage}</span>}
                   {task.error && task.status !== "pending" && <span className="queue-error">{task.error}</span>}
-                  {task.status === "failed" && !task.retryBlockedReason && (
+                  {canRetry && !task.retryBlockedReason && (
                     <button className="retry-button" onClick={() => onRetry(task.id)}>
                       <RotateCcw size={13} />
-                      Повторить
+                      {knownOrder ? "Продолжить заказ" : "Повторить"}
                     </button>
                   )}
-                  {task.status === "failed" && task.retryBlockedReason && (
+                  {(task.status === "failed" || task.status === "cancelled") && task.retryBlockedReason && (
                     <span className="queue-error">Повтор отключён: {task.retryBlockedReason}</span>
                   )}
                 </footer>
-              </article>
-            ))}
+              </article>;
+            })}
           </div>
         )}
         </>}

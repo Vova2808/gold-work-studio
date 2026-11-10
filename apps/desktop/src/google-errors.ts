@@ -6,6 +6,16 @@ import type { ProxyResponse } from "./proxy-utils.js";
  */
 export const NO_RETRY_MARKER = "[no-retry] ";
 
+export interface PaidMediaSubmission {
+  beforeSubmit(): Promise<void>;
+  onRejected(): Promise<void>;
+}
+
+/** Use only for the creation response. A later polling refusal says nothing about creation. */
+export function isDefiniteMediaRejection(status: number): boolean {
+  return [400, 401, 402, 403, 404, 405, 413, 415, 422, 429].includes(status);
+}
+
 /** Ошибка, которую нельзя исправить повтором. */
 export function isPermanentFailure(message: string): boolean {
   return message.startsWith(NO_RETRY_MARKER);

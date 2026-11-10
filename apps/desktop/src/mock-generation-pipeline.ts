@@ -25,7 +25,7 @@ import { plannedStoryTimingPatch } from "./planned-story-timing.js";
 import { normalizeImageAspect } from "./media-utils.js";
 import { VoicerClient, VoicerClientError } from "./voicer-client.js";
 import { VeoClient } from "./veo-client.js";
-import { cleanErrorMessage, isPermanentFailure, NO_RETRY_MARKER } from "./google-errors.js";
+import { cleanErrorMessage, isPermanentFailure, NO_RETRY_MARKER, type PaidMediaSubmission } from "./google-errors.js";
 import { FlowClient, FlowSubmissionUncertainError } from "./flow-client.js";
 import { missingAssemblyInputs } from "./assembly-readiness.js";
 import {fastDocumentaryGraphicReady} from './documentary-fast-graphics.js';
@@ -233,16 +233,17 @@ const KNOWN_LUMEAN_ORDER_FAILURES = new Set([
   "download_empty",
 ]);
 
-function lumeanRetryBlockedReason(error: unknown, task?: QueueTask): string | undefined {
+function providerRetryBlockedReason(error: unknown, task: QueueTask): string | undefined {
   if (error instanceof FlowSubmissionUncertainError) {
-    return "Flow мог уже создать платное изображение. Проверьте проект в Flow: слепой повтор отключён, чтобы не списать квоту повторно.";
+    if (task.remoteJob) return undefined;
+    return "Flow мог уже создать платное задание. Проверьте проект в Flow: повторная отправка отключена, чтобы не списать квоту дважды.";
   }
   if (!(error instanceof VoicerClientError)) return undefined;
   if (error.creationUncertain) {
     return "Lumean мог уже создать платный заказ. Сначала сверьте его в кабинете Lumean; слепой повтор отключён.";
   }
   if (error.orderKnown || KNOWN_LUMEAN_ORDER_FAILURES.has(error.code)) {
-    if (task?.lumeanOrder && error.code !== "order_failed") return undefined;
+    if (task.lumeanOrder && error.code !== "order_failed") return undefined;
     return "Заказ Lumean уже создан. Повтор отключён, чтобы не списать квоту второй раз.";
   }
   return undefined;
@@ -250,14 +251,25 @@ function lumeanRetryBlockedReason(error: unknown, task?: QueueTask): string | un
 
 function pendingSubmissionReason(task: QueueTask): string | undefined {
   if (!task.pendingSubmission) return undefined;
-  const provider = task.pendingSubmission.provider === "lumean" ? "Lumean" : "Flow";
-  if (task.pendingSubmission.provider === "lumean" ? task.lumeanOrder : task.remoteJob) return undefined;
+  const providerKey = task.pendingSubmission.provider;
+  if ((providerKey === "lumean" && task.lumeanOrder) || (providerKey === "flow" && task.remoteJob)
+    || task.providerVideoJob?.provider === providerKey) return undefined;
+  if (providerKey === "legacy-media") {
+    return "Результат старого запроса неизвестен. Сверьте результат у провайдера. Повторная отправка отключена, чтобы не списать кредиты дважды.";
+  }
+  const provider = { flow: "Flow", lumean: "Lumean", anymodel: "AnyModel", veo: "Google AI Studio" }[providerKey];
   return `${provider} мог принять платное задание до прерывания приложения, но его ID не был сохранён. Проверьте результаты в ${provider}; повторная отправка отключена, чтобы не списать кредиты дважды.`;
+}
+
+function hasPaidReceipt(task: QueueTask): boolean {
+  return Boolean(task.remoteJob || task.lumeanOrder || task.providerVideoJob);
 }
 
 function speechOrderFingerprint(text: string, template?: string): string {
   return createHash("sha256").update(JSON.stringify([text.trim(), template?.trim() || "default"])).digest("hex");
 }
+
+class QueueSubmissionCheckpointError extends Error {}
 
 export class MockGenerationPipeline {
   private syncedTaskStates = new Map<string, string>();
@@ -419,19 +431,10 @@ export class MockGenerationPipeline {
         throw new Error("Остановка ещё завершается. Дождитесь сохранения текущих заданий и повторите запуск.");
       }
 
-      if (timingPatch) {
-        project = await this.projects.mutate(projectId, current => {
-          if (scenarioFingerprint(current.scenes) !== originalFingerprint) throw new Error("Сценарий изменился во время запуска. Повторите запуск с актуальным текстом.");
-          return timingPatch;
-        });
-        this.emit("info", "scenario.timing.calibrated", { projectId, scenes: project.scenes.length });
-      }
-
       // Keep paid Stock orders accepted before Stop; execution checks their text/voice fingerprint.
       const savedSpeech = documentaryStock
         ? this.tasks.filter(task => task.projectId === projectId && task.kind === "speech" && task.status !== "done" && task.lumeanOrder)
         : [];
-      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
       const now = new Date().toISOString();
       const runId = createId("run");
       const created: QueueTask[] = [];
@@ -476,11 +479,24 @@ export class MockGenerationPipeline {
       }
 
       if (!narrationOnly) created.push({...this.makeTask(runId, project, undefined, "assemble", "Подготовка редактора", created.map((task) => task.id), now), allowTimingExpansion: true, prepareOnly: true});
+      const carriedOrderTasks = new Set<string>();
       for (const task of created.filter(task => task.kind === "speech")) {
-        const previous = savedSpeech.find(saved => saved.sceneId === task.sceneId
+        const previous = savedSpeech.find(saved => !saved.retryBlockedReason && saved.sceneId === task.sceneId
           && JSON.stringify(saved.narrationSceneIds) === JSON.stringify(task.narrationSceneIds));
-        if (previous) task.lumeanOrder = previous.lumeanOrder;
+        if (previous) {
+          task.lumeanOrder = previous.lumeanOrder;
+          carriedOrderTasks.add(previous.id);
+        }
       }
+      this.assertPaidTasksCanBeRemoved(this.tasks.filter(task => task.projectId === projectId && !carriedOrderTasks.has(task.id)));
+      if (timingPatch) {
+        project = await this.projects.mutate(projectId, current => {
+          if (scenarioFingerprint(current.scenes) !== originalFingerprint) throw new Error("Сценарий изменился во время запуска. Повторите запуск с актуальным текстом.");
+          return timingPatch;
+        });
+        this.emit("info", "scenario.timing.calibrated", { projectId, scenes: project.scenes.length });
+      }
+      this.tasks = this.tasks.filter((task) => task.projectId !== projectId);
       this.tasks.push(...created);
       await this.projects.mutate(projectId, (current) => ({
         status: "generating",
@@ -524,6 +540,7 @@ export class MockGenerationPipeline {
         task.projectId === projectId && ["pending", "running", "retry_wait", "paused"].includes(task.status)
       );
       if (active) throw new Error("Сначала дождитесь завершения или остановите текущую очередь");
+      this.assertPaidTasksCanBeRemoved(this.tasks.filter(task => task.projectId === projectId));
       const missing = missingAssemblyInputs(project);
       if (missing.length > 0) {
         throw new Error(`Для сборки ещё нужны материалы: ${missing.slice(0, 8).join("; ")}${missing.length > 8 ? "; …" : ""}. Откройте «Материалы» или продолжите генерацию.`);
@@ -576,9 +593,12 @@ export class MockGenerationPipeline {
       const replacedKinds = new Set<TaskKind>(target === "all"
         ? ["speech", "image", "video"]
         : target === "image" ? ["image"] : target === "video" ? ["video"] : ["speech"]);
-      this.tasks = this.tasks.filter((task) =>
-        task.projectId !== projectId || (task.kind !== "assemble" && (!task.sceneId || !selectedIds.has(task.sceneId) || !replacedKinds.has(task.kind)))
-      );
+      const affected = this.tasks.filter(task => task.projectId === projectId && (task.kind === "assemble"
+        || (replacedKinds.has(task.kind) && this.matchesScene(task, selectedIds))));
+      this.assertPaidTasksCanBeRemoved(affected);
+      const removed = affected.filter(task => task.kind === "assemble" || (task.sceneId && selectedIds.has(task.sceneId)));
+      const removedIds = new Set(removed.map(task => task.id));
+      this.tasks = this.tasks.filter(task => !removedIds.has(task.id));
       const remainingProjectTasks = this.tasks.filter((task) => task.projectId === projectId);
       const created: QueueTask[] = [];
       const findTask = (candidateId: string, kind: TaskKind) =>
@@ -774,9 +794,12 @@ export class MockGenerationPipeline {
     return this.mutate(async () => {
       const task = this.tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Задача ${taskId} не найдена`);
-      if (task.status === "cancelled") throw new Error("Остановленный проект нужно запустить заново");
-      if (task.status !== "failed") return structuredClone(task);
-      if (task.retryBlockedReason || pendingSubmissionReason(task)) throw new Error(task.retryBlockedReason ?? pendingSubmissionReason(task));
+      const knownOrder = hasPaidReceipt(task);
+      if (task.status !== "failed" && task.status !== "cancelled") return structuredClone(task);
+      if (this.executing.has(task.id)) throw new Error("Задача ещё завершает остановку. Дождитесь сохранения ответа провайдера.");
+      const retryBlockedReason = pendingSubmissionReason(task) ?? task.retryBlockedReason;
+      if (retryBlockedReason) throw new Error(retryBlockedReason);
+      if (task.status === "cancelled" && !knownOrder) throw new Error("Остановленный проект нужно запустить заново");
       const project = await this.requireProject(task.projectId);
       if (task.kind === 'assemble' && task.prepareOnly === false
         && this.tasks.filter(candidate => candidate.runId === task.runId).length === 1
@@ -790,11 +813,13 @@ export class MockGenerationPipeline {
         if (missing.length) throw new Error(`Для сборки ещё нужны материалы: ${missing.slice(0, 8).join('; ')}.`);
       } else if (task.narrationSceneIds) {
         documentaryNarrationText(project, task);
+      } else if (knownOrder) {
+        if (!project.scenes.some(scene => scene.id === task.sceneId)) throw new Error("Сцена сохранённого задания удалена. ID задания оставлен в очереди.");
       } else if (!(task.kind === "speech" && project.mediaMode === "stock" && project.settings.assembly.documentary?.version === 2)) {
-      const runSceneIds = new Set(this.tasks.filter((candidate) => candidate.runId === task.runId && candidate.sceneId).map((candidate) => candidate.sceneId as string));
-      if (runSceneIds.size !== project.scenes.length || project.scenes.some((scene) => !runSceneIds.has(scene.id))) {
-        throw new Error("Состав сцен изменился. Запустите генерацию проекта заново.");
-      }
+        const runSceneIds = new Set(this.tasks.filter(candidate => candidate.runId === task.runId && candidate.sceneId).map(candidate => candidate.sceneId as string));
+        if (runSceneIds.size !== project.scenes.length || project.scenes.some(scene => !runSceneIds.has(scene.id))) {
+          throw new Error("Состав сцен изменился. Запустите генерацию проекта заново.");
+        }
       }
       this.reportedTerminalRuns.delete(task.runId);
       task.status = "pending";
@@ -833,26 +858,31 @@ export class MockGenerationPipeline {
   async clearFinished(): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      const protectedRuns = new Set(this.tasks.filter(task => this.requiresPaidTaskRecovery(task)).map(task => task.runId));
+      const protectedDependencies = new Set(this.tasks.filter(task => protectedRuns.has(task.runId)).flatMap(task => task.dependsOn));
       const runIds = [...new Set(this.tasks.map((task) => task.runId))];
       const removableRuns = new Set(runIds.filter((runId) => {
         const runTasks = this.tasks.filter((task) => task.runId === runId);
-        return runTasks.length > 0 && runTasks.every((task) => task.status === "done" || task.status === "cancelled");
+        return !protectedRuns.has(runId) && runTasks.every(task => (task.status === "done" || task.status === "cancelled") && !protectedDependencies.has(task.id));
       }));
-      this.tasks = this.tasks.filter((task) => !removableRuns.has(task.runId));
-      await this.persist();
+      if (!removableRuns.size) return structuredClone(this.tasks);
+      const remaining = this.tasks.filter(task => !removableRuns.has(task.runId));
+      await this.repository.replace(remaining);
+      this.tasks = remaining;
       this.emit("info", "queue.finished_runs.cleared", { runs: removableRuns.size });
       return structuredClone(this.tasks);
     });
   }
 
   /**
-   * Инвалидирует незавершённые задачи и удаляет только журнал очереди.
+   * Очищает журнал, если это не уничтожит данные восстановления платной операции.
    * Проекты, уже созданные файлы сцен и Final.mp4 не трогаются. Долгие
    * провайдерские запросы прерываются тем же AbortSignal, что и при Stop.
    */
   async clearAll(): Promise<QueueTask[]> {
     await this.initialize();
     return this.mutate(async () => {
+      this.assertPaidTasksCanBeRemoved(this.tasks);
       const taskCount = this.tasks.length;
       const runCount = new Set(this.tasks.map((task) => task.runId)).size;
       const activeStatuses = new Set<QueueTask["status"]>(["pending", "running", "retry_wait", "paused"]);
@@ -880,9 +910,9 @@ export class MockGenerationPipeline {
 
       // beginExecution ищет исходную задачу перед фиксацией результата. После
       // очистки он увидит, что её уже нет, и тихо завершится.
+      await this.repository.replace([]);
       this.tasks = [];
       this.reportedTerminalRuns.clear();
-      await this.persist();
       this.emit("info", "queue.all.cleared", {
         tasks: taskCount,
         runs: runCount,
@@ -912,6 +942,7 @@ export class MockGenerationPipeline {
       const now = new Date().toISOString();
       const nowTime = Date.now();
       let changed = false;
+      const starting: Array<{ task: QueueTask; previous: QueueTask }> = [];
 
       for (const task of this.tasks) {
         if (task.status === "retry_wait" && (!task.nextAttemptAt || Date.parse(task.nextAttemptAt) <= nowTime)) {
@@ -941,6 +972,15 @@ export class MockGenerationPipeline {
       for (const task of this.tasks) {
         if (running >= this.policy.concurrency) break;
         if (task.status !== "pending") continue;
+        const uncertain = pendingSubmissionReason(task) ?? task.retryBlockedReason;
+        if (uncertain) {
+          task.status = "failed";
+          task.error = uncertain;
+          task.retryBlockedReason = uncertain;
+          task.nextAttemptAt = undefined;
+          changed = true;
+          continue;
+        }
         if (task.kind === "video" && videoRunning) continue;
         const dependencies = task.dependsOn.map((id) => this.tasks.find((candidate) => candidate.id === id));
         if (dependencies.some((dependency) => dependency?.status === "failed" || dependency?.status === "cancelled" || dependency?.status === "blocked")) {
@@ -955,11 +995,12 @@ export class MockGenerationPipeline {
           continue;
         }
         if (!dependencies.every((dependency) => dependency?.status === "done")) continue;
+        starting.push({ task, previous: { ...task } });
         task.status = "running";
         // A resumed local assembly starts a new render pass (possibly cached),
         // not at the percentage left by the crashed encoder.
         if (task.kind === "assemble") { task.progress = 0; task.stage = "Продолжаю сборку по сохранённым материалам"; }
-        task.submissionTrackingVersion = 1;
+        task.submissionTrackingVersion = 2;
         if (task.pausedFrom !== "running") task.attempts += 1;
         task.pausedFrom = undefined;
         task.error = undefined;
@@ -968,12 +1009,18 @@ export class MockGenerationPipeline {
         running += 1;
         if (task.kind === "video") videoRunning = true;
         changed = true;
-        this.emit("info", "queue.task.started", this.taskDetails(task));
-        this.beginExecution(task);
       }
 
       if (changed) {
-        await this.persist();
+        try { await this.persist(); }
+        catch (error) {
+          for (const { task, previous } of starting) Object.assign(task, previous);
+          throw error;
+        }
+        for (const { task } of starting) {
+          this.emit("info", "queue.task.started", this.taskDetails(task));
+          this.beginExecution(task);
+        }
         await this.syncProjects();
       }
     });
@@ -992,7 +1039,7 @@ export class MockGenerationPipeline {
       let resultPath: string | undefined;
       let failure: unknown;
       try {
-        if (await this.shouldSimulateFailure(snapshot)) throw new Error("Тестовая ошибка провайдера ([FAIL])");
+        if (!hasPaidReceipt(snapshot) && await this.shouldSimulateFailure(snapshot)) throw new Error("Тестовая ошибка провайдера ([FAIL])");
         resultPath = await this.executeTask(snapshot, controller.signal);
       } catch (error) {
         failure = error;
@@ -1001,6 +1048,8 @@ export class MockGenerationPipeline {
         const current = this.tasks.find((candidate) => candidate.id === snapshot.id);
         if (!current || current.status === "cancelled") return;
         const nowTime = Date.now();
+        const pendingBeforeCompletion = current.pendingSubmission;
+        const completesPaidTask = failure === undefined && Boolean(pendingBeforeCompletion || hasPaidReceipt(current));
         current.updatedAt = new Date(nowTime).toISOString();
         if (failure instanceof MeasuredStoryTimingExpansion) {
           try {
@@ -1031,7 +1080,7 @@ export class MockGenerationPipeline {
           current.pausedFrom = undefined;
           this.emit("info", "queue.task.completed", { ...this.taskDetails(current), elapsedMs: Date.now() - started });
         } else if (current.status === "paused") {
-          const retryBlockedReason = pendingSubmissionReason(current) ?? lumeanRetryBlockedReason(failure, current);
+          const retryBlockedReason = pendingSubmissionReason(current) ?? providerRetryBlockedReason(failure, current);
           if (retryBlockedReason) {
             current.status = "failed";
             current.progress = 0;
@@ -1061,8 +1110,16 @@ export class MockGenerationPipeline {
             current.failedAssemblyInputHash = assemblyInputHash(project);
           }
         }
-        await this.persist();
-        await this.syncProjects();
+        try {
+          await this.persist();
+          await this.syncProjects();
+        } catch (error) {
+          if (completesPaidTask) {
+            current.pendingSubmission = pendingBeforeCompletion;
+            this.scheduleFailure(current, error, nowTime);
+          }
+          throw error;
+        }
       });
     });
     this.executing.set(task.id, work.catch(error => {
@@ -1114,7 +1171,6 @@ export class MockGenerationPipeline {
       updatedAt: task.updatedAt ?? now,
       maxAttempts: task.maxAttempts || this.policy.maxAttempts
     }));
-    const legacyProjects = new Map<string, Project | undefined>();
     for (const task of this.tasks) {
       // Old automatic assembly checkpoints continue as editor preparation.
       // Explicit exports (assembleOnly's label, no expansion flag) retain their intent.
@@ -1123,21 +1179,18 @@ export class MockGenerationPipeline {
         task.prepareOnly = true;
         task.label = 'Подготовка редактора';
       }
-      if (task.status === "paused" && task.pausedFrom === "running" && !task.submissionTrackingVersion && !task.remoteJob && !task.lumeanOrder && !task.pendingSubmission) {
-        if (!legacyProjects.has(task.projectId)) legacyProjects.set(task.projectId, await this.projects.get(task.projectId));
-        const project = legacyProjects.get(task.projectId);
-        const flowKind = task.kind === "image" && project?.settings.image.provider === "flow" ? "image"
-          : task.kind === "video" && project?.settings.video.provider === "flow" ? "video" : undefined;
-        if (flowKind) task.pendingSubmission = { provider: "flow", kind: flowKind, startedAt: task.updatedAt };
-        if (task.kind === "speech" && project?.settings.voice.provider === "elevenlabs") {
-          task.pendingSubmission = { provider: "lumean", kind: "speech", startedAt: task.updatedAt };
-        }
+      // Older attempts did not store which provider they actually reached.
+      // The current project settings cannot prove a previous request was local.
+      if (task.status !== "done" && task.submissionTrackingVersion !== 2 && !hasPaidReceipt(task) && !task.pendingSubmission
+        && (task.pausedFrom === "running" || task.pausedFrom === "retry_wait" || task.attempts > 0)
+        && (task.kind === "image" || task.kind === "video" || task.kind === "speech")) {
+        task.pendingSubmission = { provider: "legacy-media", kind: task.kind, startedAt: task.updatedAt || now };
       }
       const reason = pendingSubmissionReason(task);
-      if (reason && ["paused", "pending", "running", "retry_wait"].includes(task.status)) {
-        task.status = "failed";
+      if (reason && task.status !== "done") {
+        if (task.status !== "cancelled") task.status = "failed";
         task.retryBlockedReason = reason;
-        task.error = `${NO_RETRY_MARKER}${reason}`;
+        task.error = reason;
         task.nextAttemptAt = undefined;
         task.pausedFrom = undefined;
         this.emit("warn", "queue.submission.uncertain_after_restart", this.taskDetails(task));
@@ -1305,23 +1358,21 @@ export class MockGenerationPipeline {
     const scene = project.scenes.find((candidate) => candidate.id === task.sceneId);
     if (!scene) throw new Error("Сцена для задачи не найдена");
     if (task.kind === "image") {
-      const realImageGeneration = project.settings.image.provider !== "mock-image";
-      if (scene.imagePrompt.trim().length > 0 && realImageGeneration) {
+      let imageJob = task.remoteJob?.kind === "image" ? task.remoteJob : undefined;
+      const realImageGeneration = Boolean(imageJob) || project.settings.image.provider !== "mock-image";
+      if ((scene.imagePrompt.trim().length > 0 || imageJob) && realImageGeneration) {
         const size = project.aspectRatio === "9:16" ? "1080x1920" : project.aspectRatio === "1:1" ? "1024x1024" : "1920x1080";
-        const prompt = buildImagePrompt(project, scene);
-        const references = sceneImageReferences(project, scene);
-        const [anyModelConfigured, flowConfigured] = await Promise.all([
+        const prompt = imageJob ? "" : buildImagePrompt(project, scene);
+        const references = imageJob ? [] : sceneImageReferences(project, scene);
+        const [anyModelConfigured, flowConfigured] = imageJob ? [false, Boolean(this.flow)] : await Promise.all([
           project.mediaMode !== 'ai' && this.anyModel ? this.anyModel.configured() : Promise.resolve(false),
           this.flow ? this.flow.configured("image") : Promise.resolve(false),
         ]);
         const available = new Set<ImageGenerationSource>();
         if (anyModelConfigured && this.anyModel) available.add("anymodel");
         if (flowConfigured && this.flow) available.add("flow");
-        let imageJob = task.remoteJob?.kind === "image" ? task.remoteJob : undefined;
         const flowOnly = project.settings.image.provider === "flow" || Boolean(imageJob);
         const sources = (flowOnly ? ["flow" as const] : imageSourceOrder(scene.order)).filter((source) => available.has(source));
-        // A known job must resume even if the account is currently cooling down.
-        if (task.remoteJob?.kind === "image" && this.flow && !sources.includes("flow")) sources.push("flow");
         let raw: Buffer | undefined;
         let completedSource: ImageGenerationSource | undefined;
         const errors: Partial<Record<ImageGenerationSource, unknown>> = {};
@@ -1350,7 +1401,7 @@ export class MockGenerationPipeline {
           try {
             if (source === "anymodel" && this.anyModel) {
               const preferredModel = project.settings.image.provider === "gpt-image" ? "reference" : "primary";
-              raw = await this.anyModel.generateImage(prompt, size, references, preferredModel);
+              raw = await this.anyModel.generateImage(prompt, size, references, preferredModel, this.mediaSubmission(task.id, "anymodel", "image", signal));
             } else if (source === "flow" && this.flow) {
               const loaded = imageJob ? { images: [], failed: 0 } : await loadFlowReferences(references);
               if (loaded.failed > 0) {
@@ -1386,7 +1437,8 @@ export class MockGenerationPipeline {
             }
           } catch (error) {
             // Never turn an ambiguous submission / known remote job into a paid fallback.
-            if (signal?.aborted || error instanceof FlowSubmissionUncertainError || imageJob) throw error;
+            if (signal?.aborted || error instanceof FlowSubmissionUncertainError || error instanceof QueueSubmissionCheckpointError
+              || imageJob || this.isSubmissionUncertain(task.id)) throw error;
             errors[source] = error;
           }
         }
@@ -1476,7 +1528,8 @@ export class MockGenerationPipeline {
         // Голос из настроек проекта важнее глобального; "custom" и пустое значение = глобальная настройка.
         const projectVoice = project.settings.voice.voice?.trim();
         const voiceOverride = projectVoice && projectVoice !== "custom" ? projectVoice : undefined;
-        const audio = await measureDocumentaryStage('narration',{projectId:project.id,sceneId:task.sceneId},()=>this.anyModel!.textToSpeech(speechText, ttsLanguageCode(project.language), voiceOverride));
+        const audio = await measureDocumentaryStage('narration',{projectId:project.id,sceneId:task.sceneId},()=>this.anyModel!.textToSpeech(
+          speechText, ttsLanguageCode(project.language), voiceOverride, this.mediaSubmission(task.id, "anymodel", "speech", signal)));
         return saveSpeech(audio);
       }
       if (project.settings.assembly.documentary?.version === 2) throw new Error(`${NO_RETRY_MARKER}Озвучка Stock не создана: подключите выбранный сервис голоса. Тестовый звук не подставляется.`);
@@ -1486,23 +1539,35 @@ export class MockGenerationPipeline {
       });
       return this.storage.createPlaceholderAudio(project, scene);
     }
-    if (task.kind === "video" && project.settings.video.provider === "veo") {
+    const videoJob = task.providerVideoJob;
+    const videoProvider = videoJob?.provider ?? (task.remoteJob ? "flow" : project.settings.video.provider);
+    if (task.kind === "video" && videoProvider === "veo") {
       if (!this.veo || !(await this.veo.configured())) {
         throw new Error("Движок Veo не настроен — добавьте ключ Google AI Studio в Настройки → AI и сценарии");
       }
       // Переключатель «Анимация от первого кадра» действует одинаково для обоих движков.
-      const startFrame = project.settings.video.startFrame && scene.imagePath
+      const startFrame = !videoJob && project.settings.video.startFrame && scene.imagePath
         ? await readFile(scene.imagePath).catch(() => undefined)
         : undefined;
       const prompt = scene.animationPrompt?.trim() || scene.imagePrompt;
+      let knownJob = Boolean(videoJob);
       try {
-        this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: "Veo: запрос отправлен, ожидаю готовое видео" });
-        return this.storage.saveGeneratedVideo(project, scene, await this.veo.generateVideo(prompt, project.aspectRatio, startFrame));
+        this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: videoJob ? "Veo: продолжаю сохранённую операцию" : "Veo: создаю видео" });
+        const video = await this.veo.generateVideo(prompt, project.aspectRatio, startFrame, {
+          ...this.mediaSubmission(task.id, "veo", "video", signal),
+          resumeJob: videoJob?.provider === "veo" ? videoJob : undefined,
+          onJobKnown: job => {
+            knownJob = true;
+            return this.updateProviderVideoJob(task.id, job, signal);
+          },
+        });
+        return await this.storage.saveGeneratedVideo(project, scene, video);
       } catch (error) {
         // Модель видео недоступна (нет биллинга) — не роняем весь ролик: сцена собирается из кадра
         // с движением камеры. Пользователь получает готовый Final.mp4 и предупреждение в журнале.
         const message = error instanceof Error ? error.message : String(error);
-        if (!isPermanentFailure(message)) throw error;
+        if (signal?.aborted || error instanceof QueueSubmissionCheckpointError || knownJob
+          || this.isSubmissionUncertain(task.id) || !isPermanentFailure(message)) throw error;
         task.resultFallback = "static-image";
         this.emit("warn", "queue.task.video_fallback", {
           ...this.taskDetails(task),
@@ -1511,8 +1576,8 @@ export class MockGenerationPipeline {
         return this.renderer.renderScene(project, scene);
       }
     }
-    if (task.kind === "video" && project.settings.video.provider === "flow") {
-      if (project.settings.video.startFrame && project.settings.image.provider === "mock-image") {
+    if (task.kind === "video" && videoProvider === "flow") {
+      if (!task.remoteJob && project.settings.video.startFrame && project.settings.image.provider === "mock-image") {
         throw new Error(
           `${NO_RETRY_MARKER}Flow-видео остановлено: исходный кадр создан тестовым Mock Image и является BMP-заглушкой. `
           + "Выберите Nano Banana, GPT Image или AnyModel API, заново создайте изображения и затем повторите видео."
@@ -1553,7 +1618,7 @@ export class MockGenerationPipeline {
         // статикой: после восстановления FlowClient очередь должна продолжить именно его.
         throw new Error(`${NO_RETRY_MARKER}Flow-задание сохранено, но FlowClient сейчас недоступен. Повтор должен продолжить это же задание.`);
       }
-      const startFrame = project.settings.video.startFrame && scene.imagePath
+      const startFrame = !task.remoteJob && project.settings.video.startFrame && scene.imagePath
         ? await readFile(scene.imagePath).catch(() => undefined)
         : undefined;
       const prompt = scene.animationPrompt?.trim() || scene.imagePrompt;
@@ -1593,7 +1658,8 @@ export class MockGenerationPipeline {
         return this.storage.saveGeneratedVideo(project, scene, video);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (signal?.aborted || error instanceof FlowSubmissionUncertainError || remoteJobPersisted || !isPermanentFailure(message)) {
+        if (signal?.aborted || error instanceof FlowSubmissionUncertainError || error instanceof QueueSubmissionCheckpointError
+          || remoteJobPersisted || this.isSubmissionUncertain(task.id) || !isPermanentFailure(message)) {
           throw error;
         }
         task.resultFallback = "static-image";
@@ -1605,13 +1671,17 @@ export class MockGenerationPipeline {
         return this.renderer.renderScene(project, scene);
       }
     }
-    if (task.kind === "video" && project.settings.video.provider === "anymodel-video") {
+    if (task.kind === "video" && (videoProvider === "anymodel" || videoProvider === "anymodel-video")) {
       if (!this.anyModel || !(await this.anyModel.configured())) throw new Error("AnyModel не настроен");
-      this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: "AnyModel: генерирую AI-видео" });
-      const startFrame = project.settings.video.startFrame && scene.imagePath
+      this.emit("info", "queue.task.stage", { ...this.taskDetails(task), stage: videoJob ? "AnyModel: продолжаю сохранённое видео" : "AnyModel: генерирую AI-видео" });
+      const startFrame = !videoJob && project.settings.video.startFrame && scene.imagePath
         ? await readFile(scene.imagePath).catch(() => undefined)
         : undefined;
-      return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio, startFrame));
+      return this.storage.saveGeneratedVideo(project, scene, await this.anyModel.generateVideo(scene.animationPrompt, scene.durationSeconds, project.aspectRatio, startFrame, {
+        ...this.mediaSubmission(task.id, "anymodel", "video", signal),
+        resumeJob: videoJob?.provider === "anymodel" ? videoJob : undefined,
+        onJobKnown: job => this.updateProviderVideoJob(task.id, job, signal),
+      }));
     }
     if (task.kind === "video") return this.renderer.renderScene(project, scene);
     throw new Error(`Неизвестный тип задачи: ${task.kind}`);
@@ -1621,10 +1691,11 @@ export class MockGenerationPipeline {
     const raw = error instanceof Error ? error.message : String(error);
     task.progress = 0;
     task.error = cleanErrorMessage(raw);
-    task.retryBlockedReason = pendingSubmissionReason(task) ?? lumeanRetryBlockedReason(error, task);
+    task.retryBlockedReason = pendingSubmissionReason(task) ?? providerRetryBlockedReason(error, task);
     task.stage = task.remoteJob?.provider === "flow"
       ? "Flow-задание сохранено — повтор продолжит скачивание без новой генерации"
-      : task.lumeanOrder ? "Заказ Lumean сохранён — повтор проверит и скачает его без новой генерации" : undefined;
+      : task.lumeanOrder ? "Заказ Lumean сохранён — повтор проверит и скачает его без новой генерации"
+      : task.providerVideoJob ? "Видео-заказ сохранён — повтор продолжит ожидание по его ID" : undefined;
     // Нет доступа к модели — повтор даст ту же ошибку. 12 сцен × 3 попытки = 36 бессмысленных запросов.
     const localResourceFailure = /ENOSPC|ENOMEM|no space left|Недостаточно (?:места|памяти)/i.test(raw);
     if (localResourceFailure) task.stage = "Не хватает места или памяти — освободите ресурсы и нажмите «Повторить»";
@@ -1715,40 +1786,86 @@ export class MockGenerationPipeline {
       if (!task || (checkpoint && !["running", "paused"].includes(task.status))) {
         throw new Error(`${NO_RETRY_MARKER}Задача остановлена до отправки платного запроса.`);
       }
+      if (checkpoint && (task.pendingSubmission || hasPaidReceipt(task))) {
+        throw new Error(`${NO_RETRY_MARKER}Для задачи уже сохранена отправка. Новая платная заявка заблокирована.`);
+      }
       const previous = task.pendingSubmission;
       task.pendingSubmission = checkpoint;
       try { await this.persist(); }
       catch (error) {
         task.pendingSubmission = previous;
-        throw new Error(`${NO_RETRY_MARKER}Не удалось сохранить состояние отправки; новый запрос не отправлен. ${cleanErrorMessage(error instanceof Error ? error.message : String(error))}`);
+        throw new QueueSubmissionCheckpointError(`${NO_RETRY_MARKER}Не удалось сохранить контрольную точку отправки. ${cleanErrorMessage(error instanceof Error ? error.message : String(error))}`);
       }
     });
+  }
+
+  private mediaSubmission(taskId: string, provider: "anymodel" | "veo", kind: "image" | "video" | "speech", signal?: AbortSignal): PaidMediaSubmission {
+    return {
+      beforeSubmit: async () => {
+        signal?.throwIfAborted();
+        await this.updateSubmission(taskId, { provider, kind, startedAt: new Date().toISOString() });
+        if (signal?.aborted) {
+          await this.updateSubmission(taskId, undefined);
+          signal.throwIfAborted();
+        }
+      },
+      onRejected: () => this.updateSubmission(taskId, undefined),
+    };
+  }
+
+  private isSubmissionUncertain(taskId: string): boolean {
+    const task = this.tasks.find(candidate => candidate.id === taskId);
+    return Boolean(task && pendingSubmissionReason(task));
+  }
+
+  private async updateProviderVideoJob(taskId: string, job: NonNullable<QueueTask["providerVideoJob"]>, signal?: AbortSignal): Promise<void> {
+    await this.mutate(async () => {
+      const task = this.tasks.find(candidate => candidate.id === taskId);
+      if (!task) throw new Error(`${NO_RETRY_MARKER}Не найдена задача для сохранения видео-заказа.`);
+      task.providerVideoJob = job;
+      task.pendingSubmission = undefined;
+      await this.persist();
+    });
+    signal?.throwIfAborted();
   }
 
   private assertNoUncertainSubmission(projectId: string, scenes?: Set<string>, target = "all"): void {
     for (const task of this.tasks) {
       if (task.projectId !== projectId || task.status === "done") continue;
-      if (scenes && (!task.sceneId || !scenes.has(task.sceneId))) continue;
+      if (scenes && !this.matchesScene(task, scenes)) continue;
       if (target !== "all" && task.kind !== (target === "audio" ? "speech" : target)) continue;
-      const reason = pendingSubmissionReason(task);
+      const reason = pendingSubmissionReason(task) ?? (hasPaidReceipt(task) ? undefined : task.retryBlockedReason);
       if (reason) throw new Error(`${NO_RETRY_MARKER}${reason}`);
     }
+  }
+
+  private matchesScene(task: QueueTask, scenes: Set<string>): boolean {
+    return Boolean(task.sceneId && scenes.has(task.sceneId)) || Boolean(task.narrationSceneIds?.some(id => scenes.has(id)));
+  }
+
+  private requiresPaidTaskRecovery(task: QueueTask): boolean {
+    return (task.kind !== "assemble" && task.kind !== "director" && this.executing.has(task.id))
+      || (task.status !== "done" && Boolean(task.pendingSubmission || task.retryBlockedReason || hasPaidReceipt(task)));
+  }
+
+  private assertPaidTasksCanBeRemoved(tasks: QueueTask[]): void {
+    const task = tasks.find(candidate => this.requiresPaidTaskRecovery(candidate));
+    if (!task) return;
+    if (this.executing.has(task.id)) throw new Error("Медиа-задача ещё выполняется. Дождитесь сохранения ответа провайдера.");
+    const reason = pendingSubmissionReason(task) ?? task.retryBlockedReason;
+    if (reason) throw new Error(reason);
+    throw new Error("В очереди сохранён незавершённый платный заказ. Продолжите исходную задачу в очереди, чтобы использовать её ID.");
   }
 
   private async updateLumeanOrder(taskId: string, order: NonNullable<QueueTask["lumeanOrder"]>): Promise<void> {
     await this.mutate(async () => {
       const task = this.tasks.find(candidate => candidate.id === taskId);
       if (!task) throw new Error(`${NO_RETRY_MARKER}Не найдена задача для сохранения заказа Lumean.`);
-      const previousOrder = task.lumeanOrder;
-      const previousPending = task.pendingSubmission;
       task.lumeanOrder = order;
       task.pendingSubmission = undefined;
-      try { await this.persist(); }
-      catch (error) {
-        task.lumeanOrder = previousOrder;
-        task.pendingSubmission = previousPending;
-        throw error;
-      }
+      // Keep the received ID in memory if the write fails. The prior pending
+      // checkpoint stays on disk and still blocks a duplicate after a crash.
+      await this.persist();
     });
   }
 
