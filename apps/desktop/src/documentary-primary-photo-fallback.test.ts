@@ -5,7 +5,7 @@ import {mkdir,mkdtemp,rm,writeFile,stat,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
-import {type Project,type Scene,type DocumentaryCandidate} from '@gold-work/shared';
+import {documentaryAiPlanGroundingIssue,type Project,type Scene,type DocumentaryCandidate,type DocumentaryAiSearchPlan} from '@gold-work/shared';
 import {DocumentaryProjectService} from './documentary-project-service.js';
 import {DocumentarySearch} from './documentary-search.js';
 import {LocalProjectStorage} from './local-project-storage.js';
@@ -21,37 +21,53 @@ import {effectFfmpeg} from './effect-media.js';
 import {DocumentaryMediaRateLimitError,rememberDocumentaryMediaRateLimit} from './documentary-download.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const originalContext='Cutty Sark was a clipper owned by John Willis. Cutty Sark and Thermopylae were rival clipper ships.';
 const reserveScenes=[
  {number:7,narration:'Her owner, John Willis, was betting on speed.',subject:'John Willis',target:'John Willis, shipowner of Cutty Sark',
   image:['John Willis Cutty Sark owner portrait','John Willis shipowner photograph'],video:['John Willis Cutty Sark owner'],
-  reserve:'historic square-rigged clipper sailing fast under full canvas',reserveQueries:['tall ship under full sail','square rigger sailing ocean']},
- {number:12,narration:'Cross the ocean quickly.\n\nHer construction combined iron frames with wooden planking.',subject:'Cutty Sark hull',
+  reserve:'an attributed portrait of John Willis, owner of Cutty Sark',reserveQueries:['John Willis shipowner portrait','John Willis Cutty Sark owner portrait']},
+ {number:12,narration:'Cross the ocean quickly.\n\nHer construction combined iron frames with wooden planking.',subject:'Cutty Sark',
   target:'Cutty Sark hull structure showing iron frames with wooden planking',
   image:['Cutty Sark composite hull iron frames wooden planking','Cutty Sark hull interior iron framing'],video:['Cutty Sark hull interior iron frames','Cutty Sark wooden planking close up'],
-  reserve:'interior of a historic sailing ship hull showing frames and planking',reserveQueries:['Cutty Sark hull Greenwich','historic tall ship hull interior']},
- {number:15,narration:'With all her sails set, she carried around 32,000 square feet of canvas.',subject:'Cutty Sark sails',
+  reserve:'Cutty Sark hull interior showing its own iron frames and wooden planking',reserveQueries:['Cutty Sark iron frames wooden planking','Cutty Sark hull interior framing']},
+ {number:15,narration:'With all her sails set, she carried around 32,000 square feet of canvas.',subject:'Cutty Sark',
   target:'Cutty Sark with full sails set or her full sail plan',image:['Cutty Sark under full sail photograph','Cutty Sark sail plan'],
-  video:['Cutty Sark masts and rigging','Cutty Sark Greenwich rigging'],reserve:"Cutty Sark's masts, yards and rigging at Greenwich",
-  reserveQueries:['Cutty Sark Greenwich','Cutty Sark clipper ship']},
+  video:['Cutty Sark under full sail','Cutty Sark sail plan'],reserve:'Cutty Sark with visible sailcloth or an identified depiction of her full sail plan',
+  reserveQueries:['Cutty Sark full sail plan','Cutty Sark under full sail']},
  {number:27,narration:'Two ships, two crews and the same destination.',subject:'Cutty Sark and Thermopylae clipper ships',
   target:'Cutty Sark and Thermopylae as two rival sailing ships',image:['Cutty Sark and Thermopylae painting','Thermopylae clipper ship painting'],
-  video:['Cutty Sark Thermopylae clipper race','Cutty Sark clipper ship'],reserve:'two square-rigged tall ships under sail at sea',
-  reserveQueries:['two square rigged tall ships','tall ships race square sails']},
+  video:['Cutty Sark Thermopylae clipper race','Cutty Sark clipper ship'],reserve:'identified depictions of Cutty Sark and Thermopylae as the two rival ships',
+  reserveQueries:['Cutty Sark Thermopylae ships','Cutty Sark and Thermopylae painting']},
  {number:51,narration:'Under his command, Cutty Sark completed a passage from Sydney to London in just 73 days.',subject:'Cutty Sark',
-  target:'Cutty Sark under full sail',image:['Cutty Sark under full sail painting','Cutty Sark clipper Sydney London voyage'],
-  video:['Cutty Sark clipper ship Greenwich','Cutty Sark masts rigging'],reserve:'three-masted square-rigged clipper under full sail at sea',
-  reserveQueries:['three masted square rigger sailing','clipper ship full sail']},
+  target:'Cutty Sark ship',image:['Cutty Sark under full sail painting','Cutty Sark clipper Sydney London voyage'],
+  video:['Cutty Sark clipper ship Greenwich','Cutty Sark masts rigging'],reserve:'an identified view of Cutty Sark hull and rigging',
+  reserveQueries:['Cutty Sark clipper ship','Cutty Sark hull rigging']},
 ];
-// v23 saved first attempted Commons photo and an independent returned card.
+function sceneGrounding(plan:typeof reserveScenes[number]):NonNullable<DocumentaryAiSearchPlan['grounding']>{
+ const names=plan.number===27?['Cutty Sark','Thermopylae']:[plan.subject];
+ const mandatory:NonNullable<DocumentaryAiSearchPlan['grounding']>['mandatory']=names.map(required=>({kind:'identity',required,scriptQuote:originalContext}));
+ if(plan.number===12)mandatory.push({kind:'condition',required:'The ship\'s own iron frames and wooden planking',scriptQuote:'Her construction combined iron frames with wooden planking.'});
+ if(plan.number===15)mandatory.push({kind:'condition',required:'Visible sailcloth or an identified full sail-plan depiction',scriptQuote:plan.narration});
+ return {version:1,mandatory,illustrations:[plan.number===7
+  ?'An attributed portrait of John Willis illustrates the owner named in the line; another person or a ship view is not this selected portrait.'
+  :plan.number===12?'A view or attributed drawing of Cutty Sark internal hull shows its own iron frames and wooden planking.'
+  :plan.number===15?'Cutty Sark under sail or her identified sail-plan depicts the canvas described by the line; bare rigging does not.'
+  :plan.number===27?'Identified views of Cutty Sark and Thermopylae illustrate the two rival ships resolved in the original context.'
+  :'An identified view of Cutty Sark illustrates the ship that made the narrated voyage; it is not a recording of the event.'],optionalDetails:[]};
+}
+// Saved Commons cards exercise 429/cache and the wrong-person prefilter.
+// Alternate stock cards are explicitly synthetic, semantically eligible inputs
+// for the download mechanism. The saved puppy/modern-ferry mismatches belong in
+// metadata regressions, not a fixture that expects to spend an AI review on them.
 const photoTransfers=[
  {number:7,commons:['22522845','John Willis Menard.jpg','"John Willis"','Portrait of John Willism Menard'],
-  alternate:['pixabay','1850276','puppy sleeping pet owner adorable animal canine cute nature dog sleep sleeping puppy asleep portrait'],getCount:1},
+  alternate:['pixabay','fixture-owner-portrait','Portrait of John Willis, owner of Cutty Sark'],getCount:0,earlyRejected:['commons:22522845']},
  {number:15,commons:['181782405',"'Cutty Sark' at East Circular Quay, Sydney, NSW, c.1885",'"Cutty Sark" under full sail photograph',
    "The composite ship 'Cutty Sark', 921 tons, in Sydney, at east side of Circular Quay."],
   alternate:['pexels','2655976','A stunning white sailing ship with full sails glides across the calm ocean under a clear blue sky.'],getCount:1},
  {number:27,commons:['47879218','Thermopylaeclipperpainting.jpg','Thermopylae clipper ship painting','Painting of clipper ship "Thermopylae . 1 photographic print: b&w.'],
   secondCommons:['62516710','F. I. Sorensen - The tea clipper Thermopylae.jpg','"Cutty Sark" and Thermopylae painting','‚Cutty Sark‘ (left in the background) races ‚Thermopylae‘'],
-  alternate:['pexels','35562475','The Galaxy Clipper ferry cruising the Thames in London, with passengers aboard and cityscape in view.'],getCount:0},
+  alternate:['pexels','fixture-rival-ships','Historical painting of two square-rigged sailing ships at sea; identities need visual verification'],getCount:0},
  {number:51,commons:['14491631','StateLibQld 1 145047 Cutty Sark (ship).jpg','"Cutty Sark" under full sail painting',
    'Cutty Sark in full sails. Black and white photograph of a painting.'],
   secondCommons:['14491633','StateLibQld 1 145051 Cutty Sark (ship).jpg','"Cutty Sark" under full sail painting',
@@ -81,7 +97,7 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
  if(mode==='budget')t.mock.method(Date,'now',()=>now);
  const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
  let project=await projects.create({title:'Cutty Sark',topic:'Historic clipper',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
- project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:plan.narration};
+ project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:originalContext+'\n'+plan.narration};
  project.settings.voice.enabled=false;
  project.settings.stockVideoPercent=mode==='video-only'?100:60;
  project.scenes=prepareDocumentaryScript(project).slice(0,1);
@@ -89,10 +105,11 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
  scene.narration=plan.narration;scene.durationSeconds=4;
  scene.audioPath=join(root,'retained.mp3');await writeFile(scene.audioPath,'Retained voice');
  doc.selectionPlan={kind:'video',videoPercent:project.settings.stockVideoPercent};
- const identities=[{name:plan.subject,aliases:[]}];
+ const grounding=sceneGrounding(plan),identities=grounding.mandatory.filter(check=>check.kind==='identity').map(check=>({name:check.required,aliases:[]}));
  doc.requirement={text:scene.narration,entities:[plan.subject],identities,years:[],queries:plan.video,preferredKind:'video',detail:plan.target,
-   aiSearchPlan:{version:1,inputHash:'',model:'fixture',subject:plan.subject,visualTarget:plan.target,visualScope:transfer?'illustrative':'exact',
+   aiSearchPlan:{version:1,inputHash:'',model:'fixture',subject:plan.subject,visualTarget:plan.target,visualScope:'illustrative',grounding,
      preferredKind:'video',years:[],imageQueries:plan.image,videoQueries:plan.video,fallbackVideoQueries:plan.reserveQueries,fallbackVisualTarget:plan.reserve}};
+ assert.equal(documentaryAiPlanGroundingIssue(doc.requirement.aiSearchPlan,project.videoBrief.readyScript!),undefined);
  let duplicateBytes:Buffer|undefined,alternateBytes:Buffer|undefined;
  const duplicateOrigin='https://192.0.2.118';
  if(localDuplicates||remoteDuplicates){
@@ -121,7 +138,9 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
    if(acceptedVideo)await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=320x180:r=6:d=5','-c:v','libx264','-threads','1',file]);
    else if(fixturePhoto&&localDuplicates)await writeFile(file,i<2?fixturePhoto:alternateBytes!);
    else await writeFile(file,id);
-   const candidate:DocumentaryCandidate={id:`commons:${id}`,provider:'commons',kind,title:kind==='video'?plan.reserveQueries[0]!:plan.image[0]!,
+   // A query is not source attribution. The fixture's own title identifies
+   // the actual represented subject without concatenating two personal names.
+   const candidate:DocumentaryCandidate={id:`commons:${id}`,provider:'commons',kind,title:kind==='video'?plan.reserve:plan.target,
      description:'Offline fixture',localPath:fixturePhoto&&(remoteDuplicates||i===0)?undefined:file,
      downloadUrl:fixturePhoto?`${duplicateOrigin}/${id}.png`:`https://example.test/${id}`,pageUrl:`https://example.test/${id}`,
      rights:'licensed',license:'fixture',licenseUrl:'',author:'',attribution:'',query:kind==='video'?plan.reserveQueries[0]!:plan.image[0]!,
@@ -234,7 +253,8 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
  const photoTried=mode==='photo-accepted'||mode==='photo-rejected'||mode==='photo-pending'||afterCachedRejection||Boolean(transfer||duplicateBytes);
  const expected=mode==='video-accepted'?['video']:mode==='video-only'?['video','video','video']
    :['video','video',...(photoTried&&mode!=='photo-transfer-budget'&&!remoteDuplicates?['image']:[]),...(mode==='photo-rejected-then-pending'?['image']:[])];
- const transferAttempts=transfer&&'secondCommons' in transfer?['image','image','image']:['image','image'];
+ const transferAttempts=transfer&&'secondCommons' in transfer?['image','image','image']
+   :transfer&&'earlyRejected' in transfer?['image']:['image','image'];
  const expectedPreparations=transfer?['video','video',...transferAttempts]:duplicateBytes
    ?['video','video','image','image',...(localDuplicates?['image']:[])]:mode==='photo-rejected-then-network'?[...expected,'image']:expected;
  assert.deepEqual(prepared.map(candidate=>candidate.kind),expectedPreparations,JSON.stringify(result.failures));
@@ -247,10 +267,15 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
    assert.equal(result.project.scenes[1]!.documentary!.verified,true);
  }
  if(transfer){
+   if('earlyRejected' in transfer)for(const id of transfer.earlyRejected){
+     assert.ok(!prepared.some(source=>source.id===id),'Wrong-person source must stop before download: '+id);
+     assert.ok(!reviewedSources.includes(id),'Wrong-person source must not consume a paid review: '+id);
+   }
    assert.deepEqual(originGets,mode==='photo-transfer-budget'?[origin,secondOrigin]:transfer.getCount?[origin]:[]);
    const [provider,id]=transfer.alternate;
    assert.deepEqual(stockDownloads,mode==='photo-transfer-budget'?[]:[`${provider}:${id}`]);
    assert.deepEqual(reviewedSources.filter(id=>id.startsWith('pexels:')||id.startsWith('pixabay:')),stockDownloads);
+   assert.equal(result.selected,0,'Metadata eligibility and completed downloads cannot substitute for a visual approval');
  }
  assert.ok(searched.filter(q=>q.kind==='video').every(q=>plan.reserveQueries.includes(q.query)));
  const photos=searched.filter(q=>q.kind==='image');
@@ -274,7 +299,10 @@ for(const scenario of reserveCases)test(`active reserve scene ${scenario.plan.nu
    assert.match(finalDoc.searchError??'',/HTTP 429/);
    const [category,message]=mode==='photo-rejected'?['content-rejected',photoRejection]
      :mode==='photo-rejected-then-pending'?['analysis',pendingReason]:['provider-temporary',networkError.message];
-   assert.deepEqual(result.failures,[{sceneId:scene.id,sceneNumber:scene.order+1,category,message}]);
+   assert.deepEqual(result.failures.map(({nextAction,...failure})=>failure),[{sceneId:scene.id,sceneNumber:scene.order+1,category,message}]);
+   const nextAction=result.failures[0]!.nextAction??'';
+   assert.match(nextAction,category==='analysis'?/Не повторяйте платный анализ с неизвестным результатом/
+    :category==='provider-temporary'?/действующую паузу повторный запуск не снимает/:/сохранив нужные объект, человека, событие и место/);
  }
  if(mode==='photo-pending'){
    const pendingPath=join(root,'projects',project.id,'Documentary',scene.id,'primary-photo-uncertain-candidates.json');
