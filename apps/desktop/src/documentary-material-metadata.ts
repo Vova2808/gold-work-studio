@@ -35,6 +35,11 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const primaryTitle=title.split(/[,;]|\s+[—–]\s+/u)[0]??title;
   const vehicleCue=/\b(?:ships?|vessels?|clippers?|sailboats?|yachts?|warships?|aircraft|locomotives?)\b|корабл|судн|парусник|самол[её]т|локомотив/iu;
   const beverageCue=/\b(?:whisk(?:y|ey)|bourbon|cocktail|juice|beer|vodka|liqueur)\b|виски|коктейл|водк|пив[оа]|ジュース|果汁/iu;
+  const venueCue=/\b(?:pubs?|public house|taverns?|restaurants?|hotels?|railway station|subway station)\b|\b(?:паб|ресторан|гостиница)\p{L}*/iu;
+  const metadata=primaryTitle+' '+(source.description??'');
+  if(vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))&&!venueCue.test(target)
+    &&contains(primaryTitle)&&venueCue.test(metadata)&&!vehicleCue.test(metadata))
+    return refusal('источник прямо описывает заведение или станцию с совпадающим названием, а не требуемый транспортный объект.');
   if(vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))&&!beverageCue.test(target)
     &&beverageCue.test(primaryTitle)&&!vehicleCue.test(primaryTitle))
     return refusal('источник описывает напиток с совпадающим названием, а не требуемый транспортный объект.');

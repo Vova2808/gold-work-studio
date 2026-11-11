@@ -15,6 +15,16 @@ const groundedScene=(required:string,quote:string,subject:string,target=subject)
  return result;
 };
 
+test('a homonymous venue is rejected before vision, without rejecting the actual vehicle beside a venue',()=>{
+ for(const [name,target,venue] of [['Cutty Sark','Cutty Sark clipper ship','public house'],['Spitfire','Spitfire aircraft','tavern']]){
+  const current=groundedScene(name!,name!+' entered service.',name!,target!);
+  const candidate={...source(name!+' Frontage'),description:'The distinctive window frontage of the listed '+venue+', '+name+'.'};
+  assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/заведение или станцию/);
+  assert.equal(documentaryMaterialMetadataIssue(current,{...candidate,description:'The '+target+' is visible beside a '+venue+'.'}),undefined);
+  assert.equal(documentaryMaterialMetadataIssue(groundedScene(name!,name!+' is a '+venue+'.',name!,name!+' '+venue),candidate),undefined);
+ }
+});
+
 test('saved scenes 2 and 40 reject the same camera-platform mention despite a sentence-shaped identity',()=>{
  const candidate={...source('Four masted ship woodget c1895.jpg'),
   description:"photograph of a four masted sailing ship taken from the deck of 'Cutty Sark' by her captain Richard Woodget.",
