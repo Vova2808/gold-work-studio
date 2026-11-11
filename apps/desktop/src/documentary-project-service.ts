@@ -16,6 +16,7 @@ import {documentaryFallbackNarrativeFit,documentaryFallbackNarrativeIssue,docume
 import {currentDocumentaryFootageFallback,fastDocumentaryCandidateScore,planFastDocumentaryScene,resetStaleDocumentaryFootageFallback,fastDocumentaryProviders} from './documentary-fast-plan.js';
 import {QueryPlanIssuesError} from './documentary-ai-query-planner.js';
 import {currentDocumentaryAiSearchPlan,documentaryAiPlanContext} from './documentary-ai-plan-state.js';
+import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
 import {fastDocumentaryGraphicReady} from './documentary-fast-graphics.js';
 import {documentaryFootageRecoveryScenes,prepareDocumentaryFootageRecovery,restoreDocumentaryFootageRecovery,documentaryPhotoRecoveryScenes,prepareDocumentaryPhotoRecovery} from './documentary-footage-recovery.js';
 import {applyDocumentaryNativeFallback,documentaryNativeFallbackReady} from './documentary-native-fallback.js';
@@ -1785,11 +1786,15 @@ export class DocumentaryProjectService {
   }
 
   private async queryRefreshScope(project:Project,scenes:Scene[],signal?:AbortSignal):Promise<Set<string>>{
+    const originalScript=documentaryAiPlanContext(project).originalScript;
     const eligible=scenes.filter(scene=>{
       const doc=scene.documentary;
       if(!doc?.autoError||doc.autoError===documentaryMissingSelectedMaterialMessage||doc.verified||doc.pinned||doc.manualReview||doc.visualReview?.status==='accepted'
         ||!currentDocumentaryAiSearchPlan(project,scene))return false;
-      // A transient service or transfer error says nothing about the settled search goal.
+      // Legacy plans may add requirements that the script never made. Refresh
+      // only unfinished scenes, under the same paid-receipt guards below.
+      if(documentaryAiPlanGroundingIssue(doc.requirement.aiSearchPlan,originalScript))return true;
+      // A transient service or transfer error says nothing about a grounded search goal.
       const {category}=documentarySelectionFailure(scene,{fallbackCategory:'no-results'});
       return category==='content-rejected'||category==='no-results'&&diagnoseFailure(doc.autoError).category==='unknown';
     });
@@ -1910,6 +1915,15 @@ export class DocumentaryProjectService {
         plan=await this.queryPlanner.readCached?.(project,pending)??new Map<string,DocumentaryRequirement>();
         if(error instanceof QueryPlanIssuesError)issues=error.issues;
         planningError=String(error).replace(/https?:\/\/\S+/g,'[URL]').slice(0,1200);
+      }
+      for(const scene of pending){
+        const requirement=plan.get(scene.id);
+        if(!requirement)continue;
+        const groundingIssue=documentaryAiPlanGroundingIssue(requirement.aiSearchPlan,documentaryAiPlanContext(project).originalScript);
+        if(groundingIssue){
+          plan.delete(scene.id);
+          issues.push({sceneId:scene.id,sceneNumber:scene.order+1,reason:groundingIssue});
+        }
       }
       const missing=pending.filter(scene=>!plan.has(scene.id));
       const reason=issues.length?` ${formatQueryIssues(issues)}`:planningError?` Причина: ${planningError.replace(/^Error:\s*/, '').slice(0,300)}`:'';
@@ -2720,6 +2734,18 @@ export class DocumentaryProjectService {
         let uncertainScope=uncertaintyFor(oldRejectionScope);
         let uncertainCandidates=await readDocumentaryRejections(uncertainPath,uncertainScope);
         const failedTransfers=session.failedTransfers;
+        const metadataRefusals=new Set<string>();
+        const plausibleMetadata=(candidate:DocumentaryCandidate)=>{
+          const issue=documentaryMaterialMetadataIssue(scene,candidate);
+          if(!issue)return true;
+          const key=JSON.stringify([candidate.provider,candidate.id]);
+          if(!metadataRefusals.has(key)){
+            metadataRefusals.add(key);
+            recordDiagnosticEvent('info','documentary.selection.metadata-rejected',{projectId,sceneId:scene.id,
+              provider:candidate.provider,candidateId:candidate.id,reason:issue.slice(0,240),rejectedBeforeAnalysis:metadataRefusals.size});
+          }
+          return false;
+        };
         const transferFailed=(candidate:DocumentaryCandidate)=>!candidate.localPath&&failedTransfers.has(documentaryTransferFingerprint(candidate));
         const retryCandidateKey=(candidate:DocumentaryCandidate)=>JSON.stringify([candidate.id,candidate.localPath]);
         const admittedRetries=new Map<string,{checksum:string;grant?:DocumentarySelectionRetryGrant}>();
@@ -3009,7 +3035,7 @@ export class DocumentaryProjectService {
             &&!isUncertain(candidate)
             &&availableForReview(candidate)
             &&(this.intelligence!.simpleSelection||!documentaryContradictoryModelYear(candidate,requirement,context))
-            &&(this.intelligence!.simpleSelection||!documentaryMaterialMetadataIssue(scene,candidate))
+            &&plausibleMetadata(candidate)
             &&(this.intelligence!.simpleSelection||!(requirement.identities?.length&&documentaryNamedMetadataIssue(candidate)))
             &&(this.intelligence!.simpleSelection?!documentaryGameplayMetadataIssue(candidate,fastPlan.visualTarget)
               :!documentaryKnownQualityIssue(candidate,latestProject,scene))

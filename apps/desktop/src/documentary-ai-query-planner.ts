@@ -445,7 +445,7 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
   const primaryOnly=Boolean(documentaryThematicReserveIssue(value));
   const fallbackVideoQueries = primaryOnly?[]:queries(value.fallbackVideoQueries, value.subject);
   if (!imageQueries || !videoQueries || !fallbackVideoQueries
-    || !(value.preferredKind === 'image' ? imageQueries : videoQueries).length
+    || !(imageQueries.length || videoQueries.length)
     || typeof value.fallbackVisualTarget !== 'string'
     || (value.fallbackVisualTarget === '' ? fallbackVideoQueries.length > 0 : !shortText(value.fallbackVisualTarget, 500))) return;
   return {
@@ -453,7 +453,10 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
     ...(record(value.grounding) ? {grounding: structuredClone(value.grounding) as unknown as DocumentaryAiSearchPlan['grounding']} : {}),
     // Models also use unambiguous decade notation; keep its full interval rather than buying a repair.
     years: [...new Set((value.years as string[]).map(year => /^\d{3}0s$/.test(year)
-      ? `${year.slice(0, 4)}-${Number(year.slice(0, 4)) + 9}` : year))], visualScope: value.visualScope, preferredKind: value.preferredKind,
+      ? `${year.slice(0, 4)}-${Number(year.slice(0, 4)) + 9}` : year))], visualScope: value.visualScope,
+    // Portraits and maps may have no plausible video query. Prefer the actual
+    // supplied search kind instead of buying another identical planning reply.
+    preferredKind: value.preferredKind==='video'&&!videoQueries.length?'image':value.preferredKind==='image'&&!imageQueries.length?'video':value.preferredKind,
     reservePolicy:value.reservePolicy,imageQueries, videoQueries, fallbackVideoQueries,
     // An unused reserve description must not invalidate a usable primary search.
     fallbackVisualTarget: fallbackVideoQueries.length ? value.fallbackVisualTarget.trim() : '',
@@ -836,7 +839,8 @@ export class DocumentaryAiQueryPlanner {
           || doc.manualReview || doc.visualReview?.status === 'accepted' || !old || !active
           || hash(primaryOnly(old)) !== hash(primaryOnly(active)) || attemptsFor(scene.id).some(unsettledReserveAttempt)) continue;
         const saved = refreshed.get(scene.id);
-        if (saved && hash(primaryOnly(saved)) !== hash(primaryOnly(active))) proposed.set(scene.id, saved);
+        if (saved && !documentaryAiPlanGroundingIssue(saved,context.originalScript)
+          && hash(primaryOnly(saved)) !== hash(primaryOnly(active))) proposed.set(scene.id, saved);
         else if (!attemptsFor(scene.id).some(attempt => attempt.request?.promptRevision === PROMPT_REVISION && !confirmedNotSent(attempt)))
           refreshIds.add(scene.id);
       }

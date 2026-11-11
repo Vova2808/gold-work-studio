@@ -112,6 +112,42 @@ test('legacy overstrict plan is explicitly refreshed in the same paid cache whil
   assert.equal((await f.cacheFiles()).length,1,'Grounding refresh keeps the original receipt address');
 });
 
+test('portrait image queries and route geography keep usable paid plans without artificial identity or video requirements',async t=>{
+  const quote='The new canal connected the Mediterranean with the Red Sea.';
+  const scenes=scenesOf(quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+  const row=groundedEntry(scenes[0]!.id,'Suez Canal',quote);
+  Object.assign(row,{preferredKind:'video',imageQueries:['Suez Canal map'],videoQueries:[],years:[],
+    grounding:{version:1,mandatory:[{kind:'geography',required:'Mediterranean and Red Sea',scriptQuote:quote,aliases:[]}],
+      illustrations:['Route map'],optionalDetails:[]}});
+  const f=await fixture(t,async()=>JSON.stringify({scenes:[row]}));
+  const result=await f.planner().plan(project,scenes);
+  assert.equal(result.get(scenes[0]!.id)!.preferredKind,'image');
+  assert.equal(f.calls.length,1);
+  assert.equal(documentaryAiPlanGroundingIssue(result.get(scenes[0]!.id)!.aiSearchPlan,quote),undefined);
+});
+
+test('an already staged legacy refresh cannot hide the new grounding revision',async t=>{
+  const quote='After eight tea voyages, Cutty Sark left the trade for which she had been built.';
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'Cutty Sark',quote))}));
+  const scenes=scenesOf(quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+  const initial=await f.planner().plan(project,scenes);
+  scenes[0]!.documentary={requirement:initial.get(scenes[0]!.id)!,verified:false} as Scene['documentary'];
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const cache=JSON.parse(await readFile(file,'utf8')),id=scenes[0]!.id;
+  const raw=JSON.parse(cache.attempts[0].rawResponse);delete raw.scenes[0].grounding;
+  raw.scenes[0].visualTarget='Cutty Sark tea loading';
+  cache.attempts[0].request.promptRevision=9;cache.attempts[0].rawResponse=JSON.stringify(raw);
+  delete cache.plans[id].grounding;cache.plans[id].visualTarget=raw.scenes[0].visualTarget;
+  scenes[0]!.documentary!.requirement.aiSearchPlan=structuredClone(cache.plans[id]);
+  const oldRefresh=structuredClone(cache.attempts[0]);oldRefresh.request.promptRevision=10;oldRefresh.refreshIds=[id];
+  raw.scenes[0].visualTarget='Cutty Sark loading tea at a dock';oldRefresh.rawResponse=JSON.stringify(raw);
+  cache.attempts.push(oldRefresh);await writeFile(file,JSON.stringify(cache));
+  const result=await f.planner().plan(project,scenes,{refreshSceneIds:new Set([id])});
+  assert.equal(f.calls.length,2);assert.equal(result.get(id)!.aiSearchPlan!.visualTarget,'Cutty Sark');
+  assert.equal(documentaryAiPlanGroundingIssue(result.get(id)!.aiSearchPlan,quote),undefined);
+  assert.deepEqual(JSON.parse(await readFile(file,'utf8')).attempts.slice(0,2),cache.attempts);
+});
+
 async function fixture(t: { after: (fn: () => Promise<void>) => void },
   handler: (call: Call, partial?: (text: string) => void) => Promise<string> = async call =>
     response(call.data.requestedScenes.map(scene => scene.sceneId))) {
@@ -1108,7 +1144,7 @@ test('an unused reserve cannot rescue a malformed primary plan or invalid reserv
   cache.plans = {};
   cache.attempts[0].status = 'invalid';
   for (const invalid of [
-    { imageQueries: [] }, { imageQueries: [null] }, { visualTarget: '' }, { years: ['unknown'] },
+    { imageQueries: [], videoQueries: [] }, { imageQueries: [null] }, { visualTarget: '' }, { years: ['unknown'] },
     { fallbackVisualTarget: null }, { fallbackVisualTarget: 'x'.repeat(501) },
     { fallbackVideoQueries: null }, { fallbackVideoQueries: ['ship at sea'], fallbackVisualTarget: '' },
   ]) {

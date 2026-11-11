@@ -179,13 +179,12 @@ export function documentaryAiPlanGroundingIssue(plan: DocumentaryAiSearchPlan | 
     if (!check || !['identity','era','geography','action','condition'].includes(check.kind)
       || typeof check.required !== 'string' || !check.required.trim() || check.required.length > 500
       || typeof check.scriptQuote !== 'string' || !check.scriptQuote.trim() || !originalScript.includes(check.scriptQuote)
-      || (check.aliases !== undefined && (check.kind !== 'identity' || !Array.isArray(check.aliases)
+      || (check.aliases !== undefined && (!Array.isArray(check.aliases) || check.kind !== 'identity' && check.aliases.length > 0
         || check.aliases.length > 8 || check.aliases.some(alias => typeof alias !== 'string' || !alias.trim() || alias.length > 300 || !originalScript.includes(alias)
           || /^(?:(?:the|an?|sailing|clipper|steam|historic|historical|modern|preserved)\s+)*(?:ship|vessel|boat|person|man|woman|captain|owner|portrait|aircraft|plane|locomotive|train|canal|bridge|museum|he|she|it|they)$|^(?:корабль|судно|капитан|владелец|человек|портрет|самол[её]т|поезд|канал|мост|музей|он|она|оно|они)$/iu.test(alias.trim()))))) {
       return 'Обязательное условие AI-плана не подтверждено точной цитатой исходного сценария.';
     }
   }
-  if (!grounding.mandatory.some(check => check.kind === 'identity')) return 'AI-план не обосновал идентичность основного объекта.';
   if (plan!.years.length && !grounding.mandatory.some(check => check.kind === 'era')) return 'Обязательный период AI-плана не обоснован сценарием.';
 }
 export interface DocumentaryAiSearchPlan {

@@ -2,7 +2,8 @@ import type {DocumentaryCandidate,Scene} from '@gold-work/shared';
 
 const words=(value:string)=>value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const hasName=(text:string,name:string)=>(' '+words(text)+' ').includes(' '+words(name)+' ');
-const cleanIdentity=(value:string)=>value.replace(/\s+(?:(?:clipper|sailing|steam|preserved|historic)\s+)*(?:ship|vessel|sails|rigging|hull|portrait|aircraft|locomotive)$/i,'').trim();
+const cleanIdentity=(value:string)=>value.replace(/^(?:the\s+)?(?:ship|vessel|clipper|aircraft|locomotive|shipowner|captain|scientist|inventor)\s+/i,'')
+  .replace(/\s+(?:(?:clipper|sailing|steam|preserved|historic)\s+)*(?:ship|vessel|sails|rigging|hull|portrait|aircraft|locomotive)$/i,'').trim();
 
 /** Original source titles can disprove identity; neither a matching name nor
  * an unknown title proves what is actually visible in the media. */
@@ -12,13 +13,19 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const mandatory=requirement.aiSearchPlan?.grounding?.mandatory;
   const identities=(Array.isArray(mandatory)?mandatory.filter(check=>check?.kind==='identity'):undefined)
     ?.map(check=>({name:check.required,aliases:check.aliases??[]}))??requirement.identities??[];
-  const names=[...new Set(identities.flatMap(identity=>[identity.name,...identity.aliases]).map(cleanIdentity).filter(Boolean))];
+  const subject=requirement.aiSearchPlan?.subject;
+  const names=[...new Set(identities.flatMap(identity=>[identity.name,...identity.aliases,
+    ...(subject&&hasName(identity.name,subject)?[subject]:[])]).map(cleanIdentity).filter(Boolean))];
   if(!names.length)return;
   const title=source.title.replace(/\.(?:jpe?g|png|tiff?|webp)$/i,'');
   const contains=(text:string)=>names.some(name=>hasName(text,name));
   const refusal=(detail:string)=>'Исходный заголовок противоречит идентичности объекта сцены: '+detail;
-  const personTarget=/\b(?:portrait|captain|owner|scientist|inventor|artist|composer|writer|admiral|president|king|queen|born)\b|портрет|капитан|владелец|уч[её]ный|изобретател|художник|композитор|писател/iu
-    .test(scene.narration+' '+(requirement.detail??requirement.aiSearchPlan?.visualTarget??''));
+  const roles='captain|owner|scientist|inventor|artist|composer|writer|admiral|president|king|queen|капитан|владелец|учёный|ученый|изобретатель|художник|писатель';
+  const target=requirement.detail??requirement.aiSearchPlan?.visualTarget??'';
+  const personTarget=/\bportrait\b|портрет/iu.test(target)||names.some(name=>{
+    const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    return new RegExp('(?:'+roles+')[,\\s]+(?:the\\s+)?'+escaped+'\\b|'+escaped+'[,\\s]+(?:(?:became|was|is|the|a|an)\\s+){0,3}(?:'+roles+')\\b','iu').test(scene.narration+' '+target);
+  });
   // A named grave/monument is a different depicted object from its namesake.
   if(contains(title)&&/\b(?:grave|tomb|gravestone|headstone|tombstone|memorial|monument)\b|могил|надгроб|памятник/iu.test(title)
     && !/\b(?:grave|tomb|memorial|monument)\b|могил|надгроб|памятник/iu.test(requirement.detail??requirement.aiSearchPlan?.visualTarget??''))
@@ -27,6 +34,13 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const viewpoint=/\b(?:taken|view|seen|photographed|shot)\s+(?:\w+\s+){0,3}from\s+(?:the\s+)?(?:deck|board|aboard|cockpit|bridge)\s+(?:of\s+)?|\b(?:from\s+(?:the\s+)?deck\s+of|photograph(?:ed)?\s+by|painted\s+by|drawn\s+by|photo\s+by|caption(?:ed)?\s+by)\s+|\s+by\s+/iu.exec(title);
   if(viewpoint&&contains(title.slice(viewpoint.index))&&!contains(title.slice(0,viewpoint.index)))
     return refusal('нужное имя указано только как точка съёмки, автор или подпись.');
+  // A source description can explicitly distinguish its photographed subject
+  // from the camera platform, even when its filename omits the platform name.
+  const description=source.description??'';
+  const describedViewpoint=/\b(?:taken|view|seen|photographed|shot)\s+(?:\w+\s+){0,3}from\s+(?:the\s+)?(?:deck|board|aboard|cockpit|bridge)\s+(?:of\s+)?/iu.exec(description);
+  if(describedViewpoint&&!contains(title)&&contains(description.slice(describedViewpoint.index))
+    &&!contains(description.slice(0,describedViewpoint.index)))
+    return refusal('описание относит нужное имя к точке съёмки, а не к изображённому объекту.');
   if(!contains(title)&&contains(source.author??'')){
     // Archive filenames sometimes append the photographer's surname after a
     // different named subject. A bare surname by itself remains ambiguous.
@@ -82,6 +96,10 @@ function workpieceMaterials(value:string):Set<Material>{
 /** An explicitly contradictory original title is a discovery refusal, never
  * proof that a generic metal image has the required composition or use. */
 export function documentaryMaterialMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
+  const target=scene.documentary?.requirement.aiSearchPlan?.visualTarget??scene.documentary?.requirement.detail??'';
+  if(/\b(?:route|map|canal)\b|маршрут|карт[аыуе]/iu.test(target)
+    &&/\b(?:toy\s+car|origami|paper\s+boat|rolled\s+(?:up\s+)?maps?|decorative\s+maps?)\b|игрушечн|оригами|бумажн\p{L}*\s+кораблик/iu.test(source.title))
+    return 'Источник изображает декоративную карту или игрушку, а не географическую схему требуемого маршрута.';
   const identityIssue=identityMetadataIssue(scene,source);
   if(identityIssue)return identityIssue;
   const requirements=scene.documentary?.requirement.scriptRequirements;

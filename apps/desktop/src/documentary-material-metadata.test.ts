@@ -8,6 +8,26 @@ const source=(title:string)=>({title,description:'',previousFrameSearchHint:''} 
 const namedScene=(name:string,narration:string,target=name)=>({narration,documentary:{requirement:{
   text:narration,identities:[{name,aliases:[]}],entities:[name],years:[],queries:[],detail:target}}} as unknown as Scene);
 
+test('source description distinguishes the pictured ship from the camera platform',()=>{
+  const candidate={...source('Four masted ship woodget c1895.jpg'),
+    description:"photograph of a four masted sailing ship taken from the deck of 'Cutty Sark' by her captain Richard Woodget."};
+  assert.match(documentaryMaterialMetadataIssue(namedScene('Cutty Sark','Cutty Sark sailed.'),candidate)!,/точке съёмки/);
+  const valid={...source('Untitled archival photograph'),description:'Photograph of RMS Titanic taken from the deck of SS Olympic.'};
+  assert.equal(documentaryMaterialMetadataIssue(namedScene('RMS Titanic','RMS Titanic sailed.'),valid),undefined);
+});
+
+test('mentioning a captain in narration does not make the ship a person with an extended surname',()=>{
+  assert.equal(documentaryMaterialMetadataIssue(namedScene('Cutty Sark',
+    'Under captain Richard Woodget, Cutty Sark sailed quickly.'),source('Cutty Sark Greenwich View.jpg')),undefined);
+});
+
+test('decorative map props are not evidence for a geographic route',()=>{
+ const route=namedScene('Suez Canal','The canal connected two seas.','map comparing routes around Africa and through Suez Canal');
+ for(const title of ['holidays car map travel route toy car navigation norway', 'Origami paper boat from a map', 'Rolled maps on a desk'])
+  assert.match(documentaryMaterialMetadataIssue(route,source(title))!,/декоративную/);
+ assert.equal(documentaryMaterialMetadataIssue(route,source('Historic world route map')),undefined);
+});
+
 test('explicit different named vessels, aircraft, locomotives and canals are rejected from the original title before visual payment',()=>{
   const cases=[
     ['Cutty Sark','Clipper Ship \'Blackadder\' at sea with foremast and mainmast broken RMG PY8584.tiff'],
