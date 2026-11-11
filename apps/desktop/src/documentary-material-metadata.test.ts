@@ -27,6 +27,22 @@ test('a homonymous venue is rejected before vision, without rejecting the actual
  }
 });
 
+test('title adjacency to a venue does not identify the named vehicle as that venue',()=>{
+ for(const [name,target] of [['Cutty Sark','Cutty Sark clipper ship'],['Spitfire','Spitfire aircraft'],['Aurora','Aurora locomotive']]){
+  const current=groundedScene(name!,name!+' entered service.',name!,target!);
+  for(const relation of ['near a hotel','beside a tavern','next to a restaurant','in front of a pub','opposite a railway station',
+    'outside a hotel','behind a tavern','alongside a hotel facade','рядом с рестораном']){
+   const title=name+' '+relation;
+   assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined,title);
+  }
+  assert.equal(documentaryMaterialMetadataIssue(current,{...source(name+' near a hotel frontage'),description:'A hotel in the background.'}),undefined);
+  for(const title of [name+' pub',name+' hotel near the museum',name+' tavern beside a hotel','Hotel near '+name])
+   assert.match(documentaryMaterialMetadataIssue(current,source(title))??'',/заведение или станцию/,title);
+  assert.match(documentaryMaterialMetadataIssue(current,{...source(name+' Frontage beside a hotel'),
+   description:'The window frontage of the listed public house named '+name+'.'})??'',/заведение или станцию/);
+ }
+});
+
 test('saved scenes 2 and 40 reject the same camera-platform mention despite a sentence-shaped identity',()=>{
  const candidate={...source('Four masted ship woodget c1895.jpg'),
   description:"photograph of a four masted sailing ship taken from the deck of 'Cutty Sark' by her captain Richard Woodget.",

@@ -37,8 +37,11 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const beverageCue=/\b(?:whisk(?:y|ey)|bourbon|cocktail|juice|beer|vodka|liqueur)\b|виски|коктейл|водк|пив[оа]|ジュース|果汁/iu;
   const venueCue=/\b(?:pubs?|public house|taverns?|restaurants?|hotels?|railway station|subway station)\b|\b(?:паб|ресторан|гостиница)\p{L}*/iu;
   const metadata=primaryTitle+' '+(source.description??'');
-  const venueIsTitleSubject=venueCue.test(primaryTitle)
-    ||/\b(?:frontage|façade|facade)\b|фасад/iu.test(primaryTitle)&&venueCue.test(source.description??'');
+  // A venue after an explicit spatial relation is context, not the named
+  // subject's class. Keep direct venue/frontage labels before that relation.
+  const titledSubject=primaryTitle.split(/\s+(?:near|beside|next\s+to|alongside|in\s+front\s+of|behind|opposite|outside|рядом\s+с|возле|около|напротив)\s+/iu)[0]??primaryTitle;
+  const venueIsTitleSubject=venueCue.test(titledSubject)
+    ||/\b(?:frontage|façade|facade)\b|фасад/iu.test(titledSubject)&&venueCue.test(source.description??'');
   if(vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))&&!venueCue.test(target)
     &&contains(primaryTitle)&&venueIsTitleSubject&&!vehicleCue.test(metadata))
     return refusal('источник прямо описывает заведение или станцию с совпадающим названием, а не требуемый транспортный объект.');
