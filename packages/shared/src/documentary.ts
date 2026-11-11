@@ -421,7 +421,7 @@ export interface DocumentaryScene {
     automaticRecovery?: {version:1;binding:string};
     previousMaterial?: {selected?:DocumentaryCandidate;imagePath?:string;videoPath?:string;checksum?:string;visualHash?:string;visualReview?:DocumentaryScene['visualReview']}};
   searchRecovery?: { reason: string; queries: string[]; scriptEvidence?: NonNullable<DocumentaryScene['visualReview']>['scriptEvidence'];
-    rejectedRanges: Array<{ checksum: string; start: number; end: number; sourceId?: string; sourceStart?: number; sourceEnd?: number }> };
+    rejectedRanges: Array<{ checksum: string; start: number; end: number; reason?: string; sourceId?: string; sourceStart?: number; sourceEnd?: number }> };
   caption: { text: string; enabled: boolean; position: "top" | "bottom" | "center"; animation: "fade" | "slide" | "typing"; fontSize: number; color: string; backgroundColor: string; opacity: number };
   layout: "full" | "contain" | "compare";
   template?: DocumentaryTemplate;

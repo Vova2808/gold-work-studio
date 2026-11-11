@@ -44,6 +44,25 @@ async function fixture(t:test.TestContext,target='steamship at sea'){
  return {root,project,scene,receipts};
 }
 
+for(const savedReason of [undefined,'The source shows a statue rather than the required ship.'])test(`a cached range refusal never borrows another candidate's reason (${savedReason?'bound':'legacy'})`,async t=>{
+ const {root,project,scene}=await fixture(t);
+ const file=join(root,'source.mp4');
+ await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=1280x720:r=6:d=5','-c:v','libx264','-threads','1',file]);
+ scene.videoPath=file;scene.trimStartSeconds=0;scene.trimEndSeconds=4;
+ const doc=scene.documentary!;doc.checksum=createHash('sha256').update(await readFile(file)).digest('hex');
+ doc.selected={...doc.selected!,kind:'video',localPath:file,durationSeconds:5,width:1280,height:720};
+ doc.searchRecovery={reason:'A person holds a drink in another candidate.',queries:[],rejectedRanges:[
+  {checksum:doc.checksum,start:0,end:4,...(savedReason?{reason:savedReason}:{})},
+  {checksum:'different-file',start:0,end:4,reason:'A person holds a drink in another candidate.'},
+ ]};
+ const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>assert.fail('A settled refusal must not spend another paid review')},()=>root);
+ const result=await service.inspectForSelection(project,scene);
+ assert.equal(result.review.status,'rejected');assert.equal(result.usedNewAnalysis,false);
+ if(savedReason)assert.equal(result.review.reason,savedReason);
+ else assert.match(result.review.reason,/отдельная причина.*не записана/);
+ assert.doesNotMatch(result.review.reason,/drink/);
+});
+
 test('a same-object illustration receives script-grounded optional details, while an explicit portrait retains the person identity',async t=>{
  for(const portraitRequested of [false,true]){
   const {root,project,scene}=await fixture(t,'Cutty Sark ship');

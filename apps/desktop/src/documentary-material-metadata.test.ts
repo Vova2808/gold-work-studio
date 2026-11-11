@@ -50,6 +50,16 @@ test('animal keyword portraits and names before a vessel class are early refusal
   assert.equal(documentaryMaterialMetadataIssue(namedScene('Cutty Sark','Cutty Sark sailed.'),source(title)),undefined,title);
 });
 
+test('a namesake beverage and explicitly named foreign-language yacht are not the required vessel',()=>{
+ const ship=namedScene('Cutty Sark','Cutty Sark left the tea trade.','Cutty Sark sailing ship');
+ assert.match(documentaryMaterialMetadataIssue(ship,source('台湾のオレンジジュースが美味しい。光泉果汁時刻 加 Cutty Sark カティサーク'))!,/напиток/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Aurora','Aurora sailed.','Aurora ship'),source('Aurora whisky review'))!,/напиток/);
+ assert.match(documentaryMaterialMetadataIssue(ship,source('Gaston Kreps nos ensenia su velero "Reliance" botado en San Isidro'))!,/другой объект/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Aurora','Aurora sailed.'),source('Le voilier "Belle Etoile" au port'))!,/другой объект/);
+ assert.equal(documentaryMaterialMetadataIssue(ship,source('Tour of Cutty Sark ship and the whisky named after her')),undefined);
+ assert.equal(documentaryMaterialMetadataIssue(namedScene('Aurora','Aurora whisky was produced.','Aurora whisky bottle'),source('Aurora whisky review')),undefined);
+});
+
 test('explicit different named vessels, aircraft, locomotives and canals are rejected from the original title before visual payment',()=>{
   const cases=[
     ['Cutty Sark','Clipper Ship \'Blackadder\' at sea with foremast and mainmast broken RMG PY8584.tiff'],

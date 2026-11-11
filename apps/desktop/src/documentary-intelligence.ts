@@ -2827,8 +2827,11 @@ export class DocumentaryIntelligence {
     if(edgeIssue)return {status:'rejected',confidence:1,reason:edgeIssue,quality:'',sampleSeconds:[],checkedAt:new Date().toISOString(),trimStartSeconds:start,trimEndSeconds:end};
     const sameRejectedRange=(range:{checksum:string;start:number;end:number})=>range.checksum===doc.checksum
       &&Math.abs(range.start-start)<.01&&Math.abs(range.end-end)<.01;
-    if(video&&doc.searchRecovery?.rejectedRanges.some(sameRejectedRange)){
-      const rejected:Review={status:'rejected',confidence:1,reason:doc.searchRecovery.reason||'Этот отрезок уже отклонён; повторный просмотр не отправлен.',quality:'',sampleSeconds:[],checkedAt:new Date().toISOString(),trimStartSeconds:start,trimEndSeconds:end};
+    const previousRejection=video?doc.searchRecovery?.rejectedRanges.find(sameRejectedRange):undefined;
+    if(previousRejection){
+      // searchRecovery.reason belongs to the last candidate, not necessarily
+      // this checksum/range. Never attribute that other source's pixels here.
+      const rejected:Review={status:'rejected',confidence:1,reason:previousRejection.reason||'Этот отрезок уже отклонён; отдельная причина для него не записана в старом кэше. Исходные AI-ответы сохранены, повторный просмотр не отправлен.',quality:'',sampleSeconds:[],checkedAt:new Date().toISOString(),trimStartSeconds:start,trimEndSeconds:end};
       // Older builds recorded uncertain OCR/ctime outcomes as content refusals.
       // Only their exact local review may request a cache-only reinterpretation;
       // missing, unresolved and genuinely rejected answers never open a POST.
@@ -2840,7 +2843,7 @@ export class DocumentaryIntelligence {
             &&saved.sourceText?.kind==='uncertain'&&saved.sourceText.text==='');
       if(knownUncertain&&!recoveringUncertainRange){
         const retry={...scene,trimStartSeconds:start,trimEndSeconds:end,documentary:{...doc,
-          searchRecovery:{...doc.searchRecovery,rejectedRanges:doc.searchRecovery.rejectedRanges.filter(range=>!sameRejectedRange(range))}}};
+          searchRecovery:{...doc.searchRecovery!,rejectedRanges:doc.searchRecovery!.rejectedRanges.filter(range=>!sameRejectedRange(range))}}};
         try{
           const review=await this.inspection.run({...this.inspection.getStore()!,cacheOnly:true},()=>this.inspectIllustration(project,retry,progress,true));
           if(review.status==='accepted')return review;

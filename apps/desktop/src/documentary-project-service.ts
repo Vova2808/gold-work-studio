@@ -3388,7 +3388,7 @@ export class DocumentaryProjectService {
                     scriptEvidence:review.scriptEvidence??latest.documentary!.searchRecovery?.scriptEvidence,
                     rejectedRanges:[...(latest.documentary!.searchRecovery?.rejectedRanges??[]),
                       ...(review.status==='rejected'&&kind==='video'&&current.documentary?.checksum&&review.trimStartSeconds!==undefined&&review.trimEndSeconds!==undefined
-                        ?[{checksum:current.documentary.checksum,start:review.trimStartSeconds,end:review.trimEndSeconds,sourceId:candidate.id,
+                        ?[{checksum:current.documentary.checksum,start:review.trimStartSeconds,end:review.trimEndSeconds,reason:review.reason,sourceId:candidate.id,
                           sourceStart:(current.documentary.selected?.excerpt?.startSeconds??0)+review.trimStartSeconds,
                           sourceEnd:(current.documentary.selected?.excerpt?.startSeconds??0)+review.trimEndSeconds}]:[])].slice(-24)},
                   candidates: latest.documentary!.candidates.map(item => item.id === candidate.id ? { ...item, concerns: [...item.concerns, review.reason] } : item) } };
