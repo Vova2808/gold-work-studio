@@ -21,6 +21,8 @@ test('a homonymous venue is rejected before vision, without rejecting the actual
   const candidate={...source(name!+' Frontage'),description:'The distinctive window frontage of the listed '+venue+', '+name+'.'};
   assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/заведение или станцию/);
   assert.equal(documentaryMaterialMetadataIssue(current,{...candidate,description:'The '+target+' is visible beside a '+venue+'.'}),undefined);
+  assert.equal(documentaryMaterialMetadataIssue(current,{...source(name!),description:name+' at the museum, with a hotel visible in the background.'}),undefined);
+  assert.equal(documentaryMaterialMetadataIssue(current,{...source(name!),description:name+' outside the museum, near a hotel.'}),undefined);
   assert.equal(documentaryMaterialMetadataIssue(groundedScene(name!,name!+' is a '+venue+'.',name!,name!+' '+venue),candidate),undefined);
  }
 });
