@@ -144,8 +144,8 @@ export function documentarySavedContextIssue(project:Project,saved:Scene):string
   if(doc.requirement.aiSearchPlan&&!currentDocumentaryAiSearchPlan(project,scene))return 'Контекст AI-плана изменился. Материал и озвучка сохранены; подготовьте запросы и проверьте текущую цель.';
   if(doc.nativeFallback&&!doc.selected)return documentaryNativeFallbackReady(project,scene)?undefined:'Графическая сцена больше не соответствует текущей реплике или длительности озвучки.';
   const graphic=doc.motionGraphic;
-  if(graphic?.routeComparison){
-    if(!graphic.enabled||graphic.kind!=='map-route'||doc.selected||scene.imagePath||scene.videoPath)
+  if(graphic?.enabled&&graphic.routeComparison){
+    if(graphic.kind!=='map-route'||doc.selected||scene.imagePath||scene.videoPath)
       return 'Сравнение маршрутов должно быть отдельной схемой без стокового материала.';
     return savedRouteComparisonIssue(project,scene);
   }
