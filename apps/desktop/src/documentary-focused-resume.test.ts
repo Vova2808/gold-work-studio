@@ -14,7 +14,7 @@ import {prepareDocumentaryScript} from './documentary-plan.js';
 import {documentaryIllustrationApproval} from './documentary-context-approval.js';
 import {effectFfmpeg} from './effect-media.js';
 
-test('failed physical task merges fresh focused discovery before paying to inspect generic saved cards',async t=>{
+for(const duplicate of [false,true])test(`failed physical task merges focused discovery and preserves saved duplicate=${duplicate}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-focused-resume-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live requests in orchestration fixture'));
  const file=join(root,'fixture.png');await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720','-frames:v','1',file]);
@@ -38,13 +38,13 @@ test('failed physical task merges fresh focused discovery before paying to inspe
  const stale=candidate('stale','Aurora at a museum'),fresh=candidate('fresh','Aurora under red sails');
  assert.equal(documentaryMaterialMetadataIssue(scene,fresh),undefined);
  assert.equal(selectSimpleDocumentaryCandidates([stale,fresh],documentarySimpleCandidatePriority(p,scene,'image'))[0]?.id,'fresh');
- doc.candidates=[stale];doc.autoError='Previous search did not find the visible condition.';
+ doc.candidates=duplicate?[stale,fresh]:[stale];doc.autoError='Previous search did not find the visible condition.';
  p=await projects.mutate(p.id,()=>p);let commonsQueries=0;const inspected:string[]=[];const trace:string[]=[];
  const search=new DocumentarySearch();search.search=async input=>{
   trace.push(`search:${input.providers?.join(',')}`);
   if(input.providers?.includes('commons')){
    commonsQueries++;assert.deepEqual(input.visualConstraints,['red sails']);
-   await new Promise(resolve=>setTimeout(resolve,20));trace.push('fresh returned');return {candidates:[fresh],sources:[]};
+   await new Promise(resolve=>setTimeout(resolve,20));trace.push('fresh returned');return {candidates:[duplicate?{...fresh,localPath:undefined}:fresh],sources:[]};
   }
   return {candidates:input.providers?.includes('local')?[stale]:[],sources:[]};
  };

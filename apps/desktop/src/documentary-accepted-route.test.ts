@@ -97,6 +97,12 @@ for(const verified of [false,true])test(`saved footage with verified=${verified}
   assert.ok(shot.videoPath);assert.equal(shot.documentary!.motionGraphic!.enabled,false);
   assert.deepEqual(shot.documentary!.motionGraphic!.routeComparison,before.documentary!.motionGraphic!.routeComparison);
 
+  await f.projects.mutate(project.id,current=>({settings:{...current.settings,assembly:{...current.settings.assembly,
+    documentary:{...current.settings.assembly.documentary!,autoMotionGraphics:true}}}}));
+  const afterRouteStage=await f.service.prepareRouteComparisons(project.id,[{sceneId:'another-failed-scene',category:'content-rejected'}]);
+  assert.equal(afterRouteStage.scenes[0]!.documentary!.verified,true,'Disabled retained route cannot revoke accepted media in the later route stage');
+  assert.deepEqual(afterRouteStage.scenes[0]!.documentary,scene.documentary);
+
   const changed=structuredClone(project);changed.scenes[0]!.trimStartSeconds=1;
   assert.match(documentarySavedContextIssue(changed,changed.scenes[0]!)??'',/После просмотра изменился/);
   assert.ok(missingAssemblyInputs(changed).length,'Disabled route must still validate actual media evidence');

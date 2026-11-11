@@ -3096,7 +3096,9 @@ export class DocumentaryProjectService {
               // A library card keeps its original provider, so candidate.provider
               // cannot tell whether the fresh Commons lane has finished.
               if(!commonsDiscovered)await fastBatches.waitFor('commons');
-              resumeBatch=[...(first.value??[]),...fastBatches.takeReady(),...resumeBatch];
+              // Dedup keeps the first source: retain prepared local copies when
+              // discovery returns the same URL without its saved file binding.
+              resumeBatch=[...resumeBatch,...(first.value??[]),...fastBatches.takeReady()];
             }finally{session.accountSearch(scene.id,kind,Date.now()-waiting);}
           }
           selectionBatches: while(!accepted&&canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
@@ -3863,6 +3865,7 @@ export class DocumentaryProjectService {
     for(const scene of before.scenes){
       signal?.throwIfAborted();const doc=scene.documentary;if(!doc||scene.includeInAssembly===false)continue;
       if(doc.motionGraphic?.routeComparison){
+        if(doc.motionGraphic.enabled===false)continue;
         const restored=documentaryRouteApprovalCandidate(before,scene);
         if(restored!==scene&&await hasCompletedRouteComparison(this.storage.projectDirectory(projectId),before,scene))replacements.set(scene.id,restored);
         else{
