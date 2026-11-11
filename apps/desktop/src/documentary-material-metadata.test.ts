@@ -37,6 +37,19 @@ test('a namesake building and a property listing cannot stand in for a person or
   source('John Willis portrait with a skyline background')),undefined);
 });
 
+test('animal keyword portraits and names before a vessel class are early refusals, not name-match evidence',()=>{
+ const person=namedScene('John Willis','Her owner, John Willis, was betting on speed.','John Willis portrait');
+ assert.match(documentaryMaterialMetadataIssue(person,source('puppy sleeping pet owner adorable animal canine cute nature dog sleep sleeping puppy asleep portrait'))!,/животное/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Ada Lovelace','Show Ada Lovelace.','Ada Lovelace portrait'),source('kitten cat portrait'))!,/животное/);
+ for(const title of ['A woman holding a puppy','Dog with its owner','John Willis with a dog'])
+  assert.equal(documentaryMaterialMetadataIssue(person,source(title)),undefined,title);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Cutty Sark','Cutty Sark sailed.','Cutty Sark ship'),
+  source('The Galaxy Clipper ferry cruising the Thames in London, with passengers aboard and cityscape in view.'))!,/другой объект/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('RMS Titanic','RMS Titanic sailed.'),source('SS Olympic ocean liner underway'))!,/другой объект/);
+ for(const title of ['Cutty Sark clipper at Greenwich','Unknown ferry on a river','Sailing ship at sea'])
+  assert.equal(documentaryMaterialMetadataIssue(namedScene('Cutty Sark','Cutty Sark sailed.'),source(title)),undefined,title);
+});
+
 test('explicit different named vessels, aircraft, locomotives and canals are rejected from the original title before visual payment',()=>{
   const cases=[
     ['Cutty Sark','Clipper Ship \'Blackadder\' at sea with foremast and mainmast broken RMG PY8584.tiff'],

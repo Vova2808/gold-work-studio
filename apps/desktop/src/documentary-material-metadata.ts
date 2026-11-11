@@ -29,6 +29,11 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
     return new RegExp('(?:'+roles+')[,\\s]+(?:the\\s+)?'+escaped+'\\b|'+escaped+'[,\\s]+(?:(?:became|was|is|the|a|an)\\s+){0,3}(?:'+roles+')\\b','iu').test(scene.narration+' '+target);
   });
   const primaryTitle=title.split(/[,;]|\s+[—–]\s+/u)[0]??title;
+  // Stock keyword lists may include "portrait" or "owner" while naming only
+  // an animal. An explicit human/animal scene remains undecided for pixels.
+  if(personTarget&&!contains(title)&&/\b(?:pupp(?:y|ies)|dogs?|kittens?|cats?|horses?|birds?|lions?)\b|щенок|щенки|котёнок|котенок|собак/iu.test(primaryTitle)
+    &&!/\b(?:man|woman|child|boy|girl|people|person|couple|holding|petting)\b|\bwith\s+(?:(?:its|their|the|an?)\s+)?owner\b|человек|женщин|мужчин|ребён|ребен/iu.test(primaryTitle))
+    return refusal('основной предмет источника — животное, а требуется конкретный человек.');
   if(personTarget&&!contains(primaryTitle)&&/\b(?:ships?|vessels?|clippers?|steamships?|ship scale models|aircraft|airplanes?|locomotives?|engines?|hull|rigging|deck)\b|корабл|судн|самол[её]т|локомотив/iu.test(primaryTitle)
     &&!/\b(?:portraits?|headshots?|captain|owner|crew|man|woman|person)\b|портрет|капитан|владелец|экипаж/iu.test(primaryTitle))
     return refusal('основной предмет источника — объект или его деталь, а требуется конкретный человек.');
@@ -77,9 +82,10 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   }
   const named=/(?:\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive|[Cc]anal|[Bb]ridge|[Pp]ortrait\s+of|[Cc]aptain)\s+)[‘'“"]([^’'”"]+)[’'”"]|[‘'“"]([^’'”"]+)[’'”"]\s*\((?:ship|aircraft|locomotive|canal|bridge)\)|\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s+(?:named\s+)?([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,3})/u.exec(title);
   const sailing=/^(?:The\s+)?([A-Z][\p{L}’'-]+(?:\s+[A-Z][\p{L}’'-]+){0,3})\s+\([^)]*\)\s+(?:Sets?\s+Sail|Under\s+Sail)/u.exec(title);
+  const namedBeforeClass=/^(?:The\s+)?([A-Z][\p{L}’'-]+(?:\s+(?:[A-Z][\p{L}’'-]+|\d+)){0,3})\s+(?:ferry|steamship|ocean liner|clipper|warship|locomotive|aircraft)\b/u.exec(title);
   const place=names.some(name=>/\b(?:canal|bridge|palace|cathedral|ocean|sea|river|gulf|cape)\b/i.test(name))
     ?/\b([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,2}\s+(?:Canal|Bridge|Palace|Cathedral|Ocean|Sea|River|Stream)|(?:Cape|Gulf)\s+(?:of\s+)?[A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+)?)\b/u.exec(title):undefined;
-  const declared=named?.[1]??named?.[2]??named?.[3]??sailing?.[1]??place?.[1];
+  const declared=named?.[1]??named?.[2]??named?.[3]??sailing?.[1]??namedBeforeClass?.[1]??place?.[1];
   const genericSubject=/^(?:(?:at|in|on|the|a|an|sea|ocean|harbour|harbor|port|sailing|sail|under|steam|full|four|masted|deck|view|historic|historical|archival|museum|unknown|unidentified)\s*)+$/i;
   if(declared&&!genericSubject.test(declared)&&!names.some(name=>hasName(declared, name)||hasName(name,declared)))return refusal('источник явно называет другой объект: '+declared+'.');
   if(personTarget){

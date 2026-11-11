@@ -187,6 +187,30 @@ test('a fully received malformed grounding refresh gets at most one repair while
  assert.deepEqual(saved.attempts[0],cache.attempts[0]);
 });
 
+test('a grounded older refresh cannot hide the current contextual illustration revision or cause repeated payment',async t=>{
+ const quote='John Willis owned Cutty Sark.';
+ const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,
+  f.calls.length===1?'John Willis':'Cutty Sark',quote,{visualTarget:f.calls.length===1?'John Willis at a desk':'Cutty Sark'}))}));
+ const scenes=scenesOf(quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+ const initial=await f.planner().plan(project,scenes),id=scenes[0]!.id;
+ scenes[0]!.documentary={requirement:initial.get(id)!,verified:false} as Scene['documentary'];
+ const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+ const cache=JSON.parse(await readFile(file,'utf8'));
+ cache.attempts[0].request.promptRevision=10;
+ const oldRefresh=structuredClone(cache.attempts[0]);oldRefresh.request.promptRevision=11;oldRefresh.refreshIds=[id];
+ const raw=JSON.parse(oldRefresh.rawResponse);raw.scenes[0].visualTarget='John Willis portrait';oldRefresh.rawResponse=JSON.stringify(raw);
+ cache.attempts.push(oldRefresh);
+ scenes[0]!.documentary!.requirement.aiSearchPlan!.visualTarget='John Willis portrait';
+ await writeFile(file,JSON.stringify(cache));
+ const options={refreshSceneIds:new Set([id])};
+ const result=await f.planner().plan(project,scenes,options);
+ assert.equal(result.get(id)!.aiSearchPlan!.visualTarget,'Cutty Sark');assert.equal(f.calls.length,2);
+ scenes[0]!.documentary!.requirement=result.get(id)!;
+ assert.deepEqual(await f.planner().plan(project,scenes,options),result);
+ assert.equal(f.calls.length,2,'A complete current-revision refresh must be reused');
+ assert.deepEqual(JSON.parse(await readFile(file,'utf8')).attempts.slice(0,2),cache.attempts,'Original paid replies are retained');
+});
+
 test('an already staged legacy refresh cannot hide the new grounding revision',async t=>{
   const quote='After eight tea voyages, Cutty Sark left the trade for which she had been built.';
   const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'Cutty Sark',quote))}));

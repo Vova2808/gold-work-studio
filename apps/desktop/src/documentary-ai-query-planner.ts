@@ -492,7 +492,7 @@ function cachedPlan(value: unknown, inputHash: string, model: string): Documenta
 
 /** Reuse complete paid answers rejected by an older validator; never settle an unknown submission. */
 function completedRawPlans(cache: unknown, inputHash: string, model: string,
-  mode: 'ordinary' | 'previous' | 'refresh' = 'ordinary'): Map<string, DocumentaryAiSearchPlan> {
+  mode: 'ordinary' | 'previous' | 'refresh' = 'ordinary', minimumRevision = 0): Map<string, DocumentaryAiSearchPlan> {
   const plans = new Map<string, DocumentaryAiSearchPlan>();
   if (!record(cache) || cache.version !== VERSION || cache.inputHash !== inputHash || cache.model !== model
     || !Array.isArray(cache.attempts)) return plans;
@@ -505,7 +505,7 @@ function completedRawPlans(cache: unknown, inputHash: string, model: string,
     if (mode === 'previous' && (typeof revision !== 'number' || revision >= PROMPT_REVISION)) continue;
     const refreshIds = attempt.refreshIds;
     if (refreshIds !== undefined && !Array.isArray(refreshIds)) continue;
-    if (mode === 'refresh' && (typeof revision !== 'number' || !Array.isArray(refreshIds))) continue;
+    if (mode === 'refresh' && (typeof revision !== 'number' || revision < minimumRevision || !Array.isArray(refreshIds))) continue;
     try {
       const input: unknown = JSON.parse(attempt.request.payload);
       if (!record(input) || !Array.isArray(input.contextScenes) || !Array.isArray(input.requestedScenes)) continue;
@@ -835,12 +835,15 @@ export class DocumentaryAiQueryPlanner {
     const proposed = new Map<string, DocumentaryAiSearchPlan>();
     if (!fallbackOnly && !inspect && !options.retryToken && options.refreshSceneIds?.size) {
       const previous = completedRawPlans(cache, inputHash, model, 'previous');
+      // A completed older refresh remains readable, but cannot stand in for
+      // the corrected instructions when an unfinished scene explicitly refreshes.
+      const currentRefreshed = completedRawPlans(cache, inputHash, model, 'refresh', PROMPT_REVISION);
       for (const scene of scenes) {
         const doc = scene.documentary, old = previous.get(scene.id), active = cache.plans[scene.id];
         if (!options.refreshSceneIds.has(scene.id) || scene.includeInAssembly === false || !doc || doc.verified || doc.pinned
           || doc.manualReview || doc.visualReview?.status === 'accepted' || !old || !active
           || hash(primaryOnly(old)) !== hash(primaryOnly(active)) || attemptsFor(scene.id).some(unsettledReserveAttempt)) continue;
-        const saved = refreshed.get(scene.id);
+        const saved = currentRefreshed.get(scene.id);
         if (saved && !documentaryAiPlanGroundingIssue(saved,context.originalScript)
           && hash(primaryOnly(saved)) !== hash(primaryOnly(active))) proposed.set(scene.id, saved);
         else if (attemptsFor(scene.id).filter(attempt => attempt.request?.promptRevision === PROMPT_REVISION && !confirmedNotSent(attempt)).length < MAX_ATTEMPTS)
