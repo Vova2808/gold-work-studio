@@ -14,7 +14,7 @@ import {prepareDocumentaryScript} from './documentary-plan.js';
 import {effectFfmpeg} from './effect-media.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'='subject'){
+async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'|'proposed-reserve'='subject'){
  const root=await mkdtemp(join(tmpdir(),'gws-task-rejection-scope-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live network'));
  const file=join(root,'saved-source.mp4');
@@ -50,6 +50,8 @@ async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'
  }else if(change==='grounding'){
   plan.grounding!.mandatory.push({kind:'condition',required:'Visible red sailcloth',scriptQuote:narration});
   plan.grounding!.illustrations=['An identified Aurora view with its red sailcloth visible.'];
+ }else if(change==='proposed-reserve'){
+  plan.fallbackVisualTarget='Aurora ship near a harbour';plan.fallbackVideoQueries=['Aurora harbour view'];
  }else{
   doc.requirement.footageFallback={version:1,target,queries:[target],originalTarget:target,narration,kind:'video',reason:'Old search wording'};
   replacement.footageFallback={...doc.requirement.footageFallback,queries:['Aurora historic vessel'],reason:'New search wording'};
@@ -124,6 +126,14 @@ test('a changed mandatory condition and representation invalidates old task refu
  const result=await f.service.planSearch(f.project.id,[f.scene.id]);
  assert.equal(result.scenes[0]!.documentary!.searchRecovery,undefined);assert.equal((await f.archives()).length,1);
  assert.equal(result.scenes[0]!.documentary!.requirement.aiSearchPlan!.visualTarget,f.scene.documentary!.requirement.aiSearchPlan!.visualTarget);
+});
+
+test('editing an inactive proposed reserve preserves the primary content refusals',async t=>{
+ const f=await fixture(t,'proposed-reserve'),before=structuredClone(f.scene);
+ const result=await f.service.planSearch(f.project.id,[f.scene.id]);
+ assert.equal(result.scenes[0]!.documentary!.requirement.footageFallback,undefined);
+ assert.deepEqual(result.scenes[0]!.documentary!.searchRecovery,before.documentary!.searchRecovery);
+ assert.equal((await f.archives()).length,0);
 });
 
 test('archive failure does not partially apply the new target or remove its old refusals',async t=>{

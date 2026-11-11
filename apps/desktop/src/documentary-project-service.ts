@@ -663,7 +663,7 @@ function samePlannedVisualTask(previous:Scene,next:Scene):boolean {
   const grounding=(value:typeof old)=>value?.grounding?{mandatory:value.grounding.mandatory,illustrations:value.grounding.illustrations}:undefined;
   return Boolean(old&&plan&&previous.narration===next.narration&&before?.text===after?.text&&old.visualTarget===plan.visualTarget
     &&old.subject===plan.subject&&old.visualScope===plan.visualScope&&isDeepStrictEqual(old.years,plan.years)
-    &&old.fallbackVisualTarget===plan.fallbackVisualTarget&&isDeepStrictEqual(grounding(old),grounding(plan))
+    &&isDeepStrictEqual(grounding(old),grounding(plan))
     &&isDeepStrictEqual(fallback(before),fallback(after)));
 }
 
@@ -2942,6 +2942,7 @@ export class DocumentaryProjectService {
             ?`${requirement.identities[0]!.name} ${linkedModelYear}`:undefined;
           const queries=datedModel&&!plannedQueries.some(query=>query.toLowerCase()===datedModel.toLowerCase())
             ?[datedModel,...plannedQueries].slice(0,4):plannedQueries;
+          let commonsDiscovered=false;
           const discover = async (query: string, providers: NonNullable<DocumentarySearchInput["providers"]>,signal=this.downloadControllers.get(projectId)?.signal) => {
             // Search results are transient until the final shortlist. Persisting
             // the whole project after EVERY provider query flooded the UI/IPC.
@@ -2953,6 +2954,7 @@ export class DocumentaryProjectService {
                 currentDocumentaryAiSearchPlan(project,taskScene)?.grounding?.mandatory
                   .filter(check=>check.kind==='condition'||check.kind==='action').map(check=>check.required)}:{}),
               years:this.intelligence?.simpleSelection?[]:requirement.years },true,signal,Boolean(this.intelligence?.simpleSelection)));
+            if(providers.includes('commons'))commonsDiscovered=true;
             if(kind==='video'&&providers.includes('web'))session.rememberVideos(requirement,result.candidates);
             for (const source of result.sources.filter(source => source.error)) {
               const message = `${source.provider}: ${source.error}`;
@@ -3082,6 +3084,21 @@ export class DocumentaryProjectService {
           // existing download/cache/inspection gates before starting discovery.
           let resumeBatch=resumedCandidates.length?resumedCandidates:undefined;
           try {
+          // A failed condition-specific photo search may retain only generic
+          // old cards. Merge a fresh bounded source batch before spending the
+          // photo review budget on those cards again. Already prepared/current
+          // accepted media is restored earlier through the cache-only path.
+          if(resumeBatch&&fastBatches&&kind==='image'&&taskScene.documentary?.autoError
+            &&currentDocumentaryAiSearchPlan(project,taskScene)?.grounding?.mandatory.some(check=>check.kind==='condition'||check.kind==='action')){
+            const waiting=Date.now();
+            try{
+              const first=await fastBatches.next();
+              // A library card keeps its original provider, so candidate.provider
+              // cannot tell whether the fresh Commons lane has finished.
+              if(!commonsDiscovered)await fastBatches.waitFor('commons');
+              resumeBatch=[...(first.value??[]),...fastBatches.takeReady(),...resumeBatch];
+            }finally{session.accountSearch(scene.id,kind,Date.now()-waiting);}
+          }
           selectionBatches: while(!accepted&&canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
           waitingAt=Date.now();
           let batch:IteratorResult<DocumentaryCandidate[]>;
