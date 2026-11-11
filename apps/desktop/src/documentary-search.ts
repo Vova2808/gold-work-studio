@@ -196,6 +196,8 @@ export class DocumentarySearch {
   private providerWork = new Map<string,Set<Promise<DocumentaryCandidate[]>>>();
   private signalIds = new WeakMap<AbortSignal,number>();
   private nextSignalId = 0;
+  private commonsNativeCache=new Map<string,{expiresAt:number;candidates:DocumentaryCandidate[]}>();
+  private commonsNativeInFlight=new Map<string,{controller:AbortController;subscribers:number;work:Promise<DocumentaryCandidate[]>}>();
   constructor(private readonly stock?: Pick<StockClient, "search">, private readonly fetcher: Fetcher = globalThis.fetch,
     private readonly cachePath?: string, private readonly local: (query: string) => Promise<DocumentaryCandidate[]> = async () => [],
     private readonly youtube?: Pick<DocumentaryYouTube, "search">,
@@ -372,6 +374,48 @@ export class DocumentarySearch {
   }
 
   private async commonsSearch(query:string,kind:string,signal?:AbortSignal,automatic=false):Promise<DocumentaryCandidate[]>{
+    if(!automatic)return this.fetchCommons(query,kind,signal,automatic);
+    signal?.throwIfAborted();
+    // Different scene queries can reduce to the same title/feature lookup.
+    // Share only this native response, never their distinct web fallbacks.
+    // Keep the memo short-lived and in-memory; discovery can refresh after a
+    // minute, and manual searches retain their original request behavior.
+    const key=JSON.stringify([query,kind,automatic]),now=Date.now();
+    for(const [entry,value]of this.commonsNativeCache)if(value.expiresAt<=now)this.commonsNativeCache.delete(entry);
+    const cached=this.commonsNativeCache.get(key);
+    if(cached)return structuredClone(cached.candidates);
+    let flight=this.commonsNativeInFlight.get(key);
+    if(!flight){
+      const controller=new AbortController();
+      const work=this.fetchCommons(query,kind,controller.signal,automatic).then(candidates=>{
+        if(!controller.signal.aborted){
+          while(this.commonsNativeCache.size>=64)this.commonsNativeCache.delete(this.commonsNativeCache.keys().next().value!);
+          this.commonsNativeCache.set(key,{expiresAt:Date.now()+60_000,candidates:structuredClone(candidates)});
+        }
+        return candidates;
+      }).finally(()=>{if(this.commonsNativeInFlight.get(key)===flight)this.commonsNativeInFlight.delete(key);});
+      flight={controller,subscribers:0,work};this.commonsNativeInFlight.set(key,flight);
+    }
+    flight.subscribers++;
+    let abort:()=>void=()=>{};
+    try{
+      const result=await (signal?Promise.race([flight.work,new Promise<never>((_resolve,reject)=>{
+        abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});
+        if(signal.aborted)abort();
+      })]):flight.work);
+      signal?.throwIfAborted();
+      return structuredClone(result);
+    }finally{
+      signal?.removeEventListener('abort',abort);flight.subscribers--;
+      // One scene's cancellation must not cancel a sibling's shared request.
+      if(!flight.subscribers&&this.commonsNativeInFlight.get(key)===flight){
+        this.commonsNativeInFlight.delete(key);
+        flight.controller.abort(new DOMException('Поиск остановлен','AbortError'));
+      }
+    }
+  }
+
+  private async fetchCommons(query:string,kind:string,signal?:AbortSignal,automatic=false):Promise<DocumentaryCandidate[]>{
     const provider='commons',url=new URL('https://commons.wikimedia.org/w/api.php');
     for(const [key,value] of Object.entries({action:'query',format:'json',formatversion:'2',generator:'search',
       // Identity refusals and already-used sources can exhaust the first eight.
