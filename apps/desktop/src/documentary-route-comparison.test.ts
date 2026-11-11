@@ -127,6 +127,20 @@ test('editing script invalidates the accepted diagram binding',()=>{
   const {project,scene,raw}=routeFixture();const next=attachRouteComparison(project,scene,validateRouteComparison(project,scene,raw,'fixture'));project.videoBrief!.readyScript+=' Another voyage.';
   assert.match(savedRouteComparisonIssue(project,next)!,/изменился/);
 });
+test('correction repairs a mismatched label and citation pair without changing valid route evidence',()=>{
+  const {project,scene,raw}=routeFixture();
+  const mismatched=structuredClone(raw);
+  mismatched.routes[0]!.quote=raw.routes[1]!.quote;
+  assert.throws(()=>validateRouteComparison(project,scene,mismatched,'fixture'),/Подпись маршрута/);
+  assert.doesNotThrow(()=>assertRouteComparisonCorrection(project,mismatched,raw));
+  assert.doesNotThrow(()=>validateRouteComparison(project,scene,raw,'fixture'));
+  const changedValidPair=structuredClone(raw);
+  changedValidPair.routes[1]!.label='shortcut';
+  assert.throws(()=>assertRouteComparisonCorrection(project,mismatched,changedValidPair),/изменила/);
+  const changedStop=structuredClone(raw);
+  changedStop.routes[0]!.stops[0]!.name='Shanghai';
+  assert.throws(()=>assertRouteComparisonCorrection(project,mismatched,changedStop),/изменила/);
+});
 test('different bends around the same named intermediate stop do not establish two alternatives',()=>{
   const {project,scene,raw}=routeFixture(),value=validateRouteComparison(project,scene,raw,'fixture');
   value.routes[1]=structuredClone(value.routes[0]!);value.routes[1]!.points[1]!.longitude-=1;

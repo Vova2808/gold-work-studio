@@ -42,8 +42,9 @@ export function assertRouteComparisonCorrection(project:Project,before:any,after
   // another voyage's stops, or rewriting evidence that already passed validation.
   const identity=(v:any)=>({comparisonQuotes:v?.comparisonQuotes?.map((q:any,i:number)=>exactQuote(before?.comparisonQuotes?.[i],context)?q:null),routes:v?.routes?.map((r:any,i:number)=>{
     const prior=before?.routes?.[i];
-    return {label:exactQuote(prior?.label,context,60)?r.label:null,
-      quote:exactQuote(prior?.quote,context)?r.quote:null,
+    const validLabelEvidence=exactQuote(prior?.label,context,60)&&exactQuote(prior?.quote,context)&&prior.quote.includes(prior.label);
+    return {label:validLabelEvidence?r.label:null,
+      quote:validLabelEvidence?r.quote:null,
       stops:r.stops?.map((p:any,j:number)=>({name:p.name,country:p.country,quote:namedQuote(prior?.stops?.[j]?.quote,prior?.stops?.[j]?.name,context)?p.quote:null}))};
   })});
   if(!isDeepStrictEqual(identity(before),identity(after)))throw Error('Коррекция изменила именованные опоры, подписи или цитаты; ответ не принят.');
