@@ -29,7 +29,8 @@ test('one explicit terminal-incomplete receipt can commission a grounded visual 
     documentaryCompletion:async(system:string,text:string,...args:unknown[])=>{
       calls++;
       if(calls===1)return '```json\n{"description":"The preserved clipper';
-      assert.equal(system,documentaryGroundedIllustrationQualityInstruction);
+      assert.ok(system.startsWith(documentaryGroundedIllustrationQualityInstruction));
+      assert.match(system,/Keep each explanation string within 160 characters/);
       const input=JSON.parse(text);assert.deepEqual(input.scriptGrounding,scriptGrounding);
       assert.equal((args[6] as {singleAttempt?:boolean}).singleAttempt,true);
       return JSON.stringify({suitable:false,targetVisible:false,description:'A different identified ship.',

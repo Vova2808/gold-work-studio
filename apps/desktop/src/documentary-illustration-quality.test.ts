@@ -246,7 +246,7 @@ for(const priorState of ['complete','received'] as const)test(`grounded physical
  let calls=0;
  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system)=>{
   calls++;
-  if(system===priorSystem)return priorState==='received'?'\u007b"description":"unfinished':JSON.stringify(clean);
+  if(calls===1){assert.ok(system.startsWith(priorSystem));return priorState==='received'?'\u007b"description":"unfinished':JSON.stringify(clean);}
   return JSON.stringify({...clean,scriptFit:{kind:'physical-feature',scriptQuote:narration,
    requiredVisible:'The spread of sailcloth',visible:false,evidence:'Only bare yards and rigging are visible.'}});
  }},()=>root);
