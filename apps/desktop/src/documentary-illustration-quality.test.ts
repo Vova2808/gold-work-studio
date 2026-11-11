@@ -11,7 +11,7 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext,documentaryIll
 import {documentarySavedQualityIssue,documentarySourceText} from './documentary-source-quality.js';
 import {documentaryIllustrationQualityIssue,documentaryLegacyIllustrationRisk,documentaryInternalPartIssue,documentaryIllustrationQualityInstruction,documentaryIllustrationResponseInstruction,documentaryIllustrationQualityInstructionV1,documentaryIllustrationQualityInstructionV2} from './documentary-illustration-quality.js';
 import {effectFfmpeg} from './effect-media.js';
-import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
+import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
 import {documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -44,40 +44,34 @@ async function fixture(t:test.TestContext,target='steamship at sea'){
  return {root,project,scene,receipts};
 }
 
-test('a same-object illustration receives script-grounded optional details, while fallback retains the original person identity',async t=>{
- for(const fallback of [false,true]){
+test('a same-object illustration receives script-grounded optional details, while an explicit portrait retains the person identity',async t=>{
+ for(const portraitRequested of [false,true]){
   const {root,project,scene}=await fixture(t,'Cutty Sark ship');
-  const narration=fallback?'John Willis commissioned Cutty Sark.':'After eight tea voyages, Cutty Sark left the trade for which she had been built.';
+  const narration=portraitRequested?'Show a portrait of John Willis who commissioned Cutty Sark.':'After eight tea voyages, Cutty Sark left the trade for which she had been built.';
   scene.narration=narration;project.videoBrief!.readyScript=narration;
   const doc=scene.documentary!,req=doc.requirement,ai=req.aiSearchPlan!;
   req.text=narration;doc.pinned=false;doc.caption={enabled:false,text:'',position:'bottom',animation:'fade',fontSize:32,
    color:'#fff',backgroundColor:'#000',opacity:1};doc.layout='full';doc.effects=[];
-  ai.subject=fallback?'John Willis':'Cutty Sark';ai.visualScope='illustrative';
-  ai.visualTarget=fallback?'John Willis portrait':'Cutty Sark ship';ai.fallbackVisualTarget='Cutty Sark ship';ai.fallbackVideoQueries=['Cutty Sark'];
+  ai.subject=portraitRequested?'John Willis':'Cutty Sark';ai.visualScope='illustrative';
+  ai.visualTarget=portraitRequested?'John Willis portrait':'Cutty Sark ship';ai.fallbackVisualTarget='Cutty Sark ship';ai.fallbackVideoQueries=['Cutty Sark'];
   ai.grounding={version:1,mandatory:[{kind:'identity',required:ai.subject,scriptQuote:ai.subject}],
-   illustrations:[fallback?'A portrait of John Willis.':'A modern view of the same preserved ship.'],optionalDetails:['Tea cargo being loaded.']};
+   illustrations:[portraitRequested?'A portrait of John Willis.':'A modern view of the same preserved ship.'],optionalDetails:['Tea cargo being loaded.']};
   doc.selected!.title='Cutty Sark ship';doc.selected!.description='Cutty Sark ship';
   ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
-  if(fallback)req.footageFallback={version:1,target:ai.fallbackVisualTarget,queries:ai.fallbackVideoQueries,
-   narration,originalTarget:ai.visualTarget,reason:'Primary search exhausted.',kind:'image',
-   automaticRecovery:{version:1,binding:documentaryThematicRecoveryBinding(project,scene),startedAt:'fixture',blockedSourceKeys:[]}};
   let calls=0;
   const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
-   calls++;assert.equal(system,fallback?documentaryGroundedFallbackIllustrationQualityInstruction:documentaryGroundedIllustrationQualityInstruction);
+   calls++;assert.equal(system,documentaryGroundedIllustrationQualityInstruction);
    const task=JSON.parse(input);assert.equal(task.scriptGrounding.originalScript,narration);
    assert.equal(task.scriptGrounding.grounding.mandatory[0].required,ai.subject);
    assert.deepEqual(task.scriptGrounding.grounding.optionalDetails,['Tea cargo being loaded.']);
-   if(fallback)assert.ok(task.fallbackNarrativeContext.binding);
    // Mocked semantic verdict: this test verifies contract plumbing and gates,
    // not recognition of the synthetic local test image by a live model.
-   return JSON.stringify({...clean,description:'The preserved ship hull and rigging.',suitable:!fallback,targetVisible:!fallback,
-    scriptFit:{kind:'subject-context',scriptQuote:narration,requiredVisible:ai.subject,visible:!fallback,evidence:'Visible ship hull and rigging.'},
-    targetEvidence:fallback?'A ship is visible; the named person is absent.':'Distinctive hull, masts and rigging of the same ship.',
-    reason:fallback?'A ship does not show the named person.':'Modern illustration of the same ship, not the historical event.',
-    ...(fallback?{narrativeFit:{version:1,binding:task.fallbackNarrativeContext.binding,status:'conflict',scriptQuote:'John Willis',
-     evidence:'The visible vessel does not depict the named person in the original scene.'}}:{})});
+   return JSON.stringify({...clean,description:'The preserved ship hull and rigging.',suitable:!portraitRequested,targetVisible:!portraitRequested,
+    scriptFit:{kind:'subject-context',scriptQuote:narration,requiredVisible:ai.subject,visible:!portraitRequested,evidence:'Visible ship hull and rigging.'},
+    targetEvidence:portraitRequested?'A ship is visible; the named person is absent.':'Distinctive hull, masts and rigging of the same ship.',
+    reason:portraitRequested?'A ship does not show the named person.':'Modern illustration of the same ship, not the historical event.'});
   }},()=>root);
-  assert.equal((await service.inspectForSelection(project,scene)).review.status,fallback?'rejected':'accepted');assert.equal(calls,1);
+  assert.equal((await service.inspectForSelection(project,scene)).review.status,portraitRequested?'rejected':'accepted');assert.equal(calls,1);
  }
 });
 
@@ -94,7 +88,78 @@ test('a measured physical feature cannot pass on identity alone, while historica
   requiredVisible:'The identified ship',visible:true,evidence:'The distinctive ship hull is visible in a modern museum.'}}),undefined);
 });
 
-for(const priorState of ['complete','received'] as const)test(`grounded physical-feature contract preserves ${priorState} old receipt and rejects missing cloth`,async t=>{
+test('contextual identity review carries the chosen script relationship and preserves wrong-subject and physical-feature refusals',async t=>{
+ const context='The clipper Aurora sailed through the Delta Canal.';
+ const cases=[
+  {line:'Her owner, Elias Hart, was betting on speed.',subject:'Aurora',accepted:true,kind:'subject-context',
+   relation:'The identified Aurora illustrates the ship Elias Hart owned, not a portrait of Hart.',evidence:'Visible hull and mast arrangement identify the owned ship; Hart is not depicted.'},
+  {line:'Morgan Vale became her captain.',subject:'Aurora',accepted:true,kind:'subject-context',
+   relation:'The identified Aurora illustrates the ship captained by Morgan Vale.',evidence:'Visible hull and rigging of the attributed ship; no claim of a captain portrait.'},
+  {line:'The Delta Canal shortened the passage.',subject:'Delta Canal',accepted:true,kind:'subject-context',
+   relation:'The canal view illustrates the named waterway responsible for the shorter passage.',evidence:'Visible waterway layout and credible attribution identify Delta Canal.'},
+  {line:'Morgan Vale became her captain.',subject:'Aurora',accepted:false,kind:'subject-context',
+   relation:'The identified Aurora illustrates the ship captained by Morgan Vale.',evidence:'Visible hull and rigging identify a different ship.'},
+  {line:'Aurora carried a large canvas area with all sails set.',subject:'Aurora',accepted:false,kind:'physical-feature',
+   relation:'Aurora with sailcloth visible or an identified sail-plan depicts the canvas area.',evidence:'Only bare yards are visible; required sailcloth is absent.'},
+ ];
+ for(const item of cases){
+  const {root,project,scene}=await fixture(t,item.subject);
+  scene.narration=item.line;project.videoBrief!.readyScript=context+'\n'+item.line;
+  const req=scene.documentary!.requirement,ai=req.aiSearchPlan!;
+  req.text=item.line;ai.subject=item.subject;ai.visualTarget=item.subject;
+  ai.grounding={version:1,mandatory:[{kind:'identity',required:item.subject,scriptQuote:context}],
+   illustrations:[item.relation],optionalDetails:[]};
+  ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
+  let calls=0;
+  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
+   calls++;assert.equal(system,documentaryGroundedIllustrationQualityInstruction);
+   const task=JSON.parse(input);assert.deepEqual(task.scriptGrounding.grounding.illustrations,[item.relation]);
+   assert.equal(task.scriptGrounding.originalScript,project.videoBrief!.readyScript);
+   assert.match(system,/chosen BEFORE candidate discovery/);assert.match(system,/not automatically every person or object/);
+   assert.match(system,/require both routes only for an explicit visual comparison/);
+   assert.match(system,/bare yards cannot illustrate sailcloth area/);
+   // Provider verdict is mocked. This tests contract transport and refusal
+   // gates, not live recognition of the synthetic test image.
+   return JSON.stringify({...clean,suitable:item.accepted,targetVisible:item.accepted,targetEvidence:item.evidence,
+    scriptFit:{kind:item.kind,scriptQuote:item.line,requiredVisible:item.subject,visible:item.accepted,evidence:item.evidence}});
+  }},()=>root);
+  const result=await service.inspectForSelection(project,scene);
+  assert.equal(result.review.status,item.accepted?'accepted':'rejected',item.line);assert.equal(calls,1);
+ }
+});
+
+for(const [version,previousSystem] of [[1,documentaryGroundedFallbackIllustrationQualityInstructionV1],[2,documentaryGroundedFallbackIllustrationQualityInstructionV2]] as const)
+test(`a contextual fallback preserves unresolved V${version} paid review without buying its new wording`,async t=>{
+ const {root,project,scene,receipts}=await fixture(t,'Aurora ship');
+ const narration='Elias Hart owned the ship Aurora.';scene.narration=narration;project.videoBrief!.readyScript=narration;
+ const req=scene.documentary!.requirement,ai=req.aiSearchPlan!;
+ scene.documentary!.pinned=false;scene.documentary!.caption={enabled:false,text:'',position:'bottom',animation:'fade',fontSize:32,
+  color:'#fff',backgroundColor:'#000',opacity:1};scene.documentary!.layout='full';scene.documentary!.effects=[];
+ req.text=narration;ai.subject='Aurora';ai.visualTarget='Aurora ship';ai.fallbackVisualTarget='Aurora ship';ai.fallbackVideoQueries=['Aurora ship'];
+ ai.grounding={version:1,mandatory:[{kind:'identity',required:'Aurora',scriptQuote:narration}],
+  illustrations:['An identified view of Aurora illustrates the very ship owned by Elias Hart.'],optionalDetails:[]};
+ ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
+ req.footageFallback={version:1,target:ai.fallbackVisualTarget,queries:ai.fallbackVideoQueries,narration,originalTarget:ai.visualTarget,
+  reason:'Primary search exhausted.',kind:'image',automaticRecovery:{version:1,binding:documentaryThematicRecoveryBinding(project,scene),startedAt:'fixture',blockedSourceKeys:[]}};
+ let calls=0;const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>{
+  calls++;return '{"description":"unfinished';
+ }},()=>root);
+ const original=(service as any).complete.bind(service);let seeded=false,oldBytes='';
+ t.mock.method(service as any,'complete',async(...args:any[])=>{
+  if(!seeded&&args[2]===documentaryGroundedFallbackIllustrationQualityInstruction){
+   seeded=true;try{await original(args[0],args[1],previousSystem,args[3],args[4]);}catch{/* Preserve the existing unknown receipt. */}
+   oldBytes=(await receipts())[0]!.bytes;
+  }
+  return original(...args);
+ });
+ await assert.rejects(service.inspectForSelection(project,scene),/неизвестный результат/);
+ assert.ok(seeded,'The current fallback path must include its predecessors');assert.equal(calls,1);
+ await assert.rejects(service.inspectForSelection(project,scene),/неизвестный результат/);assert.equal(calls,1);
+ assert.equal((await receipts())[0]!.bytes,oldBytes);
+});
+
+for(const [priorVersion,priorSystem] of [[1,documentaryGroundedIllustrationQualityInstructionV1],[2,documentaryGroundedIllustrationQualityInstructionV2]] as const)
+for(const priorState of ['complete','received'] as const)test(`grounded physical-feature contract preserves V${priorVersion} ${priorState} old receipt and rejects missing cloth`,async t=>{
  const {root,project,scene,receipts}=await fixture(t,'Clipper ship');
  const narration='The clipper carried a large spread of canvas with all sails set.';
  scene.narration=narration;project.videoBrief!.readyScript=narration;
@@ -106,7 +171,7 @@ for(const priorState of ['complete','received'] as const)test(`grounded physical
  let calls=0;
  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system)=>{
   calls++;
-  if(system===documentaryGroundedIllustrationQualityInstructionV1)return priorState==='received'?'\u007b"description":"unfinished':JSON.stringify(clean);
+  if(system===priorSystem)return priorState==='received'?'\u007b"description":"unfinished':JSON.stringify(clean);
   return JSON.stringify({...clean,scriptFit:{kind:'physical-feature',scriptQuote:narration,
    requiredVisible:'The spread of sailcloth',visible:false,evidence:'Only bare yards and rigging are visible.'}});
  }},()=>root);
@@ -114,7 +179,7 @@ for(const priorState of ['complete','received'] as const)test(`grounded physical
  t.mock.method(service as any,'complete',async(...args:any[])=>{
   if(!seeded&&args[2]===documentaryGroundedIllustrationQualityInstruction){
    seeded=true;
-   try{await original(args[0],args[1],documentaryGroundedIllustrationQualityInstructionV1,args[3],args[4]);}catch{/* Save the unresolved receipt for the actual path below. */}
+   try{await original(args[0],args[1],priorSystem,args[3],args[4]);}catch{/* Save the unresolved receipt for the actual path below. */}
    oldBytes=(await receipts())[0]!.bytes;
   }
   return original(...args);

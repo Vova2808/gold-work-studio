@@ -19,7 +19,7 @@ import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
 import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched} from './documentary-retry.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
 import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
-import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
+import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
 import {documentaryIllustrationFallback,documentaryThematicQueryAllowed,documentaryGroundedThematicQuery} from './documentary-illustration-fallback.js';
 import {documentaryReviewContract,documentaryOrdinaryVisualContract,documentaryNamedIntervalContract} from './documentary-review-contract.js';
 import {documentaryScriptEvidenceContract,documentaryScriptEvidence,documentaryScriptEvidenceIssue,documentaryRecoveryQueries,documentaryScriptRequirements,documentaryScriptRequirementsContract,documentaryScriptRequirementsProblem} from './documentary-script-evidence.js';
@@ -3013,9 +3013,12 @@ export class DocumentaryIntelligence {
       system:qualitySystem,input:JSON.stringify({...qualityTask,fileRevision:oldRevision})}]:[]));
     const qualityInput=JSON.stringify({...qualityTask,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
     if(scriptGrounding){
-      const previousGroundedSystem=fallbackNarrativeContext?documentaryGroundedFallbackIllustrationQualityInstructionV1:documentaryGroundedIllustrationQualityInstructionV1;
-      previousRequests.push({system:previousGroundedSystem,input:qualityInput},...(oldRevision?[{system:previousGroundedSystem,
-        input:JSON.stringify({...JSON.parse(qualityInput),fileRevision:oldRevision})}]:[]));
+      const previousGroundedSystems=fallbackNarrativeContext
+        ?[documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV1]
+        :[documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedIllustrationQualityInstructionV1];
+      for(const previousGroundedSystem of previousGroundedSystems)
+        previousRequests.push({system:previousGroundedSystem,input:qualityInput},...(oldRevision?[{system:previousGroundedSystem,
+          input:JSON.stringify({...JSON.parse(qualityInput),fileRevision:oldRevision})}]:[]));
     }
     // Preserve the exact predecessor checkpoint, including byte-proven old
     // revisions. A corrected task instruction cannot repay unknown work or

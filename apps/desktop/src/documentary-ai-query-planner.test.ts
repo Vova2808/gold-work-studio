@@ -65,6 +65,48 @@ test('source-grounded plans keep history separate from visible requirements acro
   assert.match(f.calls[0]!.system,/quote establishes provenance; separately decide/);
 });
 
+test('preselected contextual subjects keep their own identity, while portrait and physical-feature requests stay strict',async t=>{
+  const context='The clipper Aurora carried cargo. The Delta Canal connected two seas. The North Observatory studied stars.';
+  const cases=[
+    {line:'Her owner, Elias Hart, was betting on speed.',subject:'Aurora',quote:'The clipper Aurora carried cargo.',
+      relation:'An identified view of Aurora illustrates the very ship owned by Elias Hart; not a portrait of him.'},
+    {line:'In 1885, Morgan Vale became captain.',subject:'Aurora',quote:'The clipper Aurora carried cargo.',
+      relation:'An identified view of Aurora illustrates the ship of which Morgan Vale became captain, not the appointment ceremony.'},
+    {line:'The Delta Canal gave steamships a much shorter passage.',subject:'Delta Canal',quote:'The Delta Canal connected two seas.',
+      relation:'An identified canal view illustrates the named waterway responsible for the shorter passage, without inventing ports.'},
+    {line:'Nora Finch became director of the North Observatory.',subject:'North Observatory',quote:'The North Observatory studied stars.',
+      relation:'An identified view of North Observatory illustrates the institution Nora Finch directed.'},
+    {line:'Show a portrait of Morgan Vale with his distinctive scar.',subject:'Morgan Vale',quote:'Show a portrait of Morgan Vale with his distinctive scar.',
+      relation:'A portrait of Morgan Vale must show the narrated scar; a ship cannot illustrate this personal physical feature.',feature:'His distinctive scar'},
+    {line:'Aurora carried thirty-two thousand square feet of canvas with all sails set.',subject:'Aurora',quote:'The clipper Aurora carried cargo.',
+      relation:'An attributed view of Aurora with visible sailcloth or an identified sail-plan depicts the measured canvas.',feature:'Visible sailcloth or a sail-plan depiction'},
+  ];
+  const scenes=scenesOf(...cases.map(item=>item.line)),project=projectOf(scenes,context+'\n'+cases.map(item=>item.line).join('\n'));
+  const before=structuredClone(project);
+  const rows=cases.map((item,index)=>groundedEntry(scenes[index]!.id,item.subject,item.quote,{
+    visualTarget:item.feature?item.subject+' — '+item.feature:item.subject,
+    imageQueries:[item.subject+(item.feature?' '+item.feature:' photograph')],videoQueries:[],
+    grounding:{version:1,mandatory:[{kind:'identity',required:item.subject,scriptQuote:item.quote},
+      ...(item.feature?[{kind:'condition',required:item.feature,scriptQuote:item.line}]:[])],illustrations:[item.relation],optionalDetails:[]}}));
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>rows.find(row=>row.sceneId===scene.sceneId))}));
+  const result=await f.planner().plan(project,scenes);
+  assert.deepEqual(project,before,'Planning cannot rewrite accepted materials or narration');
+  for(const [index,scene] of scenes.entries()){
+    const requirement=result.get(scene.id)!,plan=requirement.aiSearchPlan!;
+    assert.equal(requirement.identities![0]!.name,cases[index]!.subject);
+    assert.deepEqual(plan.grounding!.illustrations,[cases[index]!.relation]);
+    assert.equal(plan.grounding!.mandatory.some(item=>item.kind==='condition'),Boolean(cases[index]!.feature));
+    assert.equal(documentaryAiPlanGroundingIssue(plan,project.videoBrief!.readyScript!),undefined);
+  }
+  const prompt=f.calls[0]!.system;
+  assert.match(prompt,/Choose the permitted representation BEFORE candidate discovery/);
+  assert.match(prompt,/not automatically to every participant mentioned/);
+  assert.match(prompt,/person's appearance or personal physical feature/);
+  assert.match(prompt,/statement that a named canal shortened a journey can use an identified view/);
+  assert.match(prompt,/never invent ports or borrow unrelated journey details/);
+  assert.match(prompt,/bare structure cannot illustrate a described surface or covering/);
+});
+
 test('current paid output with invented quotes, invented aliases, missing grounding or unsupported mandatory era stops within the existing repair budget',async t=>{
   for(const variant of ['quote','alias','generic-alias','missing','era'] as const){
     const quote='Marie Curie left teaching to continue research on a ship.';
@@ -92,7 +134,7 @@ test('legacy overstrict plan is explicitly refreshed in the same paid cache whil
   for(const scene of scenes)scene.documentary={requirement:initial.get(scene.id)!,verified:false} as Scene['documentary'];
   const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
   const cache=JSON.parse(await readFile(file,'utf8'));
-  cache.attempts[0].request.promptRevision=10;
+  cache.attempts[0].request.promptRevision=11;
   const raw=JSON.parse(cache.attempts[0].rawResponse);
   for(const row of raw.scenes){delete row.grounding;row.visualTarget='Cutty Sark tea cargo being loaded';}
   cache.attempts[0].rawResponse=JSON.stringify(raw);
@@ -770,7 +812,7 @@ test('prompt revision 5 separates narrated history from required pixels and pres
   const file = path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!);
   const cache = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(cache.version, 1, 'Prompt change does not silently invalidate already paid v1 receipts');
-  assert.equal(cache.attempts[0].request.promptRevision, 11);
+  assert.equal(cache.attempts[0].request.promptRevision, 12);
   assert.equal(cache.attempts[0].request.system, prompt);
 });
 
