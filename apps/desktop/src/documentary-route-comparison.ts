@@ -30,6 +30,24 @@ export function assertRouteComparisonIdentity(before:any,after:any){
   const identity=(v:any)=>({comparisonQuotes:v?.comparisonQuotes,routes:v?.routes?.map((r:any)=>({label:r.label,quote:r.quote,stops:r.stops?.map((p:any)=>({name:p.name,country:p.country,quote:p.quote}))}))});
   if(JSON.stringify(identity(before))!==JSON.stringify(identity(after)))throw Error('Коррекция изменила именованные опоры, подписи или цитаты; ответ не принят.');
 }
+export class DocumentaryRouteComparisonValidationError extends Error {}
+export function correctableRouteComparisonError(error:unknown):error is Error{
+  return error instanceof DocumentaryRouteComparisonValidationError||(error instanceof DocumentaryRouteGeometryError&&error.correctable);
+}
+const exactQuote=(value:unknown,context:string,limit=1600):value is string=>typeof value==='string'&&!!value.trim()&&value.length<=limit&&context.includes(value);
+const namedQuote=(value:unknown,name:unknown,context:string)=>exactQuote(value,context)&&typeof name==='string'&&!!name.trim()&&normalized(value).includes(normalized(name));
+export function assertRouteComparisonCorrection(project:Project,before:any,after:any){
+  const context=routeComparisonContext(project);
+  // A rejected citation may be repaired, but it cannot authorize a different route,
+  // another voyage's stops, or rewriting evidence that already passed validation.
+  const identity=(v:any)=>({comparisonQuotes:v?.comparisonQuotes?.map((q:any,i:number)=>exactQuote(before?.comparisonQuotes?.[i],context)?q:null),routes:v?.routes?.map((r:any,i:number)=>{
+    const prior=before?.routes?.[i];
+    return {label:exactQuote(prior?.label,context,60)?r.label:null,
+      quote:exactQuote(prior?.quote,context)?r.quote:null,
+      stops:r.stops?.map((p:any,j:number)=>({name:p.name,country:p.country,quote:namedQuote(prior?.stops?.[j]?.quote,prior?.stops?.[j]?.name,context)?p.quote:null}))};
+  })});
+  if(!isDeepStrictEqual(identity(before),identity(after)))throw Error('Коррекция изменила именованные опоры, подписи или цитаты; ответ не принят.');
+}
 function knownPlace(name:string,country?:string,context=''){
   const unique=resolveDocumentaryPlace(name),native=resolveDocumentaryPlace(name,country);
   if(native){
@@ -44,7 +62,7 @@ function knownPlace(name:string,country?:string,context=''){
   return {...matches[0]!};
 }
 function quote(value:unknown,context:string,limit=1600){
-  if(typeof value!=='string'||!value.trim()||value.length>limit||!context.includes(value))throw Error('Основание схемы не является точной цитатой полного сценария.');
+  if(!exactQuote(value,context,limit))throw new DocumentaryRouteComparisonValidationError('Основание схемы не является точной цитатой полного сценария.');
   return value;
 }
 export function validateRouteComparison(project:Project,scene:Scene,raw:any,model:string):DocumentaryRouteComparison{
@@ -55,24 +73,24 @@ export function validateRouteComparison(project:Project,scene:Scene,raw:any,mode
   if(!Array.isArray(raw.routes)||raw.routes.length!==2)throw Error('Сравнению нужны два маршрута.');
   const routes=raw.routes.map((r:any)=>{
     const label=quote(r.label,context,60),evidence=quote(r.quote,context);
-    if(!evidence.includes(label))throw Error('Подпись маршрута не связана с его цитатой.');
+    if(!evidence.includes(label))throw new DocumentaryRouteComparisonValidationError('Подпись маршрута не связана с его цитатой.');
     if(!Array.isArray(r.stops)||r.stops.length<3||r.stops.length>8)throw Error('Нужны 3–8 обоснованных географических точек на маршрут.');
     const places=r.stops.map((p:any)=>{
       const evidence=quote(p.quote,context);
-      if(typeof p.name!=='string'||p.name.length>100||!normalized(evidence).includes(normalized(p.name)))throw Error('Место не названо в цитате сценария.');
+      if(typeof p.name!=='string'||!p.name.trim()||p.name.length>100||!normalized(evidence).includes(normalized(p.name)))throw new DocumentaryRouteComparisonValidationError(`Место ${String(p.name).slice(0,100)} не названо в цитате сценария.`);
       return {...knownPlace(p.name,p.country,context),quote:evidence};
     });
-    if(!Array.isArray(r.points)||r.points.length>32)throw Error('Некорректная геометрия схемы.');
+    if(!Array.isArray(r.points)||r.points.length>32)throw new DocumentaryRouteComparisonValidationError('Некорректная геометрия схемы.');
     let nextStop=0;
     const points=r.points.map((p:any)=>{
       if(Number.isInteger(p?.stop)){
-        if(p.stop!==nextStop||!places[nextStop])throw Error('Географические точки переставлены или повторены.');
+        if(p.stop!==nextStop||!places[nextStop])throw new DocumentaryRouteComparisonValidationError('Географические точки переставлены или повторены.');
         const place=places[nextStop++];return {latitude:place.latitude,longitude:place.longitude};
       }
-      if(!Array.isArray(p?.bend)||p.bend.length!==2||!p.bend.every((v:unknown)=>typeof v==='number'&&Number.isFinite(v)))throw Error('Неизвестные координаты изгиба схемы.');
+      if(!Array.isArray(p?.bend)||p.bend.length!==2||!p.bend.every((v:unknown)=>typeof v==='number'&&Number.isFinite(v)))throw new DocumentaryRouteComparisonValidationError('Неизвестные координаты изгиба схемы.');
       return {latitude:p.bend[1],longitude:p.bend[0]};
     });
-    if(nextStop!==places.length||r.points[0]?.stop!==0||r.points.at(-1)?.stop!==places.length-1)throw Error('Схема пропустила начало, конец или промежуточную точку.');
+    if(nextStop!==places.length||r.points[0]?.stop!==0||r.points.at(-1)?.stop!==places.length-1)throw new DocumentaryRouteComparisonValidationError('Схема пропустила начало, конец или промежуточную точку.');
     return {label,quote:evidence,places,points};
   });
   const requiredFeatures=routeComparisonPhysicalPlaces.filter(p=>normalized(routeComparisonTarget(scene)).includes(normalized(p.name)));
@@ -127,10 +145,10 @@ export async function hasCompletedRouteComparison(root:string,project:Project,sc
     try{
       return isDeepStrictEqual(validateRouteComparison(project,scene,primary.result,primary.model),expected);
     }catch(error){
-      if(!(error instanceof DocumentaryRouteGeometryError)||!error.correctable)return false;
+      if(!correctableRouteComparisonError(error))return false;
       const correction=await readResponse('correction',primary.result);
       if(!correction)return false;
-      assertRouteComparisonIdentity(primary.result,correction.result);
+      assertRouteComparisonCorrection(project,primary.result,correction.result);
       return isDeepStrictEqual(validateRouteComparison(project,scene,correction.result,correction.model),expected);
     }
   }catch{return false;}

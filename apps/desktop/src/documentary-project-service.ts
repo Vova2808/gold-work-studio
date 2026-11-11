@@ -1,6 +1,5 @@
 import {DocumentaryLegacyPreviewUnattributed} from './documentary-analysis-error.js';
-import {needsRouteComparison,validateRouteComparison,attachRouteComparison,savedRouteComparisonIssue,routeComparisonContextHash,assertRouteComparisonIdentity,hasCompletedRouteComparison} from './documentary-route-comparison.js';
-import {DocumentaryRouteGeometryError} from '@gold-work/remotion-video';
+import {needsRouteComparison,validateRouteComparison,attachRouteComparison,savedRouteComparisonIssue,routeComparisonContextHash,assertRouteComparisonCorrection,correctableRouteComparisonError,hasCompletedRouteComparison} from './documentary-route-comparison.js';
 import { createHash, randomUUID } from "node:crypto";
 import {semanticMontageHash,DocumentarySemanticMontageError,validateSemanticMontagePlan,readCompletedMontageBatches} from './documentary-semantic-montage.js';
 import {artworkEnabled,motionArtworkHash,attachMotionArtwork,repairSavedMotionArtworkPlan} from './documentary-artwork-plan.js';
@@ -3803,9 +3802,9 @@ export class DocumentaryProjectService {
         const response=await planner.planRouteComparison(before,scene,signal);let comparison;
         try{comparison=validateRouteComparison(before,scene,response.raw,response.model);}
         catch(error){
-          if(!(error instanceof DocumentaryRouteGeometryError)||!error.correctable||!planner.correctRouteComparison)throw error;
+          if(!correctableRouteComparisonError(error)||!planner.correctRouteComparison)throw error;
           const corrected=await planner.correctRouteComparison(before,scene,response.raw,error.message,signal);
-          assertRouteComparisonIdentity(response.raw,corrected.raw);
+          assertRouteComparisonCorrection(before,response.raw,corrected.raw);
           comparison=validateRouteComparison(before,scene,corrected.raw,corrected.model);
         }
         const failure=exhausted.get(scene.id)!;comparison.selectionFailure={category:failure.category,message:failure.message??doc.autoError!};

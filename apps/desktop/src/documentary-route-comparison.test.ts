@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve,sep} from 'node:path';
 import {MemoryTaskRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
 import {createDefaultProjectSettings,createDocumentarySettings,documentaryVideoCoverage,type Project,type Scene} from '@gold-work/shared';
-import {validateRouteComparison,attachRouteComparison,savedRouteComparisonIssue,needsRouteComparison,routeComparisonRequestBinding,routeComparisonContext,routeComparisonTarget} from './documentary-route-comparison.js';
+import {validateRouteComparison,attachRouteComparison,savedRouteComparisonIssue,needsRouteComparison,routeComparisonRequestBinding,routeComparisonContext,routeComparisonTarget,assertRouteComparisonCorrection,hasCompletedRouteComparison} from './documentary-route-comparison.js';
 import {documentaryAiPlanContext} from './documentary-ai-plan-state.js';
 import {documentaryIllustrationApproval,documentarySavedContextIssue,documentaryRouteApprovalCandidate} from './documentary-context-approval.js';
 import {documentaryAutomaticMaterialReady} from './documentary-auto-readiness.js';
@@ -258,6 +258,55 @@ test('the correction commission keeps exact request identity if validation wordi
   await intelligence.correctRouteComparison(project,scene,raw,'first exact geometry error');
   await intelligence.correctRouteComparison(project,scene,raw,'changed error wording');
   assert.equal(requests[0],requests[1],'Existing completion receipt must see the same key, not a new paid correction');
+});
+
+test('a China quotation never establishes Shanghai; correction preserves stops and already valid evidence',()=>{
+  const {project,scene,raw}=routeFixture();
+  const china='On the China route, sailing ships had to travel around the southern end of Africa.';
+  project.videoBrief!.readyScript+=' '+china+' A different ship visited Sydney.';
+  const bad=JSON.parse(JSON.stringify(raw));bad.routes[0]!.stops[2]!.quote=china;
+  assert.throws(()=>validateRouteComparison(project,scene,bad,'fixture'),/Shanghai.*не названо/);
+  assertRouteComparisonCorrection(project,bad,raw);
+  assert.ok(validateRouteComparison(project,scene,raw,'fixture'));
+  for(const change of [
+    (v:any)=>{v.routes[0].stops[2]={name:'Sydney',country:'Australia',quote:'A different ship visited Sydney.'};},
+    (v:any)=>{v.routes[1].stops[2].quote=china;},
+    (v:any)=>{v.routes[0].quote=china;},
+  ]){
+    const changed=structuredClone(raw);change(changed);
+    assert.throws(()=>assertRouteComparisonCorrection(project,bad,changed),/изменила именованные опоры/);
+  }
+});
+
+test('one source/geometry correction reuses complete paid receipts and restores approval after restart',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-route-quote-restart-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const f=routeFixture(),bad=JSON.parse(JSON.stringify(f.raw));
+  const china='On the China route, sailing ships had to travel around the southern end of Africa.';
+  f.project.videoBrief!.readyScript+=' '+china;
+  // Rebind the fixture search plan after the script edit, as ordinary planning does.
+  const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
+  f.scene.documentary!.requirement.aiSearchPlan!.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(f.project)}),sceneId:f.scene.id});
+  bad.routes[0]!.stops[2]!.quote=china;
+  bad.routes[1]!.label='not in the script';
+  bad.routes[0]!.points=[{stop:0},{stop:2}];
+  let posts=0,project=f.project;
+  const client={documentaryMotionModel:async()=> 'fixture',configured:async()=>true,documentaryCompletion:async()=>JSON.stringify(++posts===1?bad:f.raw)};
+  const projects={get:async()=>structuredClone(project),mutate:async(_id:string,fn:any)=>{project={...project,...fn(structuredClone(project))};return structuredClone(project);}};
+  const service=()=>new DocumentaryProjectService(projects as any,{projectDirectory:()=>root} as any,{} as any,root,{} as any,()=>{},new DocumentaryIntelligence(client as any,()=>root) as any);
+  const failures=[{sceneId:f.scene.id,category:'content-rejected',message:'No comparison found'}];
+  await service().prepareRouteComparisons(project.id,failures);
+  assert.equal(project.scenes[0]!.documentary!.verified,true);
+  assert.equal(posts,2,'One primary and one combined correction');
+  assert.equal(await hasCompletedRouteComparison(root,project,project.scenes[0]!),true);
+  // Rebuilding from the initial scene replays both receipts, without another POST.
+  project=structuredClone(f.project);project.scenes=[structuredClone(f.scene)];
+  await service().prepareRouteComparisons(project.id,failures);
+  assert.equal(project.scenes[0]!.documentary!.verified,true);assert.equal(posts,2);
+  project.scenes[0]!.documentary!.verified=false;
+  project.scenes[0]!.documentary!.reviewNote='Автоматическая графика больше не соответствует текущей реплике.';
+  project.scenes[0]!.documentary!.autoError='A later search changed approval';
+  await service().prepareRouteComparisons(project.id,[]);
+  assert.equal(project.scenes[0]!.documentary!.verified,true);assert.equal(posts,2);
 });
 test('a failed primary route request is listed for explicit recovery and submits once after authorization',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-route-primary-retry-'));t.after(()=>rm(root,{recursive:true,force:true}));
