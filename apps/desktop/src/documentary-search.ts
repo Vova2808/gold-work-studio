@@ -91,8 +91,9 @@ export function documentaryExactQuery(input: DocumentarySearchInput): string {
   return query;
 }
 
-/** Only caller-supplied identity or one explicitly quoted subject may broaden
- * an empty native query. Never infer a person's name from unquoted words. */
+/** Prefer a title phrase only for one caller-supplied image identity; an
+ * explicitly quoted subject may still broaden an empty native query.
+ * Neither infers a name from unquoted words or proves the depicted identity. */
 type DocumentaryDiscoveryInput=DocumentarySearchInput&{visualConstraints?:string[]};
 function commonsSubjectQuery(input:DocumentaryDiscoveryInput):string|undefined{
   const entities=[...new Set((input.entities??[]).map(value=>value.trim()).filter(Boolean))];
@@ -111,7 +112,8 @@ function commonsSubjectQuery(input:DocumentaryDiscoveryInput):string|undefined{
   const identityWords=new Set(subject.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)??[]);
   const terms=[...new Set((input.visualConstraints??[]).join(' ').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)??[])]
     .filter(word=>word.length>1&&!boilerplate.has(word)&&!identityWords.has(word)).slice(0,8);
-  return `"${subject}"`+(terms.length?` (${terms.join(' OR ')})`:'');
+  const titlePrefix=input.kind==='image'&&entities.length===1?'intitle:':'';
+  return `${titlePrefix}"${subject}"`+(terms.length?` (${terms.join(' OR ')})`:'');
 }
 
 export function rankDocumentaryCandidates(candidates: DocumentaryCandidate[], input: DocumentarySearchInput): DocumentaryCandidate[] {
@@ -262,6 +264,8 @@ export class DocumentarySearch {
     // Earlier public-only YouTube results must not hide the configured API.
     const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-3':'commons-native-subject-2')
       :provider==='youtube'&&kind==='video'?'youtube-api-public-cc-2':'public-source-2';
+    // subjectQuery includes the title-first mode and feature terms, so old
+    // broad metadata batches cannot mask a newly focused image search.
     const cacheKey=(text:string)=>createHash("sha256").update(JSON.stringify([isolatedPublic?publicCacheVersion:provider === "internet-archive" ? 5 : provider==='commons'?4:["pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, text, kind,
       ...(licensedOnly && provider === "internet-archive" ? ["licensed-only"] : []),
       ...(isolatedPublic&&provider==='commons'?[licensedOnly?'licensed-only':'all-rights',subjectQuery?.toLowerCase()??'']:[])])).digest("hex");
@@ -406,13 +410,19 @@ export class DocumentarySearch {
     if(independentPublicSources&&provider==='commons'){
       try{
         const eligible=(found:DocumentaryCandidate[])=>found.filter(candidate=>candidate.kind===kind&&(!licensedOnly||candidate.rights!=='unknown'));
-        let candidates=eligible(await this.commonsSearch(query,kind,signal,true));
+        // A required name mentioned only in another subject's description is
+        // a poor first batch. Search the title first, retaining script-grounded
+        // feature terms. This is discovery only; pixels still need inspection.
+        const titleQuery=kind==='image'&&subjectQuery?.startsWith('intitle:')?subjectQuery:undefined;
+        const primaryQuery=titleQuery??query;
+        const fallbackQuery=titleQuery?titleQuery.slice('intitle:'.length):subjectQuery;
+        let candidates=eligible(await this.commonsSearch(primaryQuery,kind,signal,true));
         // A second GET is allowed only after a successful empty result and
         // only for an explicit subject. Its metadata is still ranked against
         // the original requirement; this does not relax identity/year review.
-        if(!candidates.length&&subjectQuery&&canonicalWords(subjectQuery)!==canonicalWords(query)){
+        if(!candidates.length&&fallbackQuery&&canonicalWords(fallbackQuery)!==canonicalWords(primaryQuery)){
           signal?.throwIfAborted();
-          candidates=eligible(await this.commonsSearch(subjectQuery,kind,signal,true));
+          candidates=eligible(await this.commonsSearch(fallbackQuery,kind,signal,true));
         }
         if(candidates.length){
           this.webWarnings.delete(this.webWarningKey(query,kind)+':commons');

@@ -76,11 +76,11 @@ async function fixture(t:TestContext,mode:Mode,stopOnFetch=false){
   return {inputs,nativeQueries,perSearchGets,publicQueries,error};
 }
 
-test('ordinary simpleSelection forwards current projected Woodget identity to the native Commons subject fallback',async t=>{
+test('ordinary simpleSelection forwards current projected identity to Commons title search and subject fallback',async t=>{
   const result=await fixture(t,'portrait');assert.equal(result.error,undefined);
   const commons=result.inputs.filter(input=>input.providers?.includes('commons'));
   assert.ok(commons.length);assert.deepEqual(commons[0]!.entities,['Richard Woodget']);
-  assert.deepEqual(result.nativeQueries,['"Richard Woodget" Cutty Sark captain portrait','"Richard Woodget"']);
+  assert.deepEqual(result.nativeQueries,['intitle:"Richard Woodget"','"Richard Woodget"']);
   assert.deepEqual(result.perSearchGets,[2]);assert.equal(result.publicQueries.length,1);
 });
 

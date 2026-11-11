@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve,sep} from 'node:path';
-import {DocumentarySearch} from './documentary-search.js';
+import {commonsCandidates,DocumentarySearch} from './documentary-search.js';
 
 const query='Richard Woodget Cutty Sark captain portrait';
 const input={query,kind:'image' as const,providers:['commons' as const]};
@@ -48,19 +48,19 @@ test('a usable source beyond the first eight is returned by one bounded metadata
   assert.ok(result.candidates.some(candidate=>candidate.id==='commons:9'&&candidate.match==='unverified'));
 });
 
-for(const explicit of ['entities','quoted'] as const)test(`empty full Commons query broadens once using ${explicit}, preserving original identity/year requirements`,async()=>{
+for(const explicit of ['entities','quoted'] as const)test(`empty Commons query broadens once using ${explicit}, preserving original identity/year requirements`,async()=>{
   const request={...input,...(explicit==='entities'?{entities:['Richard Woodget'],years:['1869']}:{query:'"Richard Woodget" Cutty Sark captain portrait',years:['1869']})};
   const before=structuredClone(request),queries:string[]=[];
   const search=new DocumentarySearch(undefined,async url=>{
     queries.push(new URL(String(url)).searchParams.get('gsrsearch')!);return Response.json(queries.length===1?empty:payload);
   },undefined,undefined,undefined,{search:async()=>assert.fail('Native subject result needs no web')});
   const result=await search.search(request,true,undefined,true);
-  assert.deepEqual(queries,['"Richard Woodget" Cutty Sark captain portrait','"Richard Woodget"']);
+  assert.deepEqual(queries,[explicit==='entities'?'intitle:"Richard Woodget"':'"Richard Woodget" Cutty Sark captain portrait','"Richard Woodget"']);
   assert.equal(result.candidates.length,1);assert.ok(result.candidates[0]!.concerns.some(value=>value.includes('1869')));
   assert.deepEqual(request,before);
 });
 
-test('empty verbose search retains script-grounded physical conditions instead of reducing to the name alone',async()=>{
+test('title and fallback search retain script-grounded physical conditions without optional query style',async()=>{
   const request={query:'Cutty Sark full sails set archival photograph',kind:'image' as const,providers:['commons' as const],
     entities:['Cutty Sark'],visualConstraints:['all sails set, full spread of canvas visible']};
   const before=structuredClone(request),queries:string[]=[];
@@ -68,7 +68,7 @@ test('empty verbose search retains script-grounded physical conditions instead o
     queries.push(new URL(String(url)).searchParams.get('gsrsearch')!);return Response.json(queries.length===1?empty:payload);
   },undefined,undefined,undefined,{search:async()=>assert.fail('No third/web request after native success')});
   const result=await search.search(request,true,undefined,true);
-  assert.deepEqual(queries,['"Cutty Sark" full sails set archival photograph','"Cutty Sark" (sails OR canvas)']);
+  assert.deepEqual(queries,['intitle:"Cutty Sark" (sails OR canvas)','"Cutty Sark" (sails OR canvas)']);
   assert.equal(result.candidates.length,1);assert.equal(result.candidates[0]!.match,'unverified');
   assert.deepEqual(request,before,'Retrieval does not change the required visual task');
 });
@@ -83,10 +83,53 @@ test('condition fallback is generic, escaped and isolated from subject-only cach
   const input={query:'Orion aircraft landing gear archival photograph',kind:'image' as const,providers:['commons' as const],entities:['Orion']};
   await search.search(input,true,undefined,true);
   await search.search({...input,visualConstraints:['landing gear extended visible']},true,undefined,true);
-  assert.deepEqual(queries,['"Orion" aircraft landing gear archival photograph','"Orion"',
-    '"Orion" aircraft landing gear archival photograph','"Orion" (landing OR gear OR extended)']);
+  assert.deepEqual(queries,['intitle:"Orion"','"Orion"','intitle:"Orion" (landing OR gear OR extended)']);
   await search.search({...input,visualConstraints:['landing gear extended visible']},true,undefined,true);
-  assert.equal(queries.length,4,'Completed focused discovery is reused');
+  assert.equal(queries.length,3,'Completed focused discovery is reused');
+});
+
+test('one named image identity targets its title before broad descriptions without approving pixels',async()=>{
+  const queries:string[]=[],request={...input,query:'Richard Woodget 1885 dramatic archival portrait',entities:['Richard Woodget'],years:['1885']};
+  const before=structuredClone(request);
+  const search=new DocumentarySearch(undefined,async url=>{
+    const api=new URL(String(url));queries.push(api.searchParams.get('gsrsearch')!);
+    assert.equal(api.searchParams.get('gsrlimit'),'24');return Response.json(payload);
+  },undefined,undefined,undefined,{search:async()=>assert.fail('No fallback when focused native search returns usable metadata')});
+  const result=await search.search(request,true,undefined,true);
+  assert.deepEqual(queries,['intitle:"Richard Woodget"']);
+  assert.equal(result.candidates[0]!.query,'intitle:"Richard Woodget"');
+  assert.equal(result.candidates[0]!.match,'exact-metadata','A matching title is only a metadata match');
+  assert.ok(result.candidates[0]!.concerns.some(value=>value.includes('визуально')));
+  assert.ok(result.candidates[0]!.concerns.some(value=>value.includes('1885')));
+  assert.deepEqual(request,before,'Discovery does not remove the scene date or identity');
+});
+
+test('named video discovery retains its original full-text then subject queries',async()=>{
+  const queries:string[]=[],request={...input,kind:'video' as const,entities:['Richard Woodget']};
+  let web=0;
+  const search=new DocumentarySearch(undefined,async url=>{
+    queries.push(new URL(String(url)).searchParams.get('gsrsearch')!);return Response.json(empty);
+  },undefined,undefined,undefined,{search:async(q,kind)=>{web++;assert.equal(q,'"Richard Woodget" Cutty Sark captain portrait');assert.equal(kind,'video');return [];}});
+  await search.search(request,true,undefined,true);
+  assert.deepEqual(queries,['"Richard Woodget" Cutty Sark captain portrait filetype:video','"Richard Woodget" filetype:video']);
+  assert.equal(web,1);
+});
+
+test('old nonempty broad native cache cannot hide title discovery; new focused results are reused',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-commons-title-'));
+  t.after(async()=>{assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));assert.ok(root.includes('gws-commons-title-'));await rm(root,{recursive:true,force:true});});
+  const request={...input,entities:['Richard Woodget']},originalQuery='"Richard Woodget" Cutty Sark captain portrait';
+  const oldKey=createHash('sha256').update(JSON.stringify(['commons-native-rendition-3','commons',originalQuery.toLowerCase(),'image','licensed-only','"richard woodget"'])).digest('hex');
+  const oldCandidates=commonsCandidates(payload,originalQuery,true).map(candidate=>({...candidate,id:'commons:old-broad-result'}));
+  const oldFile=join(root,oldKey+'.json'),old=JSON.stringify({expiresAt:Date.now()+86400000,candidates:oldCandidates});
+  await writeFile(oldFile,old);
+  let calls=0;
+  const make=()=>new DocumentarySearch(undefined,async url=>{
+    calls++;assert.equal(new URL(String(url)).searchParams.get('gsrsearch'),'intitle:"Richard Woodget"');return Response.json(payload);
+  },root);
+  for(let read=0;read<2;read++)assert.deepEqual((await make().search(request,true,undefined,true)).candidates.map(candidate=>candidate.id),['commons:123']);
+  assert.equal(calls,1,'The second instance reads completed title discovery instead of repeating HTTP');
+  assert.equal(await readFile(oldFile,'utf8'),old,'Previous results are preserved verbatim');
 });
 
 for(const request of [input,{...input,entities:['Richard Woodget','Cutty Sark']},
