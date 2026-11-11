@@ -656,9 +656,27 @@ export class DocumentaryPlanningIncompleteError extends Error {
 function samePlannedVisualTask(previous:Scene,next:Scene):boolean {
   const before=previous.documentary?.requirement,after=next.documentary?.requirement;
   const old=before?.aiSearchPlan,plan=after?.aiSearchPlan;
-  return Boolean(old&&plan&&before?.text===after?.text&&old.visualTarget===plan.visualTarget
+  const fallback=(requirement:DocumentaryRequirement|undefined)=>requirement?.footageFallback?{
+    target:requirement.footageFallback.target,narration:requirement.footageFallback.narration,
+    originalTarget:requirement.footageFallback.originalTarget,kind:requirement.footageFallback.kind}:undefined;
+  const grounding=(value:typeof old)=>value?.grounding?{mandatory:value.grounding.mandatory,illustrations:value.grounding.illustrations}:undefined;
+  return Boolean(old&&plan&&previous.narration===next.narration&&before?.text===after?.text&&old.visualTarget===plan.visualTarget
     &&old.subject===plan.subject&&old.visualScope===plan.visualScope&&isDeepStrictEqual(old.years,plan.years)
-    &&isDeepStrictEqual(before?.footageFallback,after?.footageFallback));
+    &&old.fallbackVisualTarget===plan.fallbackVisualTarget&&isDeepStrictEqual(grounding(old),grounding(plan))
+    &&isDeepStrictEqual(fallback(before),fallback(after)));
+}
+
+/** Only settled content-range history is task-scoped. Unknown future recovery
+ * fields and uncertain reviews are not permission to release a paid-job guard. */
+function canArchiveChangedTaskRejections(previous:Scene,next:Scene):boolean {
+  const old=previous.documentary,doc=next.documentary,recovery=old?.searchRecovery;
+  if(!old?.requirement.aiSearchPlan||!doc?.requirement.aiSearchPlan||!recovery?.rejectedRanges.length
+    ||samePlannedVisualTask(previous,next)||!isDeepStrictEqual(recovery,doc.searchRecovery))return false;
+  if([old,doc].some(value=>value.verified||value.pinned||value.manualReview
+    ||value.visualReview?.status==='accepted'||value.visualReview?.status==='uncertain'))return false;
+  if(Object.keys(recovery).some(key=>!['reason','queries','scriptEvidence','rejectedRanges'].includes(key)))return false;
+  return recovery.rejectedRanges.every(range=>Object.keys(range).every(key=>
+    ['checksum','start','end','reason','sourceId','sourceStart','sourceEnd'].includes(key)));
 }
 
 export interface DocumentaryCandidatePriority {
@@ -1936,7 +1954,7 @@ export class DocumentaryProjectService {
       }
       const missing=pending.filter(scene=>!plan.has(scene.id));
       const reason=issues.length?` ${formatQueryIssues(issues)}`:planningError?` Причина: ${planningError.replace(/^Error:\s*/, '').slice(0,300)}`:'';
-      project=await this.projects.mutate(projectId,current=>{
+      const applyPlans=(current:Project)=>{
         signal?.throwIfAborted();
         if(JSON.stringify(documentaryAiPlanContext(current))!==input
           ||busy(current))throw new Error('Проект изменился во время подготовки AI-запросов');
@@ -1972,6 +1990,34 @@ export class DocumentaryProjectService {
           return {...scene,documentary:{...doc,verified:false,
             autoError:'Контекст сценария изменился. Материал и озвучка сохранены; требуется проверка новой цели.'}};
         })};
+      };
+      // Persist the old content refusals with both task snapshots BEFORE any
+      // project mutation. Paid receipts, source reviews and uncertain markers
+      // remain untouched. A query-only refresh does not release these ranges.
+      const rejectionChanges=new Map<string,{previous:Scene;next:Scene}>();
+      for(const next of applyPlans(project).scenes){
+        const previous=project.scenes.find(scene=>scene.id===next.id)!;
+        if(!canArchiveChangedTaskRejections(previous,next))continue;
+        const archive=JSON.stringify({version:1,sceneId:next.id,
+          from:{narration:previous.narration,requirement:previous.documentary!.requirement},
+          to:{narration:next.narration,requirement:next.documentary!.requirement},
+          searchRecovery:previous.documentary!.searchRecovery},null,2);
+        const key=createHash('sha256').update(archive).digest('hex');
+        await atomicWrite(join(this.storage.projectDirectory(projectId),'Documentary',next.id.replace(/[^a-zA-Z0-9_-]/g,'_'),
+          'TaskRejectionHistory',key+'.json'),archive,{durable:true,allowCopyFallback:false});
+        rejectionChanges.set(next.id,{previous,next});
+      }
+      project=await this.projects.mutate(projectId,current=>{
+        const update=applyPlans(current);
+        // Do not discard a newer verdict or overwrite a user edit arriving
+        // while its predecessor was being archived.
+        for(const [id,proof]of rejectionChanges){
+          const previous=current.scenes.find(scene=>scene.id===id),next=update.scenes.find(scene=>scene.id===id);
+          if(!previous||!next||!isDeepStrictEqual(previous,proof.previous)||!isDeepStrictEqual(next,proof.next))
+            throw new Error('Сцена изменилась во время сохранения истории отказов; прежние материалы и отказы сохранены.');
+        }
+        return {scenes:update.scenes.map(scene=>rejectionChanges.has(scene.id)
+          ?{...scene,documentary:{...scene.documentary!,searchRecovery:undefined}}:scene)};
       },{candidateSceneIds:[]});
       await this.storage.ensureProject(project);
       let reportPlans=plan,reportMissing=missing,reportIssues=issues;
