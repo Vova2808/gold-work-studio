@@ -17,7 +17,7 @@ const MODEL = 'fixture/text-model';
 // exercised separately below with unchanged, real multi-theme narration.
 const fixtureQuote = 'The fixture subject and its visible period are explicitly requested.';
 type Payload = { originalScript: string; contextScenes: Array<{ sceneId: string; narration: string }>;
-  requestedScenes: Array<{ sceneId: string; narration: string }>;visualPolicy:{mode:string} };
+  requestedScenes: Array<{ sceneId: string; narration: string;sourcePassage?:string }>;visualPolicy:{mode:string} };
 type Call = { system: string; data: Payload; model: string | undefined; images: string[] };
 const scenesOf = (...narrations: string[]): Scene[] => narrations.map((narration, order) =>
   ({ id: `scene-${order}`, order, narration, title: `Scene ${order}` } as Scene));
@@ -60,9 +60,9 @@ test('source-grounded plans keep history separate from visible requirements acro
     assert.deepEqual(plan.years,[]);assert.deepEqual(plan.grounding!.mandatory.map(check=>check.kind),['identity']);
     assert.equal(result.identities![0]!.name,cases[index]!.subject);
   }
-  assert.match(f.calls[0]!.system,/end of trade.*does not require loading/);
-  assert.match(f.calls[0]!.system,/another named object or person cannot replace the subject/);
-  assert.match(f.calls[0]!.system,/quote establishes provenance; separately decide/);
+  assert.match(f.calls[0]!.system,/end of trade.*does not require a historical event photo, loading/);
+  assert.match(f.calls[0]!.system,/different named subject or a broad thematic association is not a substitute/);
+  assert.match(f.calls[0]!.system,/quote establishes provenance, not an automatic requirement/);
 });
 
 test('preselected contextual subjects keep their own identity, while portrait and physical-feature requests stay strict',async t=>{
@@ -99,12 +99,62 @@ test('preselected contextual subjects keep their own identity, while portrait an
     assert.equal(documentaryAiPlanGroundingIssue(plan,project.videoBrief!.readyScript!),undefined);
   }
   const prompt=f.calls[0]!.system;
-  assert.match(prompt,/Choose the permitted representation BEFORE candidate discovery/);
-  assert.match(prompt,/not automatically to every participant mentioned/);
-  assert.match(prompt,/person's appearance or personal physical feature/);
-  assert.match(prompt,/statement that a named canal shortened a journey can use an identified view/);
-  assert.match(prompt,/never invent ports or borrow unrelated journey details/);
-  assert.match(prompt,/bare structure cannot illustrate a described surface or covering/);
+  assert.match(prompt,/Choose the representation before searching/);
+  assert.match(prompt,/DEFAULT to that SAME object or institution/);
+  assert.match(prompt,/Merely naming its owner or leader does not make a portrait mandatory/);
+  assert.match(prompt,/appearance, personal physical feature or explicitly requested depiction/);
+  assert.match(prompt,/generic beneficiary alone does not explain a specific geographic or technical difference/);
+  assert.match(prompt,/Never invent ports or borrow unrelated journey details/);
+  assert.match(prompt,/mandatory as a separate condition alongside identity/);
+  assert.doesNotMatch(prompt,/relationship can be illustrated by one element/);
+});
+
+test('editing slices 19 and 20 receive the same exact source paragraph and preserve the complete causal sentence',async t=>{
+  const first='The Suez Canal had opened,',second='giving steamships a much shorter passage to the Indian Ocean.';
+  const passage=first+'\r\n'+second+'\r\nSailing ships still faced another route.';
+  const script='An earlier episode about an unrelated voyage.\r\n\r\n'+passage+'\r\n \r\nA later episode has other ports.';
+  const scenes=scenesOf(first,'  '+second+'\r\n'),project=projectOf(scenes,script),before=structuredClone(project);
+  const f=await fixture(t);
+  await f.planner().plan(project,scenes);
+  assert.deepEqual(f.calls[0]!.data.requestedScenes,scenes.map(scene=>({sceneId:scene.id,narration:scene.narration,sourcePassage:passage})));
+  assert.equal(f.calls[0]!.data.originalScript,project.videoBrief!.readyScript);
+  assert.deepEqual(f.calls[0]!.data.contextScenes,scenes.map(scene=>({sceneId:scene.id,narration:scene.narration})));
+  assert.deepEqual(project,before);
+  assert.match(f.calls[0]!.system,/COMPLETE original sentence/);
+  assert.match(f.calls[0]!.system,/sentence fragment does not establish a new subject/);
+});
+
+for(const sample of [
+  {name:'repeated fragment',line:'The voyage began.',script:'The voyage began. In the north.\n\nThe voyage began. In the south.',expected:undefined},
+  {name:'absent fragment',line:'The absent voyage began.',script:'The recorded voyage ended.',expected:undefined},
+  {name:'single paragraph',line:'The canal shortened the passage.',script:'Before. The canal shortened the passage. After.',expected:'whole'},
+  {name:'unchanged line breaks',line:'The canal opened.\nIt shortened the passage.',script:'The canal opened.\r\nIt shortened the passage.',expected:undefined},
+  {name:'cross-paragraph narration',line:'The canal opened.\n\nIt shortened the passage.',script:'The canal opened.\n\nIt shortened the passage.',expected:undefined},
+] as const)test(`source passage never invents or borrows context for ${sample.name}`,async t=>{
+  const scenes=scenesOf(sample.line),project=projectOf(scenes,sample.script),f=await fixture(t);
+  await f.planner().plan(project,scenes);
+  const input=f.calls[0]!.data,row=input.requestedScenes[0]!;
+  assert.equal(row.sourcePassage,sample.expected==='whole'?input.originalScript:undefined);
+  assert.equal(Object.hasOwn(row,'sourcePassage'),sample.expected==='whole');
+  assert.equal(input.originalScript,project.videoBrief!.readyScript);
+  assert.equal(row.narration,sample.line);
+});
+
+for(const status of ['pending','uncertain'] as const)test(`revision 13 keeps an unresolved revision 12 ${status} receipt despite the new source passage`,async t=>{
+  const f=await fixture(t,async()=>{throw new AnyModelCompletionUncertainError('Unknown paid response','{"scenes":[','connection');});
+  const scenes=scenesOf('The canal opened.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,scenes));
+  const files=await f.cacheFiles();assert.equal(files.length,1);
+  const file=path.join(f.root,'documentary-ai-query-plans',files[0]!),cache=JSON.parse(await readFile(file,'utf8'));
+  const receipt=cache.attempts[0];receipt.status=status;receipt.request.promptRevision=12;receipt.request.system='Saved revision 12 primary planner instruction';
+  const input=JSON.parse(receipt.request.payload);for(const row of input.requestedScenes)delete row.sourcePassage;
+  receipt.request.payload=JSON.stringify(input);
+  await writeFile(file,JSON.stringify(cache));const bytes=await readFile(file,'utf8');
+  assert.equal((await f.planner().readCached(project,scenes)).size,0);
+  await assert.rejects(f.planner().plan(project,scenes,{refreshSceneIds:new Set([scenes[0]!.id])}),/не подтверждён|неопределён/);
+  assert.equal(f.calls.length,1,'A new prompt and passage cannot duplicate an unresolved paid request');
+  assert.deepEqual(await f.cacheFiles(),files,'Prompt revision does not move the paid cache');
+  assert.equal(await readFile(file,'utf8'),bytes,'The original unknown receipt stays intact');
 });
 
 test('current paid output with invented quotes, invented aliases, missing grounding or unsupported mandatory era stops within the existing repair budget',async t=>{
@@ -197,7 +247,7 @@ test('a grounded older refresh cannot hide the current contextual illustration r
  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
  const cache=JSON.parse(await readFile(file,'utf8'));
  cache.attempts[0].request.promptRevision=10;
- const oldRefresh=structuredClone(cache.attempts[0]);oldRefresh.request.promptRevision=11;oldRefresh.refreshIds=[id];
+ const oldRefresh=structuredClone(cache.attempts[0]);oldRefresh.request.promptRevision=12;oldRefresh.refreshIds=[id];
  const raw=JSON.parse(oldRefresh.rawResponse);raw.scenes[0].visualTarget='John Willis portrait';oldRefresh.rawResponse=JSON.stringify(raw);
  cache.attempts.push(oldRefresh);
  scenes[0]!.documentary!.requirement.aiSearchPlan!.visualTarget='John Willis portrait';
@@ -789,7 +839,7 @@ test('cache-only read does not wait for a pending completion to settle', async t
   assert.equal((await running).size, 2);
 });
 
-test('prompt revision 5 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
+test('prompt revision 13 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
   const expected = [
     entry('scene-0', { subject: 'Yamaha YZR-M1', visualTarget: 'Yamaha YZR-M1 motorcycle cornering', years: ['2003'],
       imageQueries: ['Yamaha YZR-M1 2003 cornering'], videoQueries: ['Yamaha YZR-M1 2003 race footage'],
@@ -814,17 +864,19 @@ test('prompt revision 5 separates narrated history from required pixels and pres
   const prompt = f.calls[0]!.system;
   assert.match(prompt, /subject names the physical person, object, place or component/);
   assert.match(prompt, /three sparse video samples/);
-  assert.match(prompt, /Do not turn narrated chronology, assessments/);
-  assert.match(prompt, /Keep direct visual instructions and a necessary visible action\/component/);
+  assert.match(prompt, /Explicit visual directions take priority/);
+  assert.match(prompt, /Never mark the line's central feature optional/);
   assert.match(prompt, /years contains ONLY a visibly required period\/capture year/);
-  assert.match(prompt, /Dates may optionally help an archival query without becoming mandatory/);
-  assert.match(prompt, /necessary named location and meaningful object class/);
-  assert.match(prompt, /causal, supply, or functional relationship can be illustrated by one element/);
-  assert.match(prompt, /attributed close-up of the relevant component/);
-  assert.match(prompt, /Preserve both sides and the relevant difference in an actual comparison/);
-  assert.match(prompt, /Require an action only if the script calls for that action to be shown or the narrated action is itself the point/);
-  assert.match(prompt, /each photo, video, or reserve query should seek a result that satisfies its corresponding target as written/);
-  assert.match(prompt, /state them as alternatives in the target\. Any optional action or wide view applies only to its corresponding alternative/);
+  assert.match(prompt, /Dates may help archival queries without becoming required pixels/);
+  assert.match(prompt, /retain the chosen subject, necessary geography and central visible features/);
+  assert.match(prompt, /retain that cause, unless the result itself visibly demonstrates the change/);
+  assert.match(prompt, /physical model or accurate diagram may illustrate the same subject\/feature/);
+  assert.match(prompt, /Explicit visual comparisons must preserve both subjects and the relevant difference/);
+  assert.match(prompt, /Require a visible action only when the script makes showing it the point/);
+  assert.match(prompt, /All primary and reserve queries must satisfy their corresponding target/);
+  assert.match(prompt, /Do not mix different depicted subjects under one mandatory identity/);
+  assert.match(prompt, /"kind":"condition","required":"the visible physical feature discussed by this line"/);
+  assert.match(prompt, /sample condition is for a physical-feature line; omit it for ordinary subject-context/);
   for (const row of expected) {
     const plan = results.get(row.sceneId)!.aiSearchPlan!;
     assert.deepEqual(plan.imageQueries, row.imageQueries);
@@ -836,7 +888,7 @@ test('prompt revision 5 separates narrated history from required pixels and pres
   const file = path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!);
   const cache = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(cache.version, 1, 'Prompt change does not silently invalidate already paid v1 receipts');
-  assert.equal(cache.attempts[0].request.promptRevision, 12);
+  assert.equal(cache.attempts[0].request.promptRevision, 13);
   assert.equal(cache.attempts[0].request.system, prompt);
 });
 
@@ -938,11 +990,10 @@ test('representation contract preserves historical alternatives, an explicitly m
   entry('scene-2',{subject:'Suez Canal',visualTarget:'Suez Canal waterway; archival illustration or modern view of the same canal',years:['1869'],visualScope:'illustrative',
    imageQueries:['Suez Canal 1869 engraving'],videoQueries:['Suez Canal waterway ships']})];
  const f=await fixture(t,async call=>{
-  assert.match(call.system,/Appropriate archival photos\/artwork and modern views of the same surviving subject/);
-  assert.match(call.system,/alternative representations unless the script explicitly requires one/);
-  assert.match(call.system,/museum location, viewpoint or modern appearance is not mandatory/);
-  assert.match(call.system,/Keep direct visual instructions/);
-  assert.match(call.system,/Preserve the SAME named subject and any named place that is itself the scene's subject/);
+  assert.match(call.system,/archival, drawn or modern representations of that SAME subject/);
+  assert.match(call.system,/Explicit visual directions take priority/);
+  assert.match(call.system,/optionalDetails contains only nonessential staging, capture date or viewpoint/);
+  assert.match(call.system,/different named subject or a broad thematic association is not a substitute/);
   assert.doesNotMatch(call.system,/put its proper name and a filmable present-day detail or location in the first video query/);
   assert.deepEqual(call.data.requestedScenes.map(s=>s.narration),scenes.map(s=>s.narration));
   return JSON.stringify({scenes:rows});
@@ -969,7 +1020,7 @@ test('short03 raw event plans become stale and subject-illustration is explicit 
  const file=path.join(directory,oldHash+'.json'),bytes=JSON.stringify({version:1,inputHash:oldHash,model:MODEL,plans:oldPlans,attempts:[]});await writeFile(file,bytes);
  assert.equal((await f.planner().readCached(project,scenes)).size,0);await f.planner().plan(project,scenes);
  assert.equal(f.calls.length,1);assert.equal(f.calls[0]!.data.visualPolicy.mode,'subject-illustration');
- assert.match(f.calls[0]!.system,/historical event statement is NOT a request for a recording or reconstruction/);
+ assert.match(f.calls[0]!.system,/narrated biography, an end of trade or a past voyage does not require a historical event photo/);
  assert.match(f.calls[0]!.system,/years contains ONLY a visibly required period\/capture year/);
  assert.doesNotMatch(f.calls[0]!.system,/years are exact relevant years|asserts or requests|Preserve exact names, models and relevant years in primary/);
  assert.equal(await readFile(file,'utf8'),bytes);
@@ -988,7 +1039,7 @@ test('a direct visual instruction retains the requested event, place and archiva
  const expected=entry('scene-0',{subject:'Cutty Sark',visualTarget:'Actual Cutty Sark launch at Dumbarton in 1869',years:['1869'],visualScope:'exact',
   imageQueries:['Cutty Sark launch Dumbarton 1869'],videoQueries:[],preferredKind:'image'});
  const f=await fixture(t,async call=>{
-  assert.match(call.system,/Keep direct visual instructions/);
+  assert.match(call.system,/Explicit visual directions take priority/);
   assert.equal(call.data.requestedScenes[0]!.narration,scenes[0]!.narration);
   return JSON.stringify({scenes:[expected]});
  });
@@ -1013,7 +1064,8 @@ test('comparison plans preserve actual short04 context and remain usable as imag
   entry('scene-3',{subject:'Earth and Jupiter',visualTarget:'Side-by-side size comparison diagram of Earth and Jupiter at the same scale',
    years:[],visualScope:'illustrative',preferredKind:'image',reservePolicy:'primary-only',imageQueries:['Earth Jupiter size comparison diagram same scale'],videoQueries:[],fallbackVisualTarget:'',fallbackVideoQueries:[]})];
  const f=await fixture(t,async call=>{
-  assert.equal(call.data.originalScript,script+'\n'+fixtureQuote);assert.deepEqual(call.data.requestedScenes,scenes.map(s=>({sceneId:s.id,narration:s.narration})));
+  assert.equal(call.data.originalScript,script+'\n'+fixtureQuote);
+  assert.deepEqual(call.data.requestedScenes.map(({sceneId,narration})=>({sceneId,narration})),scenes.map(s=>({sceneId:s.id,narration:s.narration})));
   return JSON.stringify({scenes:rows});
  });
  const project=projectOf(scenes,script),before=structuredClone(project),plans=await f.planner().plan(project,scenes);
@@ -1090,9 +1142,9 @@ for(const previousRevision of [undefined,2,3,4,5])for(const pending of [false,tr
  assert.equal((await f.planner().readCached(project,scenes)).size,0);
  if(pending){await assert.rejects(f.planner().plan(project,scenes),/неизвестный результат/);assert.equal(f.calls.length,0);}
  else{assert.equal((await f.planner().plan(project,scenes)).size,1);assert.equal(f.calls.length,1);
-  assert.match(f.calls[0]!.system,/Separate the subject, narrated history and required pixels/);
-  assert.match(f.calls[0]!.system,/not years mentioned for narrative chronology/);
-  assert.match(f.calls[0]!.system,/Preserve the SAME named subject/);
+  assert.match(f.calls[0]!.system,/subject names the physical person, object, place or component, not an event, date or assessment/);
+  assert.match(f.calls[0]!.system,/years contains ONLY a visibly required period\/capture year/);
+  assert.match(f.calls[0]!.system,/different named subject or a broad thematic association is not a substitute/);
   assert.equal((await f.planner().plan(project,scenes)).size,1);assert.equal(f.calls.length,1);}
  assert.equal(await readFile(file,'utf8'),bytes,'The old paid receipt is preserved byte-for-byte');
 });
