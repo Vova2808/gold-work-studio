@@ -50,8 +50,14 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
     &&/\b(?:bedroom\s+apartment|apartment\s+for\s+(?:sale|rent)|property\s+tour|real\s+estate|villa\s+for\s+sale)\b|квартир\p{L}*\s+(?:на\s+)?продаж/iu.test(title))
     return refusal('источник является показом недвижимости, а не требуемого объекта.');
   // A named grave/monument is a different depicted object from its namesake.
-  if(contains(title)&&/\b(?:grave|tomb|gravestone|headstone|tombstone|memorial|monument)\b|могил|надгроб|памятник/iu.test(title)
-    && !/\b(?:grave|tomb|memorial|monument)\b|могил|надгроб|памятник/iu.test(requirement.detail??requirement.aiSearchPlan?.visualTarget??''))
+  // This also applies after a contextual portrait was replaced by the person's
+  // ship: the person's grave still cannot depict that ship. Do not infer this
+  // from passing mentions in the description.
+  const graveOnly=(personTarget||vehicleCue.test(visibleSubject))
+    &&/^(?:the\s+)?(?:grave|tomb|gravestone|headstone|tombstone)\b|^(?:могила|надгробие)(?:\s|$)/iu.test(title.trim())
+    &&!contains(title)&&!vehicleCue.test(title)&&!/\b(?:portrait|photograph|photo|painting)\s+of\b|портрет/iu.test(title);
+  if((graveOnly||contains(title)&&/\b(?:grave|tomb|gravestone|headstone|tombstone|memorial|monument)\b|могил|надгроб|памятник/iu.test(title))
+    && !/\b(?:grave|tomb|memorial|monument)\b|могил|надгроб|памятник/iu.test(target))
     return refusal('изображено захоронение или памятник, а не сам человек/объект.');
   // The camera platform and an author/credit are not the depicted subject.
   const viewpoint=/\b(?:taken|view|seen|photographed|shot)\s+(?:\w+\s+){0,3}from\s+(?:the\s+)?(?:deck|board|aboard|cockpit|bridge)\s+(?:of\s+)?|\b(?:from\s+(?:the\s+)?deck\s+of|photograph(?:ed)?\s+by|painted\s+by|drawn\s+by|photo\s+by|caption(?:ed)?\s+by)\s+|\s+by\s+/iu.exec(title);

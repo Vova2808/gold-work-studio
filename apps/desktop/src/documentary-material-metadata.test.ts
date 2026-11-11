@@ -60,6 +60,16 @@ test('a namesake beverage and explicitly named foreign-language yacht are not th
  assert.equal(documentaryMaterialMetadataIssue(namedScene('Aurora','Aurora whisky was produced.','Aurora whisky bottle'),source('Aurora whisky review')),undefined);
 });
 
+test('a captain grave stays irrelevant when the task changes from his portrait to his ship',()=>{
+ const ship=namedScene('Cutty Sark','In 1885, Richard Woodget became captain.','Cutty Sark clipper ship');
+ const grave=source('The grave of Richard Woodget in Burnham Norton - geograph.org.uk - 5565045.jpg');
+ assert.match(documentaryMaterialMetadataIssue(ship,grave)!,/захоронение/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Aurora','Her captain was remembered.','Aurora ship'),source('Tomb of Captain Smith'))!,/захоронение/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Aurora','Her captain was remembered.','Aurora ship'),source('Могила капитана Смита'))!,/захоронение/);
+ assert.equal(documentaryMaterialMetadataIssue(namedScene('Richard Woodget','His grave remains.','grave of Richard Woodget'),grave),undefined);
+ assert.equal(documentaryMaterialMetadataIssue(ship,source('Cutty Sark at Greenwich')),undefined);
+});
+
 test('explicit different named vessels, aircraft, locomotives and canals are rejected from the original title before visual payment',()=>{
   const cases=[
     ['Cutty Sark','Clipper Ship \'Blackadder\' at sea with foremast and mainmast broken RMG PY8584.tiff'],
