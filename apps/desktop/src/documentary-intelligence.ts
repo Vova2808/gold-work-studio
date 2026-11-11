@@ -322,8 +322,8 @@ class DocumentaryModelRefusal extends Error {
   constructor(readonly response:string){super('Модель отказалась анализировать материал: '+response.trim().slice(0,700));}
 }
 const modelRefusal=(text:string)=>/the model could not generate output because|input (?:image|content) violates.*(?:policy|policies)/i.test(text);
-export function documentaryJson(text: string): Record<string, unknown> {
-  const parsed=parseDocumentaryJson(text);
+export function documentaryJson(text: string,allowUnclosedFence=false): Record<string, unknown> {
+  const parsed=parseDocumentaryJson(text,allowUnclosedFence);
   if(!parsed&&modelRefusal(text))throw new DocumentaryModelRefusal(text);
   if(!parsed)throw new Error(documentaryJsonFormatIssue(text)==='incomplete-json'
     ?'Получен незавершённый JSON анализа Stock: решение модели отсутствует. Причина обрыва не установлена; лимит токенов не подтверждён. Ответ сохранён без автоматической повторной оплаты.'
@@ -386,12 +386,12 @@ export async function readAnalysisCheckpoint(path: string): Promise<{ state: str
       await atomicWrite(path,JSON.stringify(value));return value;
     }
     let result;
-    const parsed=parseDocumentaryJson(value.raw);
+    const parsed=parseDocumentaryJson(value.raw,value.purpose==='visual-illustration'&&value.completion?.finishReason==='stop');
     try { result = parsed?.result??documentaryJson(value.raw); } catch {
       result=value.purpose==='visual-source-text'?receivedDocumentarySourceText(value.raw):value.purpose==='semantic-montage'?receivedMotionArtwork(value.raw):undefined;
       if(!result)return value;
     }
-    value = { ...value, state: "complete", result, ...(parsed?.parser==='json5'?{syntaxRepair:{kind:'received-json5',parser:'json5',rawSha256:createHash('sha256').update(value.raw).digest('hex')}}:{}) };
+    value = { ...value, state: "complete", result, ...(parsed?.unclosedFence||parsed?.parser==='json5'?{syntaxRepair:{kind:parsed.unclosedFence?'received-unclosed-fence':'received-json5',parser:parsed.parser,rawSha256:createHash('sha256').update(value.raw).digest('hex')}}:{}) };
     await atomicWrite(path, JSON.stringify(value));
   }
   return value;
@@ -1447,6 +1447,7 @@ export class DocumentaryIntelligence {
       await atomicWrite(path, JSON.stringify({ state: "received", purpose, ...previewMetadata, model, overviewSamplingVersion, raw,
         ...(documentaryJsonFormatIssue(raw)?{formatIssue:documentaryJsonFormatIssue(raw)}:{}),...(completionMetadata?{completion:completionMetadata}:{}) }));
       received = true;
+      const allowUnclosedFence=purpose==='visual-illustration'&&completionMetadata?.finishReason==='stop';
       let parsed:Record<string,unknown>;
       try{
         if(purpose==='search-plan'){
@@ -1457,7 +1458,7 @@ export class DocumentaryIntelligence {
             throw new DocumentaryPlanInvalidResponse(key);
           }
           parsed=plan.result;
-        }else parsed=artwork?(receivedMotionArtwork(raw)??documentaryJson(raw)):documentaryJson(raw);
+        }else parsed=artwork?(receivedMotionArtwork(raw)??documentaryJson(raw)):documentaryJson(raw,allowUnclosedFence);
       }catch(error){
         const ranking=purpose==='search-plan'?receivedDocumentaryPlanPayload(raw)?.result:purpose==='candidate-relevance'?receivedDocumentaryRanking(raw)
           :purpose==='visual-source-text'?receivedDocumentarySourceText(raw):undefined;
@@ -1466,8 +1467,9 @@ export class DocumentaryIntelligence {
       }
       const requiredSourceText=scriptRequirements?.checks.some(check=>/\b(?:text|inscription|caption|lettering|words|sign reads)\b|надпис|текст|написан/iu.test(check.required+' '+check.scriptQuote))??false;
       const receivedPlan=purpose==='search-plan'?receivedDocumentaryPlanPayload(raw):undefined;
-      const jsonReceipt=purpose!=='search-plan'?parseDocumentaryJson(raw):undefined;
-      const planRepair=receivedPlan?.kind==='received-json'?undefined:receivedPlan??(jsonReceipt?.parser==='json5'?{kind:'received-json5',parser:'json5',insertedAt:undefined}:undefined);
+      const jsonReceipt=purpose!=='search-plan'?parseDocumentaryJson(raw,allowUnclosedFence):undefined;
+      const planRepair=receivedPlan?.kind==='received-json'?undefined:receivedPlan??(jsonReceipt?.unclosedFence||jsonReceipt?.parser==='json5'
+        ?{kind:jsonReceipt.unclosedFence?'received-unclosed-fence':'received-json5',parser:jsonReceipt.parser,insertedAt:undefined}:undefined);
       const result = enforceVisualEvidence(enrich ? enforceDocumentaryTechnicalQuality(parsed,true,ordinaryVisual,requiredSourceText) : parsed);
       this.consecutiveConnectionFailures = 0;
       this.connectionRecoveries = 0;

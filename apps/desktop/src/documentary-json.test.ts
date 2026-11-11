@@ -32,6 +32,41 @@ test('fully received generic visual JSON5 retains raw/hash/parser proof; unknown
   }
 });
 
+test('a terminal visual answer may omit only its Markdown closing fence, never JSON tokens',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-terminal-visual-fence-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const raw='```json\n'+JSON.stringify({suitable:false,targetVisible:false,reason:'Bare yards have no sailcloth.'},null,2);
+  assert.equal(parseDocumentaryJson(raw),undefined,'Without terminal proof the former boundary remains');
+  assert.equal(parseDocumentaryJson(raw,true)?.result.suitable,false);
+  for(const bad of [raw.slice(0,-1),raw+'\n{}',raw+'\nExplanation.',raw+'\n```json\n{}',
+    '```json\n{"suitable":true,"reason":"unfinished', '```json\n{"suitable":true,"constructor":{}}'])
+    assert.equal(parseDocumentaryJson(bad,true),undefined,bad);
+  for(const [state,finishReason] of [['received','stop'],['received','length'],['received',undefined],['pending','stop'],['partial','stop']]){
+    const path=join(root,`${state}-${finishReason}.json`);
+    const original=JSON.stringify({state,purpose:'visual-illustration',raw,completion:{finishReason}});await writeFile(path,original);
+    const saved=await readAnalysisCheckpoint(path);
+    if(state==='received'&&finishReason==='stop'){
+      assert.equal(saved?.state,'complete');assert.equal(saved?.result?.suitable,false);
+      const proof=JSON.parse(await readFile(path,'utf8'));assert.equal(proof.raw,raw);
+      assert.equal(proof.syntaxRepair.kind,'received-unclosed-fence');
+      assert.equal(proof.syntaxRepair.rawSha256,createHash('sha256').update(raw).digest('hex'));
+    }else{assert.equal(saved?.state,state);assert.equal(await readFile(path,'utf8'),original);}
+  }
+});
+
+test('new terminal visual fence omission is parsed once and then reused without another API call',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-new-terminal-fence-'));t.after(()=>rm(root,{recursive:true,force:true}));let calls=0;
+  const raw='```json\n{"suitable":false,"targetVisible":false,"reason":"The supplied frame has bare yards."}';
+  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(...args:unknown[])=>{
+    calls++;(args[8] as {onTerminal?:(value:{finishReason:string})=>void})?.onTerminal?.({finishReason:'stop'});return raw;
+  }},()=>root);
+  const complete=(service as unknown as {complete:(id:string,purpose:string,system:string,input:string)=>Promise<Record<string,unknown>>}).complete.bind(service);
+  const first=await complete('p','visual-illustration','Inspect actual pixels','{}');assert.equal(first.suitable,false);
+  assert.deepEqual(await complete('p','visual-illustration','Inspect actual pixels','{}'),first);assert.equal(calls,1);
+  const analysis=join(root,'Documentary','Analysis'),name=(await readdir(analysis)).find(name=>/^[a-f0-9]{64}\.json$/.test(name))!;
+  const receipt=JSON.parse(await readFile(join(analysis,name),'utf8'));assert.equal(receipt.raw,raw);
+  assert.equal(receipt.syntaxRepair.kind,'received-unclosed-fence');assert.equal(receipt.result.suitable,false);
+});
+
 test('new generic visual response uses the same JSON5 parser, keeps refusal and reuses its completed checkpoint',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-new-visual-json5-'));t.after(()=>rm(root,{recursive:true,force:true}));let calls=0;
   const raw='{status:"rejected",reason:"no visible requested subject",confidence:0.95,}';

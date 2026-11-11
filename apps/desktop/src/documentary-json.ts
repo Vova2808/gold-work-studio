@@ -29,7 +29,14 @@ export function safeDocumentaryJsonValue(value:unknown,depth=0):boolean{
   return Object.entries(value).every(([key,item])=>!['__proto__','prototype','constructor'].includes(key)&&safeDocumentaryJsonValue(item,depth+1));
 }
 
-export function documentaryJsonAnswer(raw:string):string|undefined{
+export function documentaryJsonAnswer(raw:string,allowUnclosedFence=false):string|undefined{
+  // A provider may explicitly finish with a complete JSON object but omit the
+  // Markdown closing fence. Only a caller with a confirmed terminal stop may
+  // discard that single leading wrapper; the entire remaining object must parse.
+  if(allowUnclosedFence&&/^```(?:json5?)?[ \t]*\r?\n/i.test(raw.trim())){
+    const body=raw.trim().replace(/^```(?:json5?)?[ \t]*\r?\n/i,'').trim();
+    if(!body.includes('```'))return body;
+  }
   const blocks=[...raw.matchAll(/```(?:json5?)?[ \t]*\r?\n([\s\S]*?)```/gi)];
   if(blocks.length>1)return;
   // Only surrounding prose may be discarded, never a competing object or fence.
@@ -42,13 +49,14 @@ export function documentaryJsonAnswer(raw:string):string|undefined{
 
 /** Only callers with a fully received answer may use this. The entire object
  * must parse; no fragment extraction, missing tokens or semantic repairs. */
-export function parseDocumentaryJson(raw:string):{result:Record<string,unknown>;parser:'json'|'json5'}|undefined{
-  const clean=documentaryJsonAnswer(raw);
+export function parseDocumentaryJson(raw:string,allowUnclosedFence=false):{result:Record<string,unknown>;parser:'json'|'json5';unclosedFence?:true}|undefined{
+  const clean=documentaryJsonAnswer(raw,allowUnclosedFence);
   if(!clean||!clean.startsWith('{')||!clean.endsWith('}'))return;
   let value:unknown,parser:'json'|'json5'='json';
   try{value=JSON.parse(clean);}catch{
     try{value=JSON5.parse(clean);parser='json5';}catch{return;}
   }
   if(!safeDocumentaryJsonValue(value)||!value||typeof value!=='object'||Array.isArray(value))return;
-  return {result:value as Record<string,unknown>,parser};
+  return {result:value as Record<string,unknown>,parser,
+    ...(allowUnclosedFence&&/^```(?:json5?)?[ \t]*\r?\n/i.test(raw.trim())&&!raw.trim().endsWith('```')?{unclosedFence:true as const}:{})};
 }
