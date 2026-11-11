@@ -14,28 +14,30 @@ import {prepareDocumentaryScript} from './documentary-plan.js';
 import {documentaryIllustrationApproval} from './documentary-context-approval.js';
 import {effectFfmpeg} from './effect-media.js';
 
-for(const duplicate of [false,true])test(`failed physical task merges focused discovery and preserves saved duplicate=${duplicate}`,async t=>{
+for(const identityOnly of [false,true])for(const duplicate of [false,true])test(`failed image task identityOnly=${identityOnly} merges discovery and preserves saved duplicate=${duplicate}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-focused-resume-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live requests in orchestration fixture'));
  const file=join(root,'fixture.png');await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720','-frames:v','1',file]);
  const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
  let p=await projects.create({title:'A vessel',topic:'A vessel',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
- const narration='Aurora carried a wide spread of red sails.';
+ const narration=identityOnly?'Aurora was a sailing ship with a long history.':'Aurora carried a wide spread of red sails.';
+ const target=identityOnly?'Aurora sailing ship':'Aurora red sails';
  p.videoBrief={...p.videoBrief!,creationMode:'script',readyScript:narration};
  p.settings.stockVideoPercent=0;p.settings.voice.enabled=false;p.settings.assembly.documentary!.autoMotionGraphics=false;
  p.scenes=[prepareDocumentaryScript(p)[0]!];const scene=p.scenes[0]!,doc=scene.documentary!;
  scene.durationSeconds=4;scene.audioPath='saved-paid-voice.wav';
  const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
  const inputHash=hash({version:1,model:'fixture',context:documentaryAiPlanContext(p)});
- doc.requirement={...doc.requirement,text:narration,entities:['Aurora'],identities:[{name:'Aurora',aliases:[]}],years:[],queries:['Aurora red sails'],
-  aiSearchPlan:{version:1,inputHash:hash({inputHash,sceneId:scene.id}),model:'fixture',subject:'Aurora',visualTarget:'Aurora red sails',
-   years:[],visualScope:'illustrative',preferredKind:'image',imageQueries:['Aurora red sails'],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
-   grounding:{version:1,mandatory:[{kind:'identity',required:'Aurora',scriptQuote:narration},{kind:'condition',required:'red sails',scriptQuote:narration}],
-    illustrations:['Aurora with red sails'],optionalDetails:[]}}};
+ doc.requirement={...doc.requirement,text:narration,entities:['Aurora'],identities:[{name:'Aurora',aliases:[]}],years:[],queries:[target],
+  aiSearchPlan:{version:1,inputHash:hash({inputHash,sceneId:scene.id}),model:'fixture',subject:'Aurora',visualTarget:target,
+   years:[],visualScope:'illustrative',preferredKind:'image',imageQueries:[target],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
+   grounding:{version:1,mandatory:[{kind:'identity',required:'Aurora',scriptQuote:narration},
+    ...(identityOnly?[]:[{kind:'condition' as const,required:'red sails',scriptQuote:narration}])],
+    illustrations:[target],optionalDetails:[]}}};
  const candidate=(id:string,title:string):DocumentaryCandidate=>({id,provider:'commons',kind:'image',title,description:title,
   width:1280,height:720,localPath:file,downloadUrl:'https://example.test/'+id+'.png',pageUrl:'https://example.test/'+id,
   author:'Fixture',license:'public domain',licenseUrl:'',rights:'public-domain',attribution:'Fixture',query:'Aurora',retrievedAt:'now',match:'unverified',concerns:[]});
- const stale=candidate('stale','Aurora at a museum'),fresh=candidate('fresh','Aurora under red sails');
+ const stale=candidate('stale','Aurora at a museum'),fresh=candidate('fresh',identityOnly?'Aurora sailing ship':'Aurora under red sails');
  assert.equal(documentaryMaterialMetadataIssue(scene,fresh),undefined);
  assert.equal(selectSimpleDocumentaryCandidates([stale,fresh],documentarySimpleCandidatePriority(p,scene,'image'))[0]?.id,'fresh');
  doc.candidates=duplicate?[stale,fresh]:[stale];doc.autoError='Previous search did not find the visible condition.';
@@ -43,7 +45,7 @@ for(const duplicate of [false,true])test(`failed physical task merges focused di
  const search=new DocumentarySearch();search.search=async input=>{
   trace.push(`search:${input.providers?.join(',')}`);
   if(input.providers?.includes('commons')){
-   commonsQueries++;assert.deepEqual(input.visualConstraints,['red sails']);
+   commonsQueries++;assert.deepEqual(input.visualConstraints,identityOnly?[]:['red sails']);
    await new Promise(resolve=>setTimeout(resolve,20));trace.push('fresh returned');return {candidates:[duplicate?{...fresh,localPath:undefined}:fresh],sources:[]};
   }
   return {candidates:input.providers?.includes('local')?[stale]:[],sources:[]};
@@ -54,7 +56,7 @@ for(const duplicate of [false,true])test(`failed physical task merges focused di
    inspectForSelection:async(project,current)=>{
     inspected.push(current.documentary!.selected!.id);trace.push(`inspect:${current.documentary!.selected!.id}`);
     const review={status:'accepted' as const,confidence:1,reason:'Mock orchestration verdict, not a live visual check',quality:'',sampleSeconds:[0],checkedAt:'now',
-     fastRelevance:{version:1 as const,target:'Aurora red sails',relevant:true,evidence:'Fixture'}};
+     fastRelevance:{version:1 as const,target,relevant:true,evidence:'Fixture'}};
     return {usedNewAnalysis:true,review:{...review,illustrationApproval:documentaryIllustrationApproval(project,{...current,documentary:{...current.documentary!,visualReview:review}})}};
    }});
  Reflect.set(service,'selectionResources',async()=>({workers:1}));

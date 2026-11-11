@@ -3095,12 +3095,12 @@ export class DocumentaryProjectService {
           // existing download/cache/inspection gates before starting discovery.
           let resumeBatch=resumedCandidates.length?resumedCandidates:undefined;
           try {
-          // A failed condition-specific photo search may retain only generic
-          // old cards. Merge a fresh bounded source batch before spending the
+          // A failed photo search may retain only unsuitable old cards.
+          // Merge a fresh bounded source batch before spending the
           // photo review budget on those cards again. Already prepared/current
           // accepted media is restored earlier through the cache-only path.
           if(resumeBatch&&fastBatches&&kind==='image'&&taskScene.documentary?.autoError
-            &&currentDocumentaryAiSearchPlan(project,taskScene)?.grounding?.mandatory.some(check=>check.kind==='condition'||check.kind==='action')){
+            &&currentDocumentaryAiSearchPlan(project,taskScene)?.imageQueries.length){
             const waiting=Date.now();
             try{
               const first=await fastBatches.next();
