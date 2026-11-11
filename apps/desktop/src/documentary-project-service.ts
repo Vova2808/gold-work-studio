@@ -2008,6 +2008,8 @@ export class DocumentaryProjectService {
           'TaskRejectionHistory',key+'.json'),archive,{durable:true,allowCopyFallback:false});
         rejectionChanges.set(next.id,{previous,next});
       }
+      // The proof contains full scenes, so compare full candidates for these
+      // scenes only; a display projection is not evidence of a concurrent edit.
       project=await this.projects.mutate(projectId,current=>{
         const update=applyPlans(current);
         // Do not discard a newer verdict or overwrite a user edit arriving
@@ -2019,7 +2021,7 @@ export class DocumentaryProjectService {
         }
         return {scenes:update.scenes.map(scene=>rejectionChanges.has(scene.id)
           ?{...scene,documentary:{...scene.documentary!,searchRecovery:undefined}}:scene)};
-      },{candidateSceneIds:[]});
+      },{candidateSceneIds:[...rejectionChanges.keys()]});
       await this.storage.ensureProject(project);
       let reportPlans=plan,reportMissing=missing,reportIssues=issues;
       if(sceneIds&&this.queryPlanner.readCached&&this.queryPlanner.readIssues){

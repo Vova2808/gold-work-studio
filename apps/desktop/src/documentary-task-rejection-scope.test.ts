@@ -3,7 +3,7 @@ import test from 'node:test';
 import {createHash} from 'node:crypto';
 import {copyFile,mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
 import {documentaryAiPlanContext,type DocumentaryCandidate,type DocumentaryRequirement,type Project,type Scene} from '@gold-work/shared';
 import {DocumentaryProjectService} from './documentary-project-service.js';
@@ -12,15 +12,17 @@ import {DocumentarySearch} from './documentary-search.js';
 import {LocalProjectStorage} from './local-project-storage.js';
 import {prepareDocumentaryScript} from './documentary-plan.js';
 import {effectFfmpeg} from './effect-media.js';
+import {FileProjectRepository} from './file-project-repository.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'|'proposed-reserve'='subject'){
+async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'|'proposed-reserve'='subject',repository:'memory'|'file'='memory'){
  const root=await mkdtemp(join(tmpdir(),'gws-task-rejection-scope-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live network'));
  const file=join(root,'saved-source.mp4');
  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=s=1280x720:r=6:d=5','-c:v','libx264','-threads','1',file]);
  const checksum=createHash('sha256').update(await readFile(file)).digest('hex');
- const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
+ const registryPath=join(root,'registry.json');
+ const projects=new ProjectService(repository==='file'?new FileProjectRepository(registryPath):new MemoryProjectRepository(),new MockDirectorProvider());
  let project=await projects.create({title:'Task scope',topic:'Ship history',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
  const narration='Elias Hart owned the ship Aurora, which carried red sails.';
  project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:narration};
@@ -38,6 +40,7 @@ async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'
   width:1280,height:720,durationSeconds:54,query:'Aurora ship',pageUrl:'https://example.test/aurora',downloadUrl:'https://example.test/aurora.mp4',
   author:'Fixture',license:'Fixture',licenseUrl:'',attribution:'Fixture',rights:'licensed',retrievedAt:'now',match:'unverified',concerns:[]};
  doc.selected={...candidate,id:'local:saved',provider:'local',downloadUrl:'',durationSeconds:5,localPath:file};doc.checksum=checksum;doc.verified=false;
+ if(repository==='file')doc.candidates=[candidate];
  doc.searchRecovery={reason:'The ship view does not show the requested owner.',queries:['owner portrait'],rejectedRanges:[
   {checksum,start:0,end:3,sourceId:candidate.id,sourceStart:0,sourceEnd:54,reason:'The ship view does not show the requested owner.'}]};
  const replacement:DocumentaryRequirement=structuredClone(doc.requirement),plan=replacement.aiSearchPlan!;
@@ -67,7 +70,10 @@ async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'
   [join(sceneRoot,'uncertain-candidates.json'),JSON.stringify({version:1,keys:['protected-unknown-source']})],
   [join(sceneRoot,'primary-photo-uncertain-candidates.json'),JSON.stringify({version:1,keys:['protected-unknown-photo']})],
  ]);
- for(const [path,bytes]of retainedFiles)await writeFile(path,bytes);
+ if(repository==='file')for(const state of ['complete','pending'])retainedFiles.set(join(projectRoot,'Documentary','Analysis',hash(state)+'.json'),
+  JSON.stringify({state,purpose:'visual-illustration',model:'fixture',requestKey:hash(state),
+   ...(state==='complete'?{raw:'Saved paid result',result:{suitable:false,reason:'Retained paid refusal'}}:{error:'Unknown paid outcome'})}));
+ for(const [path,bytes]of retainedFiles){await mkdir(dirname(path),{recursive:true});await writeFile(path,bytes);}
  const transfers:Array<{start:number;end:number}|undefined>=[];let plans=0;
  const service=new DocumentaryProjectService(projects,storage,new DocumentarySearch(),join(root,'Materials'),
   {download:async()=>assert.fail('No stock download')},()=>{},
@@ -79,8 +85,53 @@ async function fixture(t:test.TestContext,change:'subject'|'grounding'|'queries'
   const files=await readdir(directory).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error;});
   return Promise.all(files.map(async name=>JSON.parse(await readFile(join(directory,name),'utf8'))));
  };
- return {root,projects,project,scene:project.scenes[0]!,replacement,service,storage,projectRoot,sceneRoot,archives,retainedFiles,candidate,transfers,plans:()=>plans};
+ return {root,registryPath,projects,project,scene:project.scenes[0]!,replacement,service,storage,projectRoot,sceneRoot,archives,retainedFiles,candidate,transfers,plans:()=>plans};
 }
+
+test('file repository archives changed-task refusals with full candidates and preserves saved sources and paid receipts',async t=>{
+ const f=await fixture(t,'subject','file'),before=(await f.projects.get(f.project.id))!.scenes[0]!;
+ const display=(await f.projects.get(f.project.id,{omitCandidates:true}))!.scenes[0]!.documentary!;
+ assert.deepEqual(display.candidates,[]);assert.equal(display.candidatesDeferred,true);assert.equal(display.candidateCount,1);
+ const planned=await f.service.planSearch(f.project.id,[before.id]);
+ assert.equal(planned.scenes[0]!.documentary!.searchRecovery,undefined);
+ const reopened=(await new FileProjectRepository(f.registryPath).get(f.project.id))!.scenes[0]!,doc=reopened.documentary!;
+ assert.equal(doc.requirement.aiSearchPlan!.subject,'Aurora');assert.equal(doc.searchRecovery,undefined);
+ assert.deepEqual(doc.candidates,before.documentary!.candidates);assert.equal(doc.candidatesDeferred,undefined);
+ assert.equal(doc.candidateCount,undefined);assert.deepEqual(doc.selected,before.documentary!.selected);
+ assert.equal(reopened.audioPath,before.audioPath);assert.equal(reopened.videoPath,before.videoPath);assert.equal(doc.checksum,before.documentary!.checksum);
+ assert.equal(await readFile(reopened.audioPath!,'utf8'),'Retained paid audio');
+ assert.equal(createHash('sha256').update(await readFile(reopened.videoPath!)).digest('hex'),before.documentary!.checksum);
+ const archives=await f.archives();assert.equal(archives.length,1);assert.deepEqual(archives[0].searchRecovery,before.documentary!.searchRecovery);
+ assert.deepEqual(archives[0].from.requirement,before.documentary!.requirement);
+ for(const [path,bytes]of f.retainedFiles)assert.equal(await readFile(path,'utf8'),bytes,'Full and pending receipts remain byte-identical');
+});
+
+for(const edited of ['title','candidate'] as const)test(`file repository refuses a real concurrent ${edited} edit after archive creation`,{timeout:10_000},async t=>{
+ const f=await fixture(t,'subject','file'),before=(await f.projects.get(f.project.id))!.scenes[0]!;
+ let entered!:()=>void,release!:()=>void;
+ const waiting=new Promise<void>(resolve=>{entered=resolve;}),resume=new Promise<void>(resolve=>{release=resolve;});
+ t.after(()=>release());
+ const mutate=f.projects.mutate.bind(f.projects);let paused=false;
+ t.mock.method(f.projects,'mutate',async(...args:Parameters<ProjectService['mutate']>)=>{
+  if(!paused&&(await f.archives()).length){paused=true;entered();await resume;}
+  return mutate(...args);
+ });
+ const result=assert.rejects(f.service.planSearch(f.project.id,[before.id]),/Сцена изменилась во время сохранения истории отказов/);
+ await waiting;
+ // A separate repository/service writes the actual registry while planning is
+ // suspended after its durable archive and before its guarded mutation.
+ const editor=new ProjectService(new FileProjectRepository(f.registryPath),new MockDirectorProvider());
+ const userEdit=await editor.mutate(f.project.id,current=>({scenes:current.scenes.map(scene=>scene.id!==before.id?scene:
+  edited==='title'?{...scene,title:'User correction during archive'}:{...scene,documentary:{...scene.documentary!,
+   candidates:[...scene.documentary!.candidates,{...f.candidate,id:'user-added-source',description:'New evidence from another editor'}]}})}));
+ release();await result;
+ const reopened=(await new FileProjectRepository(f.registryPath).get(f.project.id))!;
+ assert.deepEqual(reopened.scenes,userEdit.scenes,'Rejected plan cannot overwrite an actual concurrent edit');
+ assert.deepEqual(reopened.scenes[0]!.documentary!.searchRecovery,before.documentary!.searchRecovery);
+ assert.deepEqual(reopened.scenes[0]!.documentary!.requirement,before.documentary!.requirement);
+ assert.equal((await f.archives()).length,1,'The earlier history remains safely archived');
+ for(const [path,bytes]of f.retainedFiles)assert.equal(await readFile(path,'utf8'),bytes);
+});
 
 test('a real task change archives old ranges before releasing both download and actual-frame shortcuts',async t=>{
  const f=await fixture(t),before=structuredClone(f.scene),range=before.documentary!.searchRecovery!.rejectedRanges[0]!;
