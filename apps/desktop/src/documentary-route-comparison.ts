@@ -9,12 +9,26 @@ import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
 export const routeComparisonSystem=`Return JSON only: {comparisonQuotes:[exact complete script quotations supporting the route comparison],routes:[{label:exact short script phrase,quote:exact supporting script quotation,stops:[{name:place name literally mentioned in full script,country?:country for ambiguous cities,quote:exact quotation naming it}],points:[{stop:0},{bend:[longitude,latitude]},...,{stop:last}]}]}. Exactly TWO alternative SEA routes with SAME start/end and different intermediate named places. Use 3–8 named stops per route. Named coordinates are resolved locally; do not provide coordinates for places. Put each named stop in the line in its order. Bends are explicitly illustrative unlabeled geometry, not new places. Shape lines around continents and through the appropriate named canal, never across continental interiors. At most 32 line points per route. Use full script context for pronouns and places, not just the current sentence. A route label may copy a phrase such as southern end of Africa; never invent a quotation, distance, historical track, date or location. Use country when a city name is ambiguous. If the script cannot support both routes, return {refusal:reason}. This is an explanatory schematic, NOT navigation or archival footage.`;
 const normalized=(s:string)=>s.normalize('NFKC').replace(/\s+/g,' ').trim().toLocaleLowerCase();
 export const routeComparisonContext=(project:Project)=>project.videoBrief?.readyScript?.trim()||[...project.scenes].sort((a,b)=>a.order-b.order).map(s=>s.narration).join('\n');
+/** A later voyage may mention real ports without supporting this comparison.
+ * Keep quotations in the current original paragraph and its immediate context;
+ * the full script remains available for reading, not as a bag of interchangeable facts. */
+export function routeComparisonEvidenceContext(project:Project,scene:Scene):string{
+  const context=routeComparisonContext(project),narration=scene.narration.trim();
+  const start=context.indexOf(narration);
+  if(!narration||start<0)throw new DocumentaryRouteComparisonValidationError('Реплика схемы не найдена в исходном сценарии.');
+  const boundaries=[0,...[...context.matchAll(/\r?\n\s*\r?\n/g)].map(match=>match.index!+match[0].length),context.length];
+  const first=boundaries.findIndex((boundary,index)=>boundary<=start&&boundaries[index+1]!>start);
+  const end=start+narration.length;
+  let last=first;
+  while(last+1<boundaries.length-1&&boundaries[last+1]!<end)last++;
+  return context.slice(boundaries[Math.max(0,first-1)],boundaries[Math.min(boundaries.length-1,last+2)]);
+}
 export const routeComparisonContextHash=(project:Project)=>createHash('sha256').update(JSON.stringify([routeComparisonContext(project),project.scenes.map(s=>[s.id,s.narration])])).digest('hex');
 export const routeComparisonTarget=(scene:Scene)=>scene.documentary?.requirement.aiSearchPlan?.visualTarget??scene.documentary?.requirement.detail??'';
 export const routeComparisonRequestBinding=(project:Project,scene:Scene)=>createHash('sha256')
   .update(JSON.stringify([routeComparisonContextHash(project),scene.id,routeComparisonTarget(scene)])).digest('hex');
-export function routeComparisonAvailablePlaces(project:Project){
-  const context=routeComparisonContext(project),names=[...new Set(context.match(/\b[A-Z][a-z]{2,}\b/g)??[])];
+export function routeComparisonAvailablePlaces(project:Project,scene?:Scene){
+  const context=scene?routeComparisonEvidenceContext(project,scene):routeComparisonContext(project),names=[...new Set(context.match(/\b[A-Z][a-z]{2,}\b/g)??[])];
   const features=routeComparisonPhysicalPlaces.filter(p=>normalized(context).includes(normalized(p.name))).map(p=>({name:p.name,country:undefined as string|undefined}));
   const cities=names.flatMap(name=>searchDocumentaryPlaces(name).filter(p=>normalized(p.name)===normalized(name)).map(p=>({name:p.name,country:p.country})));
   return [...new Map([...features,...cities].map(p=>[p.name+':'+p.country,p])).values()].slice(0,60);
@@ -63,12 +77,12 @@ function knownPlace(name:string,country?:string,context=''){
   return {...matches[0]!};
 }
 function quote(value:unknown,context:string,limit=1600){
-  if(!exactQuote(value,context,limit))throw new DocumentaryRouteComparisonValidationError('Основание схемы не является точной цитатой полного сценария.');
+  if(!exactQuote(value,context,limit))throw new DocumentaryRouteComparisonValidationError('Основание схемы не является точной цитатой относящегося к этой сцене фрагмента исходного сценария. Места из другого эпизода не подтверждают этот маршрут.');
   return value;
 }
 export function validateRouteComparison(project:Project,scene:Scene,raw:any,model:string):DocumentaryRouteComparison{
   if(!raw||raw.refusal)throw Error(raw?.refusal||'Нет подтверждённого плана сравнения маршрутов.');
-  const context=routeComparisonContext(project);
+  const context=routeComparisonEvidenceContext(project,scene);
   if(!Array.isArray(raw.comparisonQuotes)||!raw.comparisonQuotes.length||raw.comparisonQuotes.length>4)throw Error('Нет оснований сравнения двух маршрутов.');
   const comparisonQuotes=raw.comparisonQuotes.map((v:unknown)=>quote(v,context));
   if(!Array.isArray(raw.routes)||raw.routes.length!==2)throw Error('Сравнению нужны два маршрута.');

@@ -26,7 +26,7 @@ import {MockGenerationPipeline} from './mock-generation-pipeline.js';
 import type {StandardRenderer} from './standard-renderer.js';
 
 export function routeFixture(){
-  const context='Britain. Ships sailed from London to Shanghai. The route around the Cape of Good Hope was longer. The Suez Canal gave ships a shortcut.';
+  const context='Britain. Ships sailed from London to Shanghai. The route around the Cape of Good Hope was longer. The Suez Canal gave ships a shortcut. How could the sailing ships compete?';
   const settings=createDefaultProjectSettings();settings.assembly.documentary={...createDocumentarySettings(),autoMotionGraphics:true};
   const s={id:'s6',order:5,durationSeconds:5,includeInAssembly:true,narration:'How could the sailing ships compete?',status:'failed',imagePrompt:'',animationPrompt:'',documentary:{version:2,verified:false,pinned:false,layout:'full',caption:{enabled:false,text:''},effects:[],candidates:[],autoError:'No comparison map found',timing:{sourceKey:'voice',durationInFrames:150,speechSeconds:4.8},requirement:{text:'How could the sailing ships compete?',entities:[],years:[],queries:[],preferredKind:'image',detail:'Map comparing two sea routes around Africa versus Suez'}}} as unknown as Scene;
   const p={id:'route-test',mediaMode:'stock',aspectRatio:'16:9',language:'en',videoBrief:{readyScript:context},settings,scenes:[s]} as unknown as Project;
@@ -126,6 +126,12 @@ test('unmentioned place, fabricated quote, unknown coordinate, identical paths a
 test('editing script invalidates the accepted diagram binding',()=>{
   const {project,scene,raw}=routeFixture();const next=attachRouteComparison(project,scene,validateRouteComparison(project,scene,raw,'fixture'));project.videoBrief!.readyScript+=' Another voyage.';
   assert.match(savedRouteComparisonIssue(project,next)!,/изменился/);
+});
+test('a real port quotation from a later voyage cannot establish the current comparison',()=>{
+  const {project,scene,raw}=routeFixture();
+  project.videoBrief!.readyScript='Britain. The route around the Cape of Good Hope was longer. The Suez Canal gave ships a shortcut. How could the sailing ships compete?'
+    +'\n\nThe vessel was repaired.'+'\n\nYears later a different voyage began.'+'\n\nShips sailed from London to Shanghai.';
+  assert.throws(()=>validateRouteComparison(project,scene,raw,'fixture'),/цитат/);
 });
 test('correction repairs a mismatched label and citation pair without changing valid route evidence',()=>{
   const {project,scene,raw}=routeFixture();

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import {routeComparisonAvailablePlaces,routeComparisonContext,routeComparisonRequestBinding,routeComparisonSystem,routeComparisonTarget} from './documentary-route-comparison.js';
+import {routeComparisonAvailablePlaces,routeComparisonContext,routeComparisonEvidenceContext,routeComparisonRequestBinding,routeComparisonSystem,routeComparisonTarget} from './documentary-route-comparison.js';
 import {documentaryFootageOrigin,documentaryVideoOriginIssue,documentaryThematicReserveIssue} from '@gold-work/shared';
 import {documentaryRequiredSourceSeconds} from './documentary-candidate-allocation.js';
 import {createSemanticMontagePlan,documentaryExplanationKeepsEvidence,semanticMontageHash,DocumentarySemanticMontageError} from './documentary-semantic-montage.js';
@@ -2020,7 +2020,7 @@ export class DocumentaryIntelligence {
   async planRouteComparison(project:Project,scene:Scene,signal?:AbortSignal){
     signal?.throwIfAborted();
     const model=await this.client.documentaryMotionModel?.()??await this.client.documentaryQueryModel?.()??await this.client.documentaryMontageModel?.()??'configured-text-model';
-    const request=await this.routeComparisonRequest(project,scene,'primary',{system:routeComparisonSystem+' Use ONLY names/countries from availablePlaces; unsupported or ambiguous coordinates are refused. Every stop quotation must explicitly name that stop; a country mention cannot establish a specific port. Choose common ends belonging to the SAME trade/topic as the target, not a later different voyage.',input:JSON.stringify({routeComparison:1,sceneId:scene.id,narration:scene.narration,target:routeComparisonTarget(scene),script:routeComparisonContext(project),availablePlaces:routeComparisonAvailablePlaces(project)})});
+    const request=await this.routeComparisonRequest(project,scene,'primary',{system:routeComparisonSystem+' Use ONLY names/countries from availablePlaces; unsupported or ambiguous coordinates are refused. Every quotation must come from evidenceContext, the original scene paragraph and its immediate context. The full script cannot supply ports from a different episode. Every stop quotation must explicitly name that stop; a country mention cannot establish a specific port. If the local evidence does not establish two routes, refuse rather than borrow ports.',input:JSON.stringify({routeComparison:1,sceneId:scene.id,narration:scene.narration,target:routeComparisonTarget(scene),script:routeComparisonContext(project),evidenceContext:routeComparisonEvidenceContext(project,scene),availablePlaces:routeComparisonAvailablePlaces(project,scene)})});
     const raw=await this.complete(project.id,'semantic-montage',request.system,request.input,[],[],undefined,{signal});
     signal?.throwIfAborted();
     const receipt=await readAnalysisCheckpoint(join(this.rootFor(project.id),'Documentary','Analysis',documentaryCheckpointKey('semantic-montage',request.system,request.input,[])+'.json'));
@@ -2033,7 +2033,7 @@ export class DocumentaryIntelligence {
     const request=await this.routeComparisonRequest(project,scene,'correction',{
       rawHash:createHash('sha256').update(JSON.stringify(original)).digest('hex'),
       system:routeComparisonSystem+' This is the ONLY correction. Audit ALL source quotations AND geometry, not only the first reported error. Keep routes, named stops, countries, order and all already valid source citations and valid label/quote pairs byte-for-byte unchanged. A label and quote are a valid pair only when the exact quote contains the exact label; otherwise repair their link. Repair ONLY invalid quotations or labels using exact script text that explicitly names the place/label and supports THIS SAME trade/topic. A country mention cannot establish a specific port; do not borrow an unrelated voyage merely because a place name matches. Never invent a quote or infer a port from its country. Repair points/bends, include EVERY stop in order, and use open sea bends around continents. The final response must pass both quotation and sea geometry checks. If the full script cannot establish this comparison, refuse; no third request will be made.',
-      input:JSON.stringify({routeComparison:1,routeComparisonCorrection:1,sceneId:scene.id,script:routeComparisonContext(project),target:routeComparisonTarget(scene),original,validationError})});
+      input:JSON.stringify({routeComparison:1,routeComparisonCorrection:1,sceneId:scene.id,script:routeComparisonContext(project),evidenceContext:routeComparisonEvidenceContext(project,scene),target:routeComparisonTarget(scene),original,validationError})});
     const raw=await this.complete(project.id,'semantic-montage',request.system,request.input,[],[],undefined,{signal});
     signal?.throwIfAborted();
     const receipt=await readAnalysisCheckpoint(join(this.rootFor(project.id),'Documentary','Analysis',documentaryCheckpointKey('semantic-montage',request.system,request.input,[])+'.json'));
