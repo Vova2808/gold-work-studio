@@ -7,6 +7,52 @@ const scene=(quote:string)=>({narration:'A robot cuts an '+quote+'.',documentary
 const source=(title:string)=>({title,description:'',previousFrameSearchHint:''} as DocumentaryCandidate);
 const namedScene=(name:string,narration:string,target=name)=>({narration,documentary:{requirement:{
   text:narration,identities:[{name,aliases:[]}],entities:[name],years:[],queries:[],detail:target}}} as unknown as Scene);
+const groundedScene=(required:string,quote:string,subject:string,target=subject)=>{
+ const result=namedScene(required,quote,target);
+ result.documentary!.requirement.aiSearchPlan={version:1,inputHash:'fixture',model:'fixture',subject,visualTarget:target,
+  years:[],visualScope:'illustrative',preferredKind:'image',imageQueries:[target],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
+  grounding:{version:1,mandatory:[{kind:'identity',required,scriptQuote:quote}],illustrations:['An attributed view of the same subject'],optionalDetails:[]}};
+ return result;
+};
+
+test('saved scenes 2 and 40 reject the same camera-platform mention despite a sentence-shaped identity',()=>{
+ const candidate={...source('Four masted ship woodget c1895.jpg'),
+  description:"photograph of a four masted sailing ship taken from the deck of 'Cutty Sark' by her captain Richard Woodget.",
+  author:'Richard Woodget (1845 – 6 March 1928)'};
+ const second=groundedScene('the ship Cutty Sark','Cutty Sark slid into the water at Dumbarton, Scotland','Cutty Sark','Cutty Sark under sail or hull profile');
+ const fortieth=groundedScene('Cutty Sark is the ship that completed eight tea voyages and then left the tea trade',
+  'After eight tea voyages, Cutty Sark left the trade for which she had been built.','Cutty Sark (clipper ship)',
+  'Cutty Sark, the sailing clipper ship, archival photograph or historical view');
+ for(const current of [second,fortieth]){
+  assert.match(documentaryMaterialMetadataIssue(current,candidate)!,/точке съёмки/);
+  assert.equal(documentaryMaterialMetadataIssue(current,{...candidate,title:'Cutty Sark under sail',
+   description:'Photograph of Cutty Sark taken from the deck of another ship.'}),undefined);
+ }
+ // The active reserve must not erase the primary grounded identity.
+ fortieth.documentary!.requirement.footageFallback={version:1,target:'Cutty Sark, three-masted clipper ship, archival photograph',
+  queries:['Cutty Sark three-masted ship'],originalTarget:fortieth.documentary!.requirement.aiSearchPlan!.visualTarget,
+  narration:fortieth.narration,kind:'video',reason:'Earlier primary discovery exhausted'};
+ assert.match(documentaryMaterialMetadataIssue(fortieth,candidate)!,/точке съёмки/);
+});
+
+test('canonical grounded subjects keep source roles and model discriminators across unrelated topics',()=>{
+ const plane=groundedScene('Spitfire is the aircraft described in this passage','Spitfire served in the squadron.',
+  'Spitfire (aircraft)','Spitfire aircraft');
+ assert.match(documentaryMaterialMetadataIssue(plane,{...source('Unidentified aircraft'),
+  description:'Photograph of an aircraft taken from the cockpit of Spitfire by its pilot.'})!,/точке съёмки/);
+ const scientist=groundedScene('Marie Curie is the scientist whose research is discussed','Marie Curie studied radioactivity.',
+  'Marie Curie (person)','Marie Curie portrait');
+ assert.match(documentaryMaterialMetadataIssue(scientist,source('Laboratory apparatus photographed by Marie Curie'))!,/противоречит|предмет/);
+ const model=groundedScene('Airbus A320 is the aircraft discussed','Airbus A320 entered service.','Airbus (aircraft)','Airbus A320 aircraft');
+ assert.equal(documentaryMaterialMetadataIssue(model,{...source('Unidentified aircraft'),description:'Photograph taken from the cockpit of Airbus.'}),undefined,
+  'A generic manufacturer cannot replace the required aircraft model');
+ const associated=groundedScene('Captain Morgan, owner of Aurora','Captain Morgan owned Aurora.','Aurora (ship)','Captain Morgan portrait');
+ assert.equal(documentaryMaterialMetadataIssue(associated,source('Captain Morgan aboard Aurora')),undefined,
+  'The associated ship is not a second required identity');
+ const unknown={...source('Untitled archival photograph'),description:'An archival image. Photographer Morgan was captain of Aurora.'};
+ assert.equal(documentaryMaterialMetadataIssue(groundedScene('Aurora is the ship discussed','Aurora sailed.','Aurora (ship)'),unknown),undefined,
+  'A biographical mention alone proves neither the presence nor the absence of the depicted subject');
+});
 
 test('source description distinguishes the pictured ship from the camera platform',()=>{
   const candidate={...source('Four masted ship woodget c1895.jpg'),
@@ -116,7 +162,7 @@ test('honest same-subject illustrations and unknown metadata stay undecided; the
 
 test('a saved reserve cannot bypass original grounded identity when its title explicitly depicts another subject',()=>{
   const person=namedScene('Richard Woodget, captain of Cutty Sark','Richard Woodget became captain.','Richard Woodget portrait');
-  person.documentary!.requirement.aiSearchPlan={subject:'Richard Woodget',visualTarget:'Richard Woodget portrait',
+  person.documentary!.requirement.aiSearchPlan={subject:'Richard Woodget',visualTarget:'Richard Woodget portrait',imageQueries:['Richard Woodget portrait'],videoQueries:[],
     grounding:{version:1,mandatory:[{kind:'identity',required:'Richard Woodget, captain of Cutty Sark',scriptQuote:person.narration}],illustrations:['portrait'],optionalDetails:[]}} as any;
   person.documentary!.requirement.footageFallback={version:1,target:'Cutty Sark ship sailing',queries:[],reason:'',originalTarget:'Richard Woodget portrait'};
   person.documentary!.requirement.fastSourcePolicy='background';
@@ -126,7 +172,7 @@ test('a saved reserve cannot bypass original grounded identity when its title ex
   assert.equal(documentaryMaterialMetadataIssue(person,source('Unidentified archive view')),undefined,'Absence of a name is not a contradiction');
   assert.equal(documentaryMaterialMetadataIssue(person,source('Walking around Greenwich')),undefined,'A tour title alone does not prove absent subject');
   const ship=namedScene('Cutty Sark','Cutty Sark left the tea trade.');
-  ship.documentary!.requirement.aiSearchPlan={subject:'Cutty Sark',visualTarget:'Cutty Sark ship',
+  ship.documentary!.requirement.aiSearchPlan={subject:'Cutty Sark',visualTarget:'Cutty Sark ship',imageQueries:['Cutty Sark ship'],videoQueries:[],
     grounding:{version:1,mandatory:[{kind:'identity',required:'the ship Cutty Sark',scriptQuote:ship.narration}],illustrations:['same ship'],optionalDetails:[]}} as any;
   ship.documentary!.requirement.footageFallback={version:1,target:'sailing ship',queries:[],reason:'',originalTarget:'Cutty Sark'};
   assert.match(documentaryMaterialMetadataIssue(ship,source("Clipper Ship 'Blackadder' under sail"))!,/противоречит/);

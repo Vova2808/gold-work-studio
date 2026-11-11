@@ -1,5 +1,5 @@
 import type {DocumentaryCandidate,Scene} from '@gold-work/shared';
-import {documentaryCandidateSubjectIssue} from './documentary-named-search.js';
+import {documentaryCandidateSubjectIssue,documentaryGroundedDiscoveryName} from './documentary-named-search.js';
 
 const words=(value:string)=>value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const hasName=(text:string,name:string)=>(' '+words(text)+' ').includes(' '+words(name)+' ');
@@ -16,8 +16,12 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const identities=(Array.isArray(mandatory)?mandatory.filter(check=>check?.kind==='identity'||check?.kind==='geography'):undefined)
     ?.map(check=>({name:check.required,aliases:check.aliases??[]}))??requirement.identities??[];
   const subject=requirement.aiSearchPlan?.subject;
-  const names=[...new Set(identities.flatMap(identity=>[identity.name,...identity.aliases,
-    ...(subject&&hasName(identity.name,subject)?[subject]:[])]).map(cleanIdentity).filter(Boolean))];
+  // Grounded identities can be whole sentences while the subject includes a
+  // class suffix. Reuse only the canonical name witnessed by the source quote;
+  // stripping arbitrary words would confuse owners, model families and objects.
+  const groundedName=documentaryGroundedDiscoveryName(requirement.aiSearchPlan);
+  const names=[...new Set([...identities.flatMap(identity=>[identity.name,...identity.aliases,
+    ...(subject&&hasName(identity.name,subject)?[subject]:[])]).map(cleanIdentity),...(groundedName?[groundedName]:[])].filter(Boolean))];
   if(!names.length)return;
   const title=source.title.replace(/\.(?:jpe?g|png|tiff?|webp)$/i,'');
   const contains=(text:string)=>names.some(name=>hasName(text,name));
