@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile,readdir,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,readFile,readdir,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve,sep} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -11,7 +11,7 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext,documentaryIll
 import {documentarySavedQualityIssue,documentarySourceText} from './documentary-source-quality.js';
 import {documentaryIllustrationQualityIssue,documentaryLegacyIllustrationRisk,documentaryInternalPartIssue,documentaryIllustrationQualityInstruction,documentaryIllustrationResponseInstruction,documentaryIllustrationQualityInstructionV1,documentaryIllustrationQualityInstructionV2} from './documentary-illustration-quality.js';
 import {effectFfmpeg} from './effect-media.js';
-import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
+import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedIllustrationQualityInstructionV3,documentaryGroundedFallbackIllustrationQualityInstructionV3,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
 import {documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -26,6 +26,42 @@ const internalTarget='Preserved ship iron frame interior, cargo hold space';
 const museumFrame={...clean,description:'An interior view looking upward through modern geometric glass framing and structural elements of the preserved ship museum, with reflections showing parts of the wooden hull and sky.',
  reason:'Modern illustration of the preserved ship, fitting the narration about iron framing.',
  targetEvidence:'The geometric glass and steel framing reflecting the interior museum setup and sections of the preserved ship hull.'};
+const incidentalShip={...clean,
+ description:'The Cutty Sark, a tall ship with masts and rigging, is visible in the background on the left side of the frame, situated in its dry dock in Greenwich. A large red research vessel occupies the foreground.',
+ targetEvidence:'The tall ship on the left is the Cutty Sark, identifiable by its iconic triple-masted, square-rigged configuration and its established long-term presence in the dry dock at Greenwich.'};
+
+test('a named background subject cannot borrow a dominant different foreground object as visible evidence',()=>{
+ const check=(target:string,description:string)=>documentaryIllustrationQualityIssue(target,{...clean,description},true);
+ assert.match(documentaryIllustrationQualityIssue('Cutty Sark clipper ship',incidentalShip,true)?.reason??'',/задний план/);
+ for(const [target,description] of [
+  ['Aurora ship','Aurora is visible in the background. A large modern vessel dominates the foreground.'],
+  ['Hawker Hurricane aircraft','Hawker Hurricane is visible in the background. Another large jet occupies the foreground.'],
+  ['Ada Lovelace portrait','Ada Lovelace is in the background while a large portrait of another woman dominates the foreground.'],
+ ])assert.equal(check(target!,description!)?.status,'uncertain',target);
+ for(const [target,description] of [
+  ['Aurora ship','Aurora is clearly visible in the background. Small boats cross the foreground.'],
+  ['Aurora ship','Aurora is a large ship dominating the foreground. Another vessel is visible in the background.'],
+  ['Aurora ship','Aurora appears in the background. There is no large vessel in the foreground.'],
+  ['Aurora ship','A large ship dominates the foreground. A small distant ship is visible behind it.'],
+  ['Aurora ship','Aurora is clearly visible with fine hull and rigging details. A large ship passes across the foreground.'],
+  ['Suez Canal with shipping','Suez Canal is in the background. A large vessel dominates the foreground.'],
+  ['Wide view of Aurora ship in its setting','Aurora is in the background. A large ship occupies the foreground.'],
+  ['Aurora and Borealis ships together','Aurora is in the background. A large vessel occupies the foreground.'],
+  ['Greenwich skyline','The skyline is in the background. A large vessel occupies the foreground.'],
+  ['steamship at sea','A steamship is in the background. A large vessel occupies the foreground.'],
+ ])assert.equal(check(target!,description!),undefined,target);
+ assert.equal(documentaryIllustrationQualityIssue('Aurora ship',{...clean,description:'Aurora is plainly shown.',
+  sourceText:{kind:'physical',text:'Aurora in the background. A large ship occupies the foreground.'}},true),undefined,'Source text is not observed composition');
+});
+
+test('prominence wording preserves V3 identities and explicitly permits informative geographic and wide views',()=>{
+ for(const [current,previous]of [[documentaryGroundedIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV3],
+  [documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstructionV3]] as const){
+  assert.ok(current.startsWith(previous!));assert.match(current!,/small incidental background detail/);
+  assert.match(current!,/suitable=false and targetVisible=false/);assert.match(current!,/not a rule that the target must always be largest/);
+  assert.match(current!,/place, canal, river, landscape/);assert.match(current!,/preselected contextual object/);
+ }
+});
 
 async function fixture(t:test.TestContext,target='steamship at sea'){
  const root=await mkdtemp(join(tmpdir(),'gws-illustration-quality-'));assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));t.after(()=>rm(root,{recursive:true,force:true}));
@@ -43,6 +79,26 @@ async function fixture(t:test.TestContext,target='steamship at sea'){
  const receipts=async()=>{const dir=join(root,'Documentary','Analysis');return Promise.all((await readdir(dir)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name)).map(async name=>({path:join(dir,name),bytes:await readFile(join(dir,name),'utf8')})));};
  return {root,project,scene,receipts};
 }
+
+test('saved COMPLETE composition evidence and review file cannot restore an incidental target or spend another review',async t=>{
+ const {root,project,scene,receipts}=await fixture(t,'Cutty Sark clipper ship');let calls=0;
+ const client={configured:async()=>true,documentaryCompletion:async()=>{calls++;return JSON.stringify(incidentalShip);}};
+ const result=await new DocumentaryIntelligence(client,()=>root).inspectForSelection(project,scene);
+ assert.equal(result.review.status,'uncertain');assert.match(result.review.reason,/задний план/);assert.equal(calls,1);
+ // Reconstruct the old accepted metadata around the completed response; its
+ // actual description and proof remain intact, as in saved scene 49.
+ const doc=scene.documentary!;doc.verified=true;doc.visualReview={...result.review,status:'accepted'};
+ doc.visualReview.illustrationApproval=documentaryIllustrationApproval(project,scene);
+ const reviewRoot=join(root,'Documentary',scene.id);await mkdir(reviewRoot,{recursive:true});
+ const reviewPath=join(reviewRoot,doc.checksum+'.review.json'),reviewBytes=JSON.stringify({candidateId:doc.selected!.id,review:doc.visualReview});
+ await writeFile(reviewPath,reviewBytes);const before=await receipts();
+ assert.match(documentarySavedContextIssue(project,scene)??'',/задний план/);
+ const resumed=revalidateDocumentaryContext(project)[0]!;
+ assert.equal(resumed.documentary!.verified,false);assert.equal(resumed.imagePath,scene.imagePath);assert.equal(resumed.documentary!.checksum,doc.checksum);
+ const replay=await new DocumentaryIntelligence(client,()=>root).inspectForSelection(project,resumed,undefined,undefined,true);
+ assert.equal(replay.review.status,'uncertain');assert.match(replay.review.reason,/задний план/);assert.equal(replay.usedNewAnalysis,false);assert.equal(calls,1);
+ assert.deepEqual(await receipts(),before);assert.equal(await readFile(reviewPath,'utf8'),reviewBytes);
+});
 
 for(const savedReason of [undefined,'The source shows a statue rather than the required ship.'])test(`a cached range refusal never borrows another candidate's reason (${savedReason?'bound':'legacy'})`,async t=>{
  const {root,project,scene}=await fixture(t);
@@ -79,7 +135,7 @@ test('a same-object illustration receives script-grounded optional details, whil
   ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
   let calls=0;
   const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
-   calls++;assert.equal(system,documentaryGroundedIllustrationQualityInstruction);
+   calls++;assert.ok(system.startsWith(documentaryGroundedIllustrationQualityInstruction));
    const task=JSON.parse(input);assert.equal(task.scriptGrounding.originalScript,narration);
    assert.equal(task.scriptGrounding.grounding.mandatory[0].required,ai.subject);
    assert.deepEqual(task.scriptGrounding.grounding.optionalDetails,['Tea cargo being loaded.']);
@@ -131,7 +187,7 @@ test('contextual identity review carries the chosen script relationship and pres
   ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
   let calls=0;
   const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
-   calls++;assert.equal(system,documentaryGroundedIllustrationQualityInstruction);
+   calls++;assert.ok(system.startsWith(documentaryGroundedIllustrationQualityInstruction));
    const task=JSON.parse(input);assert.deepEqual(task.scriptGrounding.grounding.illustrations,[item.relation]);
    assert.equal(task.scriptGrounding.originalScript,project.videoBrief!.readyScript);
    assert.match(system,/chosen BEFORE candidate discovery/);assert.match(system,/not automatically every person or object/);
@@ -147,7 +203,7 @@ test('contextual identity review carries the chosen script relationship and pres
  }
 });
 
-for(const [version,previousSystem] of [[1,documentaryGroundedFallbackIllustrationQualityInstructionV1],[2,documentaryGroundedFallbackIllustrationQualityInstructionV2]] as const)
+for(const [version,previousSystem] of [[1,documentaryGroundedFallbackIllustrationQualityInstructionV1],[2,documentaryGroundedFallbackIllustrationQualityInstructionV2],[3,documentaryGroundedFallbackIllustrationQualityInstructionV3]] as const)
 test(`a contextual fallback preserves unresolved V${version} paid review without buying its new wording`,async t=>{
  const {root,project,scene,receipts}=await fixture(t,'Aurora ship');
  const narration='Elias Hart owned the ship Aurora.';scene.narration=narration;project.videoBrief!.readyScript=narration;
@@ -177,7 +233,7 @@ test(`a contextual fallback preserves unresolved V${version} paid review without
  assert.equal((await receipts())[0]!.bytes,oldBytes);
 });
 
-for(const [priorVersion,priorSystem] of [[1,documentaryGroundedIllustrationQualityInstructionV1],[2,documentaryGroundedIllustrationQualityInstructionV2]] as const)
+for(const [priorVersion,priorSystem] of [[1,documentaryGroundedIllustrationQualityInstructionV1],[2,documentaryGroundedIllustrationQualityInstructionV2],[3,documentaryGroundedIllustrationQualityInstructionV3]] as const)
 for(const priorState of ['complete','received'] as const)test(`grounded physical-feature contract preserves V${priorVersion} ${priorState} old receipt and rejects missing cloth`,async t=>{
  const {root,project,scene,receipts}=await fixture(t,'Clipper ship');
  const narration='The clipper carried a large spread of canvas with all sails set.';

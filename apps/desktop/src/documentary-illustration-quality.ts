@@ -60,8 +60,11 @@ function representedIdentityInstructionV3(previous:string):string{
       'For biography, employment, dates or trade history, an identified view of the preselected script-supported subject can be enough, including the very object owned or led; independently verify that precise relationship and do not demand the absent person or a photograph of the historical event unless that is the visual point.')
     +representedIdentityInstruction;
 }
-export const documentaryGroundedIllustrationQualityInstruction=representedIdentityInstructionV3(documentaryGroundedIllustrationQualityInstructionV2);
-export const documentaryGroundedFallbackIllustrationQualityInstruction=representedIdentityInstructionV3(documentaryGroundedFallbackIllustrationQualityInstructionV2);
+export const documentaryGroundedIllustrationQualityInstructionV3=representedIdentityInstructionV3(documentaryGroundedIllustrationQualityInstructionV2);
+export const documentaryGroundedFallbackIllustrationQualityInstructionV3=representedIdentityInstructionV3(documentaryGroundedFallbackIllustrationQualityInstructionV2);
+const subjectProminenceInstruction=' For a mandatory named person or discrete object, mere presence somewhere in the pixels is insufficient. Judge the composition at normal viewing size: the required subject must be a clearly readable subject of the illustration, with enough visible detail to distinguish it from other objects. If it appears only as a small incidental background detail while a different person or object dominates the image, set suitable=false and targetVisible=false even when its identity can be established. Describe the required subject\'s relative size, position and the competing foreground subject in targetEvidence; do not approve the dominant substitute because the correct name appears elsewhere in the frame or source attribution. An informative wide view is allowed when the required subject remains clearly readable, including multiple comparably readable subjects when the script permits them. This is not a rule that the target must always be largest or in the foreground: for a place, canal, river, landscape or explicitly requested spatial/comparative view, judge whether the location, layout or relationship itself is clearly shown; a boat or person in the foreground is not by itself a failure. Apply the same test to a preselected contextual object used for ownership or leadership. Do not invent a new illustration relationship to excuse an incidental background target.';
+export const documentaryGroundedIllustrationQualityInstruction=documentaryGroundedIllustrationQualityInstructionV3+subjectProminenceInstruction;
+export const documentaryGroundedFallbackIllustrationQualityInstruction=documentaryGroundedFallbackIllustrationQualityInstructionV3+subjectProminenceInstruction;
 
 /** An affirmative summary cannot override its own missing physical evidence. */
 export function documentaryGroundedScriptFitIssue(narration:string,value:Record<string,unknown>):{status:'rejected'|'uncertain';reason:string}|undefined{
@@ -113,9 +116,38 @@ export function documentaryInternalPartIssue(target:string,value:Record<string,u
   if(displayStructure&&(!objectFrame||missingObjectFrame))return 'Описание и видимые детали относятся к музейной или выставочной конструкции, а задача требует внутреннюю деталь самого объекта. Принадлежность детали объекту не подтверждена; ответ сохранён без повторной оплаты.';
 }
 
+/** Hold only an explicit foreground/background contradiction in completed
+ * pixel evidence. Source captions and a merely distant target do not qualify. */
+function documentaryForegroundSubjectIssue(target:string,value:Record<string,unknown>):string|undefined{
+  if(/\b(?:canal|river|waterway|landscape|cityscape|skyline|harbou?r|panorama|panoramic|spatial|comparison|comparative|together|both|side[ -]by[ -]side|surroundings|neighbou?rhood)\b|\b(?:wide|general|establishing)\s+(?:view|shot)\b|\bgroup\s+(?:portrait|photo)\b/iu.test(target))return;
+  const category=[/\b(?:ships?|vessels?|clippers?|boats?|liners?|steamships?)\b/iu,
+    /\b(?:aircraft|airplanes?|planes?|jets?)\b/iu,/\b(?:trains?|locomotives?)\b/iu,
+    /\b(?:cars?|trucks?|vehicles?|motorcycles?)\b/iu,/\b(?:portraits?|persons?|people|men|man|women|woman|faces?)\b/iu,
+    /\b(?:buildings?|towers?|statues?|monuments?)\b/iu].find(pattern=>pattern.test(target));
+  if(!category)return;
+  const generic=/^(?:The|A|An|Modern|Historic|Historical|Preserved|Archival|Identified|Portrait|Photograph|View|Ship|Vessel|Clipper|Boat|Liner|Steamship|Aircraft|Airplane|Plane|Jet|Train|Locomotive|Car|Truck|Vehicle|Motorcycle|Person|Building|Tower|Statue|Monument)$/iu;
+  const names=[...target.matchAll(/\p{Lu}[\p{L}\p{N}'’-]*(?:\s+[\p{Lu}\d][\p{L}\p{N}'’.-]*)*/gu)].map(match=>{
+    const tokens=match[0].trim().split(/\s+/u);
+    while(tokens.length&&generic.test(tokens[0]!))tokens.shift();
+    while(tokens.length&&generic.test(tokens.at(-1)!))tokens.pop();
+    return tokens.join(' ');
+  }).filter(Boolean);
+  if(!names.length)return;
+  const normalized=(text:string)=>' '+text.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()+' ';
+  const hasTarget=(text:string)=>names.some(name=>normalized(text).includes(normalized(name)));
+  const evidence=[value.description??value.viewDescription,value.targetEvidence].filter(item=>typeof item==='string').join('\n');
+  const clauses=evidence.split(/[.!?;\n]+|\b(?:while|whereas|but)\b/iu).map(clause=>clause.trim()).filter(Boolean);
+  const affirmative=(clause:string)=>! /\b(?:no|not|without|never|isn't|doesn't)\b/iu.test(clause);
+  const behind=clauses.some(clause=>affirmative(clause)&&hasTarget(clause)&&/\b(?:background|far distance)\b/iu.test(clause));
+  const dominantOther=clauses.some(clause=>affirmative(clause)&&!hasTarget(clause)&&category.test(clause)
+    &&/\bforeground\b/iu.test(clause)&&/\b(?:large|larger|huge|massive|dominant|dominates|dominating)\b|\b(?:fills?|occupies|takes? up)\s+(?:most|much)\b/iu.test(clause));
+  if(behind&&dominantOther)return 'Сохранённое описание помещает нужный именованный объект на задний план, а другой крупный объект того же класса — на передний. Не подтверждено, что требуемый объект читается как самостоятельный предмет иллюстрации; прежний ответ сохранён без повторной оплаты.';
+}
+
 /** Revalidate only risks actually observed in an old paid description. No OCR,
  * new inference from a filename, or blanket invalidation of historical reviews. */
 export function documentaryLegacyIllustrationRisk(target:string,value:Record<string,unknown>):string|undefined{
+  const foregroundIssue=documentaryForegroundSubjectIssue(target,value);if(foregroundIssue)return foregroundIssue;
   const partIssue=documentaryInternalPartIssue(target,value);if(partIssue)return partIssue;
   const description=String(value.description??value.viewDescription??'').trim();
   const text=[description,value.reason].filter(x=>typeof x==='string').join('\n');
