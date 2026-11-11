@@ -82,7 +82,8 @@ function fixture(topic: typeof topics[number]): Project {
   } as Project;
 }
 
-function answer(topic: typeof topics[number], sceneId: string) {
+function answer(topic: {subject:string;target:string;years:readonly string[];images:readonly string[];videos:readonly string[];
+  fallback:readonly string[];fallbackTarget:string;narration:readonly string[]}, sceneId: string) {
   return {sceneId, subject: topic.subject, visualTarget: topic.target, years: [...topic.years],
     visualScope: 'exact', preferredKind: 'video', reservePolicy: 'thematic', imageQueries: [...topic.images], videoQueries: [...topic.videos],
     fallbackVideoQueries: [...topic.fallback], fallbackVisualTarget: topic.fallbackTarget,

@@ -126,6 +126,25 @@ test('portrait image queries and route geography keep usable paid plans without 
   assert.equal(documentaryAiPlanGroundingIssue(result.get(scenes[0]!.id)!.aiSearchPlan,quote),undefined);
 });
 
+test('a fully received malformed grounding refresh gets at most one repair while its old paid plan stays intact',async t=>{
+ const quote='The owner sold the ship in 1895.';let replies=0;
+ const f=await fixture(t,async call=>{replies++;const rows=call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'The ship',quote));
+  if(replies>1)for(const row of rows)delete (row as {grounding?:unknown}).grounding;
+  return JSON.stringify({scenes:rows});});
+ const scenes=scenesOf(quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+ const initial=await f.planner().plan(project,scenes),id=scenes[0]!.id;
+ scenes[0]!.documentary={requirement:initial.get(id)!,verified:false} as Scene['documentary'];
+ const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+ const cache=JSON.parse(await readFile(file,'utf8')),raw=JSON.parse(cache.attempts[0].rawResponse);
+ delete raw.scenes[0].grounding;delete cache.plans[id].grounding;
+ cache.attempts[0].request.promptRevision=10;cache.attempts[0].rawResponse=JSON.stringify(raw);
+ scenes[0]!.documentary!.requirement.aiSearchPlan=structuredClone(cache.plans[id]);await writeFile(file,JSON.stringify(cache));
+ for(let pass=0;pass<4;pass++)await f.planner().plan(project,scenes,{refreshSceneIds:new Set([id])});
+ assert.equal(f.calls.length,3,'one initial receipt and at most two completed refresh attempts');
+ const saved=JSON.parse(await readFile(file,'utf8'));assert.deepEqual(saved.plans,cache.plans);
+ assert.deepEqual(saved.attempts[0],cache.attempts[0]);
+});
+
 test('an already staged legacy refresh cannot hide the new grounding revision',async t=>{
   const quote='After eight tea voyages, Cutty Sark left the trade for which she had been built.';
   const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'Cutty Sark',quote))}));

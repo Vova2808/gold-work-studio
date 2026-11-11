@@ -1830,8 +1830,18 @@ export class DocumentaryProjectService {
         if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))return new Set();
         for(const scene of eligible)if(scene.narration===narration)ids.delete(scene.id);
       }
+      const retryModel=(await this.intelligence?.selectionReviewIdentity?.())?.model;
+      const grants=retryModel?(await readDocumentarySelectionRetryEvidence(root,retryModel)).grants:[];
       for(const scene of eligible){
         if(!ids.has(scene.id))continue;
+        const authorizedKeys=new Set<string>();
+        for(const grant of grants.filter(item=>item.groundedNarration===scene.narration)){
+          const checksum=grant.binding.checksum;
+          const source=await readFile(join(root,'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),checksum+'.source.json'),'utf8')
+            .then(text=>JSON.parse(text) as DocumentaryCandidate,()=>undefined);
+          if(!source?.localPath||await checksumFile(source.localPath).catch(()=>undefined)!==checksum)continue;
+          for(const key of [...uncertainCandidateFingerprints(source),...uncertainCandidateFingerprints({...source,provider:'local',id:'local:'+checksum}),uncertainFileFingerprint(checksum)])authorizedKeys.add(key);
+        }
         for(const name of ['uncertain-candidates.json','primary-photo-uncertain-candidates.json']){
           const file=join(root,'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),name);
           const raw=await readFile(file,'utf8').catch((error:NodeJS.ErrnoException)=>{
@@ -1840,7 +1850,7 @@ export class DocumentaryProjectService {
           });
           if(raw===undefined)continue;
           const saved=JSON.parse(raw);
-          if(saved?.version!==1||!Array.isArray(saved.keys)||saved.keys.length)ids.delete(scene.id);
+          if(saved?.version!==1||!Array.isArray(saved.keys)||saved.keys.some((key:unknown)=>typeof key!=='string'||!authorizedKeys.has(key)))ids.delete(scene.id);
         }
       }
     }catch(error){
@@ -2751,10 +2761,13 @@ export class DocumentaryProjectService {
         const admittedRetries=new Map<string,{checksum:string;grant?:DocumentarySelectionRetryGrant}>();
         const retryProbes=new Map<string,Promise<void>>();
         const retryFor=(candidate:DocumentaryCandidate)=>admittedRetries.get(retryCandidateKey(candidate));
-        const isUncertain=(candidate:DocumentaryCandidate)=>!retryFor(candidate)&&uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key));
+        const hasGroundedGrant=(candidate:DocumentaryCandidate)=>candidate.provider==='local'
+          &&Boolean(retryEvidence?.grants.some(grant=>grant.groundedNarration===scene.narration&&candidate.id==='local:'+grant.binding.checksum));
+        const isUncertain=(candidate:DocumentaryCandidate)=>!retryFor(candidate)&&(hasGroundedGrant(candidate)
+          ||uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key)));
         const probeRetry=(candidate:DocumentaryCandidate,taskScene:Scene):Promise<void>|undefined=>{
           const checksum=/^local:([a-f0-9]{64})$/.exec(candidate.id)?.[1],file=candidate.localPath;
-          if(candidate.provider!=='local'||!checksum||!file||!uncertainCandidates.has(uncertainFileFingerprint(checksum)))return;
+          if(candidate.provider!=='local'||!checksum||!file||!hasGroundedGrant(candidate)&&!uncertainCandidates.has(uncertainFileFingerprint(checksum)))return;
           const grants=retryEvidence?.grants.filter(grant=>grant.binding.checksum===checksum)??[];
           const canReadCache=retryEvidence?.cachedChecksums.has(checksum);
           if(!grants.length&&!canReadCache)return;
@@ -3024,6 +3037,9 @@ export class DocumentaryProjectService {
             batch={done:false,value:[]};
           }
           pool.push(...batch.value);
+          // Saved source-manifest batches bypass provider discovery. They need
+          // the same explicit retry probe before entering a new grounded task.
+          if(retryEvidence)for(const candidate of batch.value)if(isUncertain(candidate))await probeRetry(candidate,taskScene);
           if (batch.value.length) foundThisRun = true;
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id&&item.documentary?.verified).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
