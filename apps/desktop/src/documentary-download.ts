@@ -44,9 +44,12 @@ export async function withDocumentaryDownloadBudget<T>(options: { automatic: boo
       : "Источник превысил время автоматической загрузки. Проверяю другие материалы; готовые результаты сохранены.", reason);
   if (remaining <= 0) throw expired();
   const signal = AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]);
-  const totalMs = Math.min(documentaryWorkLimits[options.kind].downloadMs, remaining);
-  const shortMs = options.transferMs ?? totalMs;
   const progressAware = options.progressAware === true && options.kind === 'video';
+  // A healthy streaming transfer may outlast the old 35-second cutoff. Only
+  // advancing body bytes extend the idle window; the scene/analysis reserve
+  // and active-phase cap still bound the entire attempt.
+  const totalMs = Math.min(progressAware ? documentaryWorkLimits.video.activeMs : documentaryWorkLimits[options.kind].downloadMs, remaining);
+  const shortMs = options.transferMs ?? documentaryWorkLimits[options.kind].downloadMs;
   const timeout = setTimeout(() => controller.abort(expired()), totalMs);
   let shortTimeout: ReturnType<typeof setTimeout> | undefined;
   let lastProgressAt = Date.now(), receivedBytes = 0;

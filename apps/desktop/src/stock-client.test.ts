@@ -63,7 +63,7 @@ test("streamed stock rejects insufficient declared space and preserves an existi
   assert.equal(await readFile(output, "utf8"), "original");
 });
 
-test('automatic stock video can finish past 20 seconds while its body keeps advancing',async t=>{
+test('automatic stock video can finish past 35 seconds while its body keeps advancing',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'gws-stock-progress-'));
  t.after(()=>rm(directory,{recursive:true,force:true}));
  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
@@ -74,7 +74,7 @@ test('automatic stock video can finish past 20 seconds while its body keeps adva
  t.after(()=>setDiagnosticSink(undefined));
  const client=new StockClient(new StubKeys({}),async()=>new Response(new ReadableStream<Uint8Array>({
   start(controller){body=controller;}
- }),{headers:{'content-type':'video/mp4','content-length':'2048'}}));
+ }),{headers:{'content-type':'video/mp4','content-length':'2049'}}));
  const work=withDocumentaryDownloadBudget({automatic:true,kind:'video',transferMs:20_000,progressAware:true},signal=>{
   observed=signal;return client.downloadToFile(downloadableAsset(),output,4096,signal);
  });
@@ -87,11 +87,13 @@ test('automatic stock video can finish past 20 seconds while its body keeps adva
  };
  await nextTurn();body.enqueue(new Uint8Array(1024));await received(1024);
  t.mock.timers.tick(15_000);body.enqueue(new Uint8Array(1024));await received(2048);
+ t.mock.timers.tick(19_000);assert.equal(observed?.aborted,false);
+ body.enqueue(new Uint8Array(1));await received(2049);
  t.mock.timers.tick(10_000);assert.equal(observed?.aborted,false);
- body.close();assert.equal((await work).bytes,2048);
- assert.equal((await readFile(output)).length,2048);
- assert.equal(events.at(-1)?.outcome,'complete');assert.equal(events.at(-1)?.bytes,2048);
- assert.equal(events.at(-1)?.expectedBytes,2048);
+ body.close();assert.equal((await work).bytes,2049);
+ assert.equal((await readFile(output)).length,2049);
+ assert.equal(events.at(-1)?.outcome,'complete');assert.equal(events.at(-1)?.bytes,2049);
+ assert.equal(events.at(-1)?.expectedBytes,2049);
  t.mock.timers.tick(60_000);assert.equal(observed?.aborted,false,'finished downloads leave no watchdog');
 });
 

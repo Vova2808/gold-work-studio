@@ -67,7 +67,7 @@ test('body progress cannot extend the total transfer cap or consume the analysis
  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
  for(const remaining of [90_000,8_000]){
   let observed:AbortSignal|undefined;
-  const cap=Math.min(remaining,documentaryWorkLimits.video.downloadMs);
+  const cap=Math.min(remaining,documentaryWorkLimits.video.activeMs);
   const work=withDocumentaryDownloadBudget({automatic:true,kind:'video',transferMs:20_000,progressAware:true,
    deadline:Date.now()+documentaryWorkLimits.analysisReserveMs+remaining},async signal=>{
     observed=signal;await delay(120_000,undefined,{signal});
@@ -92,8 +92,8 @@ test('a stalled body expires after its last new bytes; repeated counts cannot ke
   observed=signal;await delay(120_000,undefined,{signal});
  });
  const rejected=assert.rejects(work,error=>error instanceof DocumentaryDownloadTimeoutError&&error.reason==='idle');
- // Leave five seconds before the 35-second total cap: this test isolates
- // the 20-second idle window instead of making both deadlines coincide.
+ // Advance the body once, then stall: duplicate byte counts must not reset
+ // the 20-second idle window even though the absolute budget remains.
  await nextTurn();t.mock.timers.tick(10_000);
  documentaryDownloadProgress(observed)?.(1024);
  t.mock.timers.tick(19_999);
@@ -103,10 +103,11 @@ test('a stalled body expires after its last new bytes; repeated counts cannot ke
  t.mock.timers.tick(1);await rejected;
 });
 
-test('a stalled body whose idle deadline equals the total cap remains bounded by the total timeout',async t=>{
+test('a stalled body whose idle deadline equals the remaining scene cap remains bounded by the total timeout',async t=>{
  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
  let observed:AbortSignal|undefined;
- const work=withDocumentaryDownloadBudget({automatic:true,kind:'video',transferMs:20_000,progressAware:true},async signal=>{
+ const work=withDocumentaryDownloadBudget({automatic:true,kind:'video',transferMs:20_000,progressAware:true,
+  deadline:Date.now()+documentaryWorkLimits.analysisReserveMs+35_000},async signal=>{
   observed=signal;await delay(120_000,undefined,{signal});
  });
  const rejected=assert.rejects(work,error=>error instanceof DocumentaryDownloadTimeoutError&&error.reason==='total');

@@ -51,7 +51,7 @@ import type { StockClient } from "./stock-client.js";
 import { checksumFile } from "./effect-library.js";
 import { prepareDocumentaryMedia, prepareDocumentaryRangePoster,prepareDocumentaryDiagram } from "./documentary-media-cache.js";
 import { DocumentarySearch, documentarySearchUnavailable, documentaryFuseModelSuffix } from "./documentary-search.js";
-import { downloadDocumentaryFile, withDocumentaryDownloadBudget, documentaryDownloadTimedOut,
+import { downloadDocumentaryFile, withDocumentaryDownloadBudget, documentaryDownloadTimedOut, documentaryDownloadProgress,
   documentaryMediaCooldownMs, DocumentaryMediaCooldownError, DocumentaryMediaRateLimitError } from "./documentary-download.js";
 import { atomicWrite } from "./fs-utils.js";
 import { measureDocumentaryStage } from "./documentary-metrics.js";
@@ -4250,7 +4250,7 @@ export class DocumentaryProjectService {
         // Waiting still consumes the absolute scene deadline passed by selection.
         transferMs:this.intelligence?.simpleSelection?(candidate.kind==='video'?(candidate.provider==='youtube'?35_000:20_000):12_000):undefined,
         progressAware:Boolean(this.intelligence?.simpleSelection&&candidate.kind==='video'
-          &&(candidate.provider==='pexels'||candidate.provider==='pixabay')), signal }, async downloadSignal => {
+          &&(candidate.provider==='pexels'||candidate.provider==='pixabay'||candidate.provider==='youtube')), signal }, async downloadSignal => {
         if (candidate.provider === "youtube") {
           if (!this.youtube) throw new Error("Загрузчик YouTube недоступен");
           // A source may be retried by another scene after Stop. Use the shared
@@ -4258,7 +4258,9 @@ export class DocumentaryProjectService {
           const downloads = join(this.materialRoot, "Downloads");
           await mkdir(downloads, { recursive: true });
           temporary = join(downloads, `youtube-${createHash("sha256").update(JSON.stringify([candidate.id,sourceRange])).digest("hex")}.download`);
-          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, onDownloadProgress, requireHd,sourceRange));
+          await measureDocumentaryStage("download", { projectId, sceneId, provider: candidate.provider }, () => this.youtube!.download(candidate, temporary, downloadSignal, bytes => {
+            documentaryDownloadProgress(downloadSignal)?.(bytes); onDownloadProgress?.(bytes);
+          }, requireHd,sourceRange));
           extension = ".mp4";
         } else if (candidate.provider === "pexels" || candidate.provider === "pixabay") {
           const asset = { provider: candidate.provider, id: candidate.id.replace(/^[^:]+:/, ""), mediaType: candidate.kind, query: candidate.query,
