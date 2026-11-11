@@ -36,6 +36,8 @@ test('explicit different named vessels, aircraft, locomotives and canals are rej
     ['Hawker Hurricane','Aircraft \'Supermarine Spitfire\' in flight'],
     ['Mallard','Locomotive Flying Scotsman at the station'],
     ['Suez Canal','Panama Canal archival view'],
+    ['Southern Ocean','Crossing the Gulf Stream (Sailing voyage)'],
+    ['Cape Horn','Cape Town coastline'],
   ];
   for(const [name,title] of cases)assert.match(documentaryMaterialMetadataIssue(namedScene(name!,name!),source(title!))!,/противоречит/,title);
 });
