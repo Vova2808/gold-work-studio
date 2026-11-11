@@ -2736,8 +2736,19 @@ export class DocumentaryProjectService {
           &&thematicRequirement&&!previousReady);
         const projectPrimaryPhoto=(source:Scene):Scene=>({...source,documentary:{...source.documentary!,
           requirement:{...source.documentary!.requirement,footageFallback:undefined},searchRecovery:undefined}});
+        const simpleStages=[stockStage(simpleKind),...(primaryPhotoFallback&&(!currentDocumentaryFootageFallback(scene)||primaryPhotoAfterReserve)?[stockStage('image')]:[])];
+        const savedPhotoPool=savedCandidatePools.get(scene.id);
+        // A failed pass with only saved photos already reached the primary
+        // photo lane. Continue that lane before paying for more video, while
+        // retaining the original slot and the separate final video quota.
+        const resumePrimaryPhotos=Boolean(this.intelligence?.simpleSelection&&!options.force&&!videoOnly&&!previousReady
+          &&project.settings.stockVideoPercent<100&&!pendingVideoReview&&!scene.documentary?.pinned&&!scene.documentary?.manualReview
+          &&scene.documentary?.autoError&&!currentDocumentaryFootageFallback(scene)
+          &&currentDocumentaryAiSearchPlan(project,scene)?.preferredKind==='image'
+          &&savedPhotoPool?.binding===this.selectionResumeBinding(project,scene)&&savedPhotoPool.candidates.length
+          &&savedPhotoPool.candidates.every(candidate=>candidate.kind==='image'));
         const stages = this.intelligence?.simpleSelection
-          ?[stockStage(simpleKind),...(primaryPhotoFallback&&(!currentDocumentaryFootageFallback(scene)||primaryPhotoAfterReserve)?[stockStage('image')]:[])]
+          ?resumePrimaryPhotos?[...simpleStages.filter(stage=>stage.kind==='image'),...simpleStages.filter(stage=>stage.kind==='video')]:simpleStages
           :videoOnly ? videos : scene.documentary?.selectionPlan?.kind==='image' ? [...photos,...videos] : [...videos,...photos];
         // Search rewrites change where we look, not what already-inspected
         // pixels show. Carry attempts across passes of this run. A changed
