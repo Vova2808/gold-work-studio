@@ -21,7 +21,7 @@ test('independent Commons uses native metadata first and retains rights/origin w
   const search=new DocumentarySearch(undefined,async(url,options)=>{
     requests++;const api=new URL(String(url));assert.equal(api.origin+api.pathname,'https://commons.wikimedia.org/w/api.php');
     assert.equal(api.searchParams.get('generator'),'search');assert.equal(api.searchParams.get('gsrnamespace'),'6');
-    assert.equal(api.searchParams.get('gsrlimit'),'8');assert.equal(api.searchParams.get('gsrsearch'),query);
+    assert.equal(api.searchParams.get('gsrlimit'),'24');assert.equal(api.searchParams.get('gsrsearch'),query);
     assert.equal(new Headers(options?.headers).get('User-Agent'),'GoldWorkStudio/0.2 (local documentary editor)');
     assert.ok(options?.signal);return Response.json(payload);
   },undefined,undefined,undefined,{search:async()=>{web++;return [];}});
@@ -31,6 +31,21 @@ test('independent Commons uses native metadata first and retains rights/origin w
   assert.equal(c.rights,'licensed');assert.equal(c.license,'CC BY-SA 4.0');assert.equal(c.width,1109);assert.equal(c.height,1117);
   assert.equal(c.pageUrl,payload.query.pages[0]!.imageinfo[0]!.descriptionurl);assert.equal(c.match,'unverified');
   assert.ok(c.concerns.some(value=>value.includes('визуально')));
+});
+test('a usable source beyond the first eight is returned by one bounded metadata request',async()=>{
+  let requests=0;
+  const pages=Array.from({length:9},(_,index)=>({...structuredClone(payload.query.pages[0]!),pageid:index+1,
+    title:index===8?'File:Captain Richard Woodget.png':`File:Unrelated ship ${index}.png`,
+    imageinfo:[{...structuredClone(payload.query.pages[0]!.imageinfo[0]!),
+      url:`https://upload.wikimedia.org/wikipedia/commons/a/ab/Candidate${index}.png`,
+      descriptionurl:`https://commons.wikimedia.org/wiki/File:Candidate${index}.png`}]}));
+  const search=new DocumentarySearch(undefined,async url=>{
+    requests++;const limit=Number(new URL(String(url)).searchParams.get('gsrlimit'));
+    return Response.json({query:{pages:pages.slice(0,limit)}});
+  },undefined,undefined,undefined,{search:async()=>assert.fail('No extra web request')});
+  const result=await search.search(input,true,undefined,true);
+  assert.equal(requests,1);
+  assert.ok(result.candidates.some(candidate=>candidate.id==='commons:9'&&candidate.match==='unverified'));
 });
 
 for(const explicit of ['entities','quoted'] as const)test(`empty full Commons query broadens once using ${explicit}, preserving original identity/year requirements`,async()=>{

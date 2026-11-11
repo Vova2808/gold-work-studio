@@ -4,6 +4,7 @@ import {currentDocumentaryAiSearchPlan} from './documentary-ai-plan-state.js';
 import {documentaryGeographicReserveIssue} from './documentary-thematic-location.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentarySubjectContinuity,documentarySubjectContinuityQueries} from './documentary-subject-continuity.js';
+import {documentaryGroundedReserveIssue} from './documentary-illustration-fallback.js';
 
 /** A local discovery hint, not a claim that a candidate depicts the script. */
 export interface FastDocumentaryScenePlan {
@@ -147,6 +148,7 @@ function shipFootageIssue(target:string,text:string):string|undefined {
 export function currentDocumentaryFootageFallback(scene:Scene){
   const requirement=scene.documentary?.requirement,fallback=requirement?.footageFallback;
   if(documentaryThematicReserveIssue(requirement?.aiSearchPlan))return;
+  if(requirement&&documentaryGroundedReserveIssue(requirement,fallback?.target,fallback?.queries))return;
   return fallback?.version===1&&(fallback.narration??requirement!.text)===scene.narration?fallback:undefined;
 }
 
@@ -156,7 +158,8 @@ export function resetStaleDocumentaryFootageFallback(scene:Scene):Scene {
   if(!doc?.requirement.footageFallback||doc.pinned||currentDocumentaryFootageFallback(scene))return scene;
   const {footageFallback:_fallback,...requirement}=doc.requirement;
   return {...scene,documentary:{...doc,requirement,verified:false,
-    autoError:'Текст сцены изменился; резервный видеоряд требует нового поиска и проверки.'}};
+    autoError:documentaryGroundedReserveIssue(doc.requirement,_fallback.target,_fallback.queries)
+      ??'Текст сцены изменился; резервный видеоряд требует нового поиска и проверки.'}};
 }
 
 /** Never inherit a saved query/name: derive the visible task from original speech. */

@@ -22,7 +22,8 @@ export function documentaryThematicQueryAllowed(requirement:DocumentaryRequireme
   const normalized=(text:string)=>` ${text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
   const names=(requirement.narrativeIdentities??requirement.identities??[]).flatMap(identity=>[identity.name,...identity.aliases]);
   return query.trim().length>=8&&query.length<=100&&!/\b(?:1[0-9]|20)\d{2}\b/.test(query)
-    &&!names.some(name=>name.trim().length>=4&&normalized(query).includes(normalized(name)));
+    &&(Boolean(documentaryGroundedDiscoveryName(requirement.aiSearchPlan))
+      ||!names.some(name=>name.trim().length>=4&&normalized(query).includes(normalized(name))));
 }
 
 /** Remove planner-invented staging from an already labelled illustration.

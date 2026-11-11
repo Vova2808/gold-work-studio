@@ -16,6 +16,17 @@ export function routeComparisonEvidenceContext(project:Project,scene:Scene):stri
   const context=routeComparisonContext(project),narration=scene.narration.trim();
   const start=context.indexOf(narration);
   if(!narration||start<0)throw new DocumentaryRouteComparisonValidationError('Реплика схемы не найдена в исходном сценарии.');
+  if(context.indexOf(narration,start+1)>=0)throw new DocumentaryRouteComparisonValidationError('Реплика схемы повторяется в разных местах сценария. Однозначный источник географических данных не установлен; схема не создана.');
+  if(!/\r?\n\s*\r?\n/.test(context)){
+    const ordered=[...project.scenes].sort((a,b)=>a.order-b.order),index=ordered.findIndex(item=>item.id===scene.id);
+    if(index<0)throw new DocumentaryRouteComparisonValidationError('Сцена схемы не найдена в последовательности исходного сценария.');
+    const adjacent=ordered.slice(Math.max(0,index-2),index+3).map(item=>item.narration.trim());
+    const positions=adjacent.map(text=>({text,start:context.indexOf(text)}));
+    if(positions.some((item,i)=>!item.text||item.start<0||context.indexOf(item.text,item.start+1)>=0
+      ||i>0&&item.start<positions[i-1]!.start+positions[i-1]!.text.length))
+      throw new DocumentaryRouteComparisonValidationError('Не удалось однозначно сопоставить ближайшие сцены исходному сценарию. Схема не создана.');
+    return context.slice(positions[0]!.start,positions.at(-1)!.start+positions.at(-1)!.text.length);
+  }
   const boundaries=[0,...[...context.matchAll(/\r?\n\s*\r?\n/g)].map(match=>match.index!+match[0].length),context.length];
   const first=boundaries.findIndex((boundary,index)=>boundary<=start&&boundaries[index+1]!>start);
   const end=start+narration.length;
@@ -50,8 +61,8 @@ export function correctableRouteComparisonError(error:unknown):error is Error{
 }
 const exactQuote=(value:unknown,context:string,limit=1600):value is string=>typeof value==='string'&&!!value.trim()&&value.length<=limit&&context.includes(value);
 const namedQuote=(value:unknown,name:unknown,context:string)=>exactQuote(value,context)&&typeof name==='string'&&!!name.trim()&&normalized(value).includes(normalized(name));
-export function assertRouteComparisonCorrection(project:Project,before:any,after:any){
-  const context=routeComparisonContext(project);
+export function assertRouteComparisonCorrection(project:Project,scene:Scene,before:any,after:any){
+  const context=routeComparisonEvidenceContext(project,scene);
   // A rejected citation may be repaired, but it cannot authorize a different route,
   // another voyage's stops, or rewriting evidence that already passed validation.
   const identity=(v:any)=>({comparisonQuotes:v?.comparisonQuotes?.map((q:any,i:number)=>exactQuote(before?.comparisonQuotes?.[i],context)?q:null),routes:v?.routes?.map((r:any,i:number)=>{
@@ -163,7 +174,7 @@ export async function hasCompletedRouteComparison(root:string,project:Project,sc
       if(!correctableRouteComparisonError(error))return false;
       const correction=await readResponse('correction',primary.result);
       if(!correction)return false;
-      assertRouteComparisonCorrection(project,primary.result,correction.result);
+      assertRouteComparisonCorrection(project,scene,primary.result,correction.result);
       return isDeepStrictEqual(validateRouteComparison(project,scene,correction.result,correction.model),expected);
     }
   }catch{return false;}

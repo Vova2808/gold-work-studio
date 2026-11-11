@@ -28,7 +28,7 @@ import type {StandardRenderer} from './standard-renderer.js';
 export function routeFixture(){
   const context='Britain. Ships sailed from London to Shanghai. The route around the Cape of Good Hope was longer. The Suez Canal gave ships a shortcut. How could the sailing ships compete?';
   const settings=createDefaultProjectSettings();settings.assembly.documentary={...createDocumentarySettings(),autoMotionGraphics:true};
-  const s={id:'s6',order:5,durationSeconds:5,includeInAssembly:true,narration:'How could the sailing ships compete?',status:'failed',imagePrompt:'',animationPrompt:'',documentary:{version:2,verified:false,pinned:false,layout:'full',caption:{enabled:false,text:''},effects:[],candidates:[],autoError:'No comparison map found',timing:{sourceKey:'voice',durationInFrames:150,speechSeconds:4.8},requirement:{text:'How could the sailing ships compete?',entities:[],years:[],queries:[],preferredKind:'image',detail:'Map comparing two sea routes around Africa versus Suez'}}} as unknown as Scene;
+  const s={id:'s6',order:5,durationSeconds:5,includeInAssembly:true,narration:context,status:'failed',imagePrompt:'',animationPrompt:'',documentary:{version:2,verified:false,pinned:false,layout:'full',caption:{enabled:false,text:''},effects:[],candidates:[],autoError:'No comparison map found',timing:{sourceKey:'voice',durationInFrames:150,speechSeconds:4.8},requirement:{text:context,entities:[],years:[],queries:[],preferredKind:'image',detail:'Map comparing two sea routes around Africa versus Suez'}}} as unknown as Scene;
   const p={id:'route-test',mediaMode:'stock',aspectRatio:'16:9',language:'en',videoBrief:{readyScript:context},settings,scenes:[s]} as unknown as Project;
   const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
   s.documentary!.requirement.aiSearchPlan={version:1,model:'fixture',inputHash:hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(p)}),sceneId:s.id}),visualTarget:s.documentary!.requirement.detail??'',subject:'routes',years:[],visualScope:'illustrative',preferredKind:'image',imageQueries:[],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',reservePolicy:'primary-only'};
@@ -90,6 +90,7 @@ test('first assembly attempt compares map preparation against the persisted mont
       selected:{id:'saved-image',provider:'local',kind:'image',localPath:imagePath,width:1920,height:1080},
       visualReview:{status:'accepted',fastRelevance:{version:1,relevant:true},viewDescription:'A ship sailing.'}}} as unknown as Scene;
   project.scenes=[scene,photo];
+  project.videoBrief!.readyScript+=' '+photo.narration;
   const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
   scene.documentary!.requirement.aiSearchPlan!.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
   project.scenes[0]=attachRouteComparison(project,scene,validateRouteComparison(project,scene,raw,'fixture'));
@@ -129,8 +130,31 @@ test('editing script invalidates the accepted diagram binding',()=>{
 });
 test('a real port quotation from a later voyage cannot establish the current comparison',()=>{
   const {project,scene,raw}=routeFixture();
+  scene.narration='How could the sailing ships compete?';
   project.videoBrief!.readyScript='Britain. The route around the Cape of Good Hope was longer. The Suez Canal gave ships a shortcut. How could the sailing ships compete?'
     +'\n\nThe vessel was repaired.'+'\n\nYears later a different voyage began.'+'\n\nShips sailed from London to Shanghai.';
+  assert.throws(()=>validateRouteComparison(project,scene,raw,'fixture'),/цитат/);
+});
+test('ambiguous repeated narration never borrows the first episode geography',()=>{
+  const {project,scene,raw}=routeFixture();
+  project.videoBrief!.readyScript=scene.narration+'\n\nAn unrelated later journey.\n\n'+scene.narration;
+  assert.throws(()=>validateRouteComparison(project,scene,raw,'fixture'),/повторяется/);
+});
+test('a correction may replace a distant quotation with local evidence for the unchanged place',()=>{
+  const {project,scene,raw}=routeFixture(),bad=structuredClone(raw);
+  const distant='London was mentioned again during a different expedition.';
+  project.videoBrief!.readyScript+='\n\nAnother chapter.\n\nUnrelated context.\n\n'+distant;
+  bad.routes[0]!.stops[0]!.quote=distant;
+  assert.doesNotThrow(()=>assertRouteComparisonCorrection(project,scene,bad,raw));
+  assert.doesNotThrow(()=>validateRouteComparison(project,scene,raw,'fixture'));
+});
+test('a script without paragraph separators still limits evidence to adjacent original scenes',()=>{
+  const {project,scene,raw}=routeFixture();
+  scene.narration='The Suez Canal gave ships a shortcut.';scene.order=0;
+  project.scenes=[scene,...['The ship was repaired.','The crew returned.','Years passed.','Britain. Ships sailed from London to Shanghai. The route around the Cape of Good Hope was longer.'].map((narration,index)=>({...scene,id:'later'+index,order:index+1,narration}))];
+  delete project.videoBrief!.readyScript;
+  assert.throws(()=>validateRouteComparison(project,scene,raw,'fixture'),/цитат/);
+  project.videoBrief!.readyScript=project.scenes.map(s=>s.narration).join(' ');
   assert.throws(()=>validateRouteComparison(project,scene,raw,'fixture'),/цитат/);
 });
 test('correction repairs a mismatched label and citation pair without changing valid route evidence',()=>{
@@ -138,14 +162,14 @@ test('correction repairs a mismatched label and citation pair without changing v
   const mismatched=structuredClone(raw);
   mismatched.routes[0]!.quote=raw.routes[1]!.quote;
   assert.throws(()=>validateRouteComparison(project,scene,mismatched,'fixture'),/Подпись маршрута/);
-  assert.doesNotThrow(()=>assertRouteComparisonCorrection(project,mismatched,raw));
+  assert.doesNotThrow(()=>assertRouteComparisonCorrection(project,scene,mismatched,raw));
   assert.doesNotThrow(()=>validateRouteComparison(project,scene,raw,'fixture'));
   const changedValidPair=structuredClone(raw);
   changedValidPair.routes[1]!.label='shortcut';
-  assert.throws(()=>assertRouteComparisonCorrection(project,mismatched,changedValidPair),/изменила/);
+  assert.throws(()=>assertRouteComparisonCorrection(project,scene,mismatched,changedValidPair),/изменила/);
   const changedStop=structuredClone(raw);
   changedStop.routes[0]!.stops[0]!.name='Shanghai';
-  assert.throws(()=>assertRouteComparisonCorrection(project,mismatched,changedStop),/изменила/);
+  assert.throws(()=>assertRouteComparisonCorrection(project,scene,mismatched,changedStop),/изменила/);
 });
 test('different bends around the same named intermediate stop do not establish two alternatives',()=>{
   const {project,scene,raw}=routeFixture(),value=validateRouteComparison(project,scene,raw,'fixture');
@@ -284,9 +308,10 @@ test('a China quotation never establishes Shanghai; correction preserves stops a
   const {project,scene,raw}=routeFixture();
   const china='On the China route, sailing ships had to travel around the southern end of Africa.';
   project.videoBrief!.readyScript+=' '+china+' A different ship visited Sydney.';
+  scene.narration+=' '+china;
   const bad=JSON.parse(JSON.stringify(raw));bad.routes[0]!.stops[2]!.quote=china;
   assert.throws(()=>validateRouteComparison(project,scene,bad,'fixture'),/Shanghai.*не названо/);
-  assertRouteComparisonCorrection(project,bad,raw);
+  assertRouteComparisonCorrection(project,scene,bad,raw);
   assert.ok(validateRouteComparison(project,scene,raw,'fixture'));
   for(const change of [
     (v:any)=>{v.routes[0].stops[2]={name:'Sydney',country:'Australia',quote:'A different ship visited Sydney.'};},
@@ -294,7 +319,7 @@ test('a China quotation never establishes Shanghai; correction preserves stops a
     (v:any)=>{v.routes[0].quote=china;},
   ]){
     const changed=structuredClone(raw);change(changed);
-    assert.throws(()=>assertRouteComparisonCorrection(project,bad,changed),/изменила именованные опоры/);
+    assert.throws(()=>assertRouteComparisonCorrection(project,scene,bad,changed),/изменила именованные опоры/);
   }
 });
 

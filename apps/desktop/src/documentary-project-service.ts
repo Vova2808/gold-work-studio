@@ -3804,7 +3804,7 @@ export class DocumentaryProjectService {
         catch(error){
           if(!correctableRouteComparisonError(error)||!planner.correctRouteComparison)throw error;
           const corrected=await planner.correctRouteComparison(before,scene,response.raw,error.message,signal);
-          assertRouteComparisonCorrection(before,response.raw,corrected.raw);
+          assertRouteComparisonCorrection(before,scene,response.raw,corrected.raw);
           comparison=validateRouteComparison(before,scene,corrected.raw,corrected.model);
         }
         const failure=exhausted.get(scene.id)!;comparison.selectionFailure={category:failure.category,message:failure.message??doc.autoError!};

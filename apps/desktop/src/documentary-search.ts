@@ -248,7 +248,7 @@ export class DocumentarySearch {
     const isolatedPublic=independentPublicSources&&['web','commons','internet-archive','loc','youtube'].includes(provider);
     const warningKey=this.webWarningKey(query,kind)+(independentPublicSources?':'+provider:'');
     // Earlier public-only YouTube results must not hide the configured API.
-    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-2':'commons-native-subject-1')
+    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-3':'commons-native-subject-2')
       :provider==='youtube'&&kind==='video'?'youtube-api-public-cc-2':'public-source-2';
     const cacheKey=(text:string)=>createHash("sha256").update(JSON.stringify([isolatedPublic?publicCacheVersion:provider === "internet-archive" ? 5 : provider==='commons'?4:["pexels", "pixabay", "youtube"].includes(provider) ? 3 : 2, provider, text, kind,
       ...(licensedOnly && provider === "internet-archive" ? ["licensed-only"] : []),
@@ -358,7 +358,10 @@ export class DocumentarySearch {
   private async commonsSearch(query:string,kind:string,signal?:AbortSignal,automatic=false):Promise<DocumentaryCandidate[]>{
     const provider='commons',url=new URL('https://commons.wikimedia.org/w/api.php');
     for(const [key,value] of Object.entries({action:'query',format:'json',formatversion:'2',generator:'search',
-      gsrsearch:kind==='video'?`${query} filetype:video`:query,gsrnamespace:'6',gsrlimit:automatic?'8':'24',
+      // Identity refusals and already-used sources can exhaust the first eight.
+      // One bounded metadata page keeps alternatives available without adding
+      // provider requests, downloads or paid-analysis slots.
+      gsrsearch:kind==='video'?`${query} filetype:video`:query,gsrnamespace:'6',gsrlimit:'24',
       prop:'imageinfo',iiprop:'url|extmetadata|size|mime',iiurlwidth:automatic?(kind==='image'?'1920':'1600'):'640'}))url.searchParams.set(key,value);
     const payload=await this.json(url,provider,signal);
     const pages=list(record(record(payload).query).pages);

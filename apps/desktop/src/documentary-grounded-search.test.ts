@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {DocumentaryCandidate,DocumentaryRequirement,Project,Scene} from '@gold-work/shared';
-import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue,documentaryGroundedReserveIssue} from './documentary-illustration-fallback.js';
+import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue,documentaryGroundedReserveIssue,documentaryThematicQueryAllowed} from './documentary-illustration-fallback.js';
 import {documentaryNamedListPortrait,documentaryVisualReviewContext} from './documentary-scene-context.js';
 import {documentaryRequiredVisiblePart} from './documentary-detail-evidence.js';
+import {currentDocumentaryFootageFallback,resetStaleDocumentaryFootageFallback} from './documentary-fast-plan.js';
 
 test('labelled specification queries discard invented staging while literal parts stay specific',()=>{
   assert.equal(documentaryGroundedThematicQuery('Действующий чемпион выбрал новую команду и новый мотоцикл.','motorcycle racing team paddock setup'),'motorcycle racing team');
@@ -36,11 +37,24 @@ test('a reserve preserves only identities made mandatory by the original script,
   const req={aiSearchPlan:plan} as DocumentaryRequirement;
   assert.match(documentaryGroundedReserveIssue(req)!,/Richard Woodget/);
   assert.equal(documentaryGroundedReserveIssue(req,'Captain Richard Woodget portrait',['archival portrait']),undefined);
+  const resumed={id:'scene',narration:plan.grounding!.mandatory[0]!.scriptQuote,audioPath:'retained-voice.mp3',imagePath:'retained-material.jpg',
+    documentary:{requirement:{...req,text:plan.grounding!.mandatory[0]!.scriptQuote,footageFallback:{version:1,target:plan.fallbackVisualTarget,queries:plan.fallbackVideoQueries}},verified:false}} as unknown as Scene;
+  assert.equal(currentDocumentaryFootageFallback(resumed),undefined,'The ordinary autoSelect path must also reject the saved incompatible reserve');
+  const restored=resetStaleDocumentaryFootageFallback(resumed);
+  assert.equal(restored.documentary!.requirement.footageFallback,undefined);
+  assert.equal(restored.audioPath,resumed.audioPath);assert.equal(restored.imagePath,resumed.imagePath);
+  assert.equal(restored.documentary!.requirement.aiSearchPlan,plan);
+  assert.ok(resumed.documentary!.requirement.footageFallback,'The prior snapshot stays intact');
   assert.equal(documentaryGroundedReserveIssue({...req,aiSearchPlan:{...plan,grounding:undefined}}),undefined,'Legacy contextual substitution has no new mandatory identity');
   assert.equal(documentaryGroundedReserveIssue({...req,aiSearchPlan:{...plan,grounding:{...plan.grounding!,mandatory:[]}}}),undefined);
   const ship={...plan,subject:'Cutty Sark',grounding:{...plan.grounding!,mandatory:[{kind:'identity' as const,required:'the ship Cutty Sark',scriptQuote:'Cutty Sark was renamed Ferreira.',aliases:['Ferreira']}]}};
   assert.equal(documentaryGroundedReserveIssue({aiSearchPlan:ship} as DocumentaryRequirement,'Ferreira vessel',['Ferreira ship']),undefined);
   assert.match(documentaryGroundedReserveIssue({aiSearchPlan:ship} as DocumentaryRequirement,'Olympic ship',['Olympic underway'])!,/Cutty Sark/);
+  const named={aiSearchPlan:ship,identities:[{name:'Cutty Sark',aliases:['Ferreira']}]} as DocumentaryRequirement;
+  assert.equal(documentaryThematicQueryAllowed(named,'Cutty Sark preserved ship'),true);
+  assert.equal(documentaryThematicQueryAllowed(named,'Ferreira sailing ship'),true);
+  assert.equal(documentaryThematicQueryAllowed(named,'generic sailing ship'),false);
+  assert.equal(documentaryThematicQueryAllowed({...named,aiSearchPlan:undefined},'Cutty Sark preserved ship'),false);
 });
 test('an explicit person introduction keeps exact names without borrowing an earlier event date',()=>{
   const scene={id:'people',order:1,narration:'За этим результатом стояли конкретные люди и детали: Росси, ',documentary:{requirement:{identities:[{name:'Valentino Rossi',aliases:['Росси']}],years:[]}}} as unknown as Scene;

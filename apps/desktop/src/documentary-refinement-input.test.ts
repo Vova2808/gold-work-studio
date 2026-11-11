@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve,sep} from 'node:path';
 import type {Project,Scene} from '@gold-work/shared';
 import {DocumentaryIntelligence,documentaryRefinementInput} from './documentary-intelligence.js';
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
@@ -46,4 +46,31 @@ test('shortening a paid refinement reuses the old answer and blocks an uncertain
   await writeFile(checkpoint,JSON.stringify({state:'partial',raw:'incomplete answer'}));
   await assert.rejects(service.refineQueries(project,[scene]),error=>error instanceof DocumentaryAnalysisError&&error.kind==='pending');
   assert.equal(paid,0);
+});
+for(const uncertain of [false,true])test(`grounded identity refinement preserves named queries and old generic receipts: uncertain=${uncertain}`,async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-grounded-refinement-'));
+  t.after(()=>{assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));return rm(root,{recursive:true,force:true});});
+  const narration='The ship Cutty Sark was renamed Ferreira.';
+  const scene={id:'s',order:0,narration,documentary:{requirement:{text:narration,entities:['Cutty Sark'],identities:[{name:'Cutty Sark',aliases:[]}],years:[],queries:['Cutty Sark photograph'],visualScope:'illustrative',
+    aiSearchPlan:{subject:'Cutty Sark',imageQueries:['Cutty Sark photograph'],videoQueries:[],grounding:{version:1,mandatory:[{kind:'identity',required:'the ship Cutty Sark',scriptQuote:narration}],illustrations:['same ship'],optionalDetails:[]}}}}} as unknown as Scene;
+  const project={id:'grounded-refinement',scenes:[scene],videoBrief:{readyScript:narration}} as Project;
+  let paid=0;
+  const intelligence=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system:string,input:string)=>{
+    paid++;assert.match(system,/Keep every mandatory named subject/);assert.doesNotMatch(system,/without forbiddenNames/);
+    assert.equal(JSON.parse(input).scenes[0].requirement.aiSearchPlan.grounding.mandatory[0].required,'the ship Cutty Sark');
+    return JSON.stringify({scenes:[{id:'s',queries:['Cutty Sark preserved ship']}]});
+  }},()=>root);
+  if(uncertain){
+    const complete=Reflect.get(intelligence,'complete').bind(intelligence);
+    Reflect.set(intelligence,'complete',async(...args:unknown[])=>{
+      const prior=(args[5] as Array<{system:string;input:string}>).find(request=>request.system.startsWith('Refine search phrases'))!;
+      assert.ok(prior);const directory=join(root,'Documentary','Analysis');await mkdir(directory,{recursive:true});
+      await writeFile(join(directory,documentaryCheckpointKey('search-refinement',prior.system,prior.input,[])+'.json'),JSON.stringify({state:'partial',raw:'unfinished paid response'}));
+      return complete(...args);
+    });
+    await assert.rejects(intelligence.refineQueries(project,[scene]),DocumentaryAnalysisError);
+    assert.equal(paid,0);
+  }else{
+    assert.deepEqual((await intelligence.refineQueries(project,[scene])).get('s'),['Cutty Sark preserved ship']);assert.equal(paid,1);
+  }
 });
