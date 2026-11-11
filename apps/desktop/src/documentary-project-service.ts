@@ -1957,7 +1957,9 @@ export class DocumentaryProjectService {
           const normalized={...requirement};
           if(fallback&&(!ai||fallback.target!==ai.fallbackVisualTarget||JSON.stringify(fallback.queries)!==JSON.stringify(ai.fallbackVideoQueries)
             ||(fallback.narration??requirement.text)!==scene.narration))delete normalized.footageFallback;
-          const updated=applyDocumentaryRequirement(scene,normalized);
+          // A cached reserve can match its old AI fields yet contradict the
+          // primary grounding. Drop it before the media lane is chosen.
+          const updated=resetStaleDocumentaryFootageFallback(applyDocumentaryRequirement(scene,normalized));
           if(!currentDocumentaryAiSearchPlan(current,updated))throw new Error('AI-план не соответствует текущему сценарию. Материалы и озвучка сохранены.');
           if(original.documentary?.requirement.aiSearchPlan&&!currentDocumentaryAiSearchPlan(current,original))stalePlans.set(scene.id,original);
           return updated;
