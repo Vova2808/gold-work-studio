@@ -2,7 +2,9 @@ import {createHash} from 'node:crypto';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {mkdir,readFile,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
-import type {DocumentaryRecoveryItem} from '@gold-work/shared';
+import type {DocumentaryAiSearchPlan,DocumentaryAiPlanGrounding,DocumentaryRecoveryItem} from '@gold-work/shared';
+import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
+import {documentaryJsonFormatIssue} from './documentary-json.js';
 import {atomicWrite} from './fs-utils.js';
 import {documentaryJson} from './documentary-intelligence.js';
 import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
@@ -34,6 +36,8 @@ export type DocumentarySelectionRetryGrant = {
   priorState: 'pending'|'partial'|'received';
   model: string;
   binding: {checksum:string;taskKey:string;start:number;end:number};
+  /** Only a terminal, incomplete response with the original narrated task. */
+  groundedNarration?:string;
 };
 
 async function readSelectionAuthorization(directory:string,id:string):Promise<
@@ -66,7 +70,10 @@ async function readSelectionAuthorization(directory:string,id:string):Promise<
       try{documentaryJson(prior.raw);return;}catch{/* Only an unresolved response is eligible. */}
     }
     return {available,completed,grant:{id,revision:grant.replacesRevision,approvedAt:grant.approvedAt,priorState:prior.state,model:prior.model,
-      binding:{checksum:binding.checksum,taskKey:binding.taskKey,start:binding.start,end:binding.end}}};
+      binding:{checksum:binding.checksum,taskKey:binding.taskKey,start:binding.start,end:binding.end},
+      ...(prior.state==='received'&&documentaryJsonFormatIssue(prior.raw)==='incomplete-json'
+        &&typeof binding.quality?.narration==='string'&&binding.quality.narration.trim()
+        ?{groundedNarration:binding.quality.narration}:{})}};
   } catch(error) {
     if(error instanceof SyntaxError)return;
     throw error;
@@ -83,10 +90,11 @@ export const documentarySelectionRetry = new AsyncLocalStorage<
 >();
 export class DocumentarySelectionRetryProbePassed extends Error {}
 
-type RetryRequest={id:string;purpose:string;model?:string;binding?:{checksum:string;taskKey?:string;start:number;end:number};legacyTaskKey?:string;existing:boolean};
+type RetryRequest={id:string;purpose:string;model?:string;binding?:{checksum:string;taskKey?:string;start:number;end:number};legacyTaskKey?:string;existing:boolean;
+  groundedTask?:{sceneId:string;narration:string;originalScript:string;grounding:DocumentaryAiPlanGrounding}};
 
 /** The caller supplies the canonical request, after the ordinary unknown guards. */
-export async function checkDocumentarySelectionRetry(directory:string,request:RetryRequest):Promise<'exact'|'narrative'|undefined>{
+export async function checkDocumentarySelectionRetry(directory:string,request:RetryRequest):Promise<'exact'|'narrative'|'grounded'|undefined>{
   const scope=documentarySelectionRetry.getStore();
   if(!scope||!('grant' in scope))return;
   const {grant}=scope,binding=request.binding;
@@ -98,10 +106,16 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
   // the same visual question with the newly added narrative criterion.
   const narrative=request.id!==grant.id&&!request.existing&&grant.priorState==='received'&&Boolean(binding.taskKey)
     &&binding.taskKey!==grant.binding.taskKey&&request.legacyTaskKey===grant.binding.taskKey;
-  if(!exact&&!narrative)throw mismatch();
+  const task=request.groundedTask;
+  const grounded=request.id!==grant.id&&!request.existing&&grant.priorState==='received'&&Boolean(binding.taskKey)
+    &&binding.taskKey!==grant.binding.taskKey&&Boolean(grant.groundedNarration)&&task
+    &&typeof task.sceneId==='string'&&Boolean(task.sceneId.trim())&&task.narration===grant.groundedNarration
+    &&typeof task.originalScript==='string'&&task.originalScript.includes(task.narration)
+    &&!documentaryAiPlanGroundingIssue({grounding:task.grounding,years:[]} as unknown as DocumentaryAiSearchPlan,task.originalScript);
+  if(!exact&&!narrative&&!grounded)throw mismatch();
   const current=await readDocumentarySelectionRetryGrant(directory,grant.id);
   if(!current||current.revision!==grant.revision||current.approvedAt!==grant.approvedAt)throw mismatch();
-  if(narrative){
+  if(narrative||grounded){
     // A different file revision or prompt key must not commission this same
     // narrative check a second time after its first dispatch.
     for(const file of await readdir(directory)){
@@ -109,11 +123,12 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
       const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
       const prior=receipt?.singleReviewBinding;
       if(receipt?.purpose===request.purpose&&receipt.model===request.model&&prior?.checksum===binding.checksum
-        &&prior.taskKey===binding.taskKey&&prior.start===binding.start&&prior.end===binding.end)throw mismatch();
+        &&prior.start===binding.start&&prior.end===binding.end
+        &&(prior.taskKey===binding.taskKey||grounded&&prior.groundedRetryOrigin===grant.id))throw mismatch();
     }
   }
   if(scope.probe)throw new DocumentarySelectionRetryProbePassed();
-  return exact?'exact':'narrative';
+  return exact?'exact':grounded?'grounded':'narrative';
 }
 
 export async function readDocumentarySelectionRetryEvidence(root:string,model:string){

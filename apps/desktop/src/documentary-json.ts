@@ -1,5 +1,22 @@
 import JSON5 from 'json5';
 
+/** Diagnostic only: never supplies missing tokens or a model verdict. */
+export function documentaryJsonFormatIssue(raw:string):'incomplete-json'|'invalid-json'|undefined{
+  if(parseDocumentaryJson(raw))return;
+  const text=raw.trim().replace(/^```(?:json5?)?[ \t]*\r?\n/i,'');
+  let quote='',escaped=false;
+  const stack:string[]=[];
+  for(const char of text){
+    if(quote){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char===quote)quote='';continue;}
+    if(char==='"'||char==="'")quote=char;
+    else if(char==='{'||char==='[')stack.push(char);
+    else if(char==='}'||char===']'){
+      if(stack.pop()!==(char==='}'?'{':'['))return 'invalid-json';
+    }
+  }
+  return quote||stack.length?'incomplete-json':'invalid-json';
+}
+
 /** JSON5 is a data parser, never eval. Reject values JSON.stringify would
  * silently change/drop and property names that can alter later object use. */
 export function safeDocumentaryJsonValue(value:unknown,depth=0):boolean{

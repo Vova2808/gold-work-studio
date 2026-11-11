@@ -89,6 +89,8 @@ interface ScenarioCompletenessAudit {
 
 export interface AnyModelCompletionMetadata {
   finishReason?: string;
+  terminalKind?: 'json'|'done'|'finish_reason';
+  completionTokens?: number;
   outputLimit?: number;
   receivedCharacters: number;
 }
@@ -196,7 +198,7 @@ export async function readAnyModelCompletion(
   onActivity?: () => void,
   completionId?: string,
   documentaryTerminalBoundary = false,
-): Promise<{ content: string; finishReason?: string }> {
+): Promise<{ content: string; finishReason?: string; terminalKind?:'json'|'done'|'finish_reason';completionTokens?:number }> {
   // Some compatible gateways omit Content-Type. When streaming was requested,
   // absence of the header is not evidence of JSON; explicit application/json
   // remains the safe fallback for providers that ignore `stream: true`.
@@ -212,7 +214,8 @@ export async function readAnyModelCompletion(
     if (content) onChunk?.(content);
     return {
       content,
-      finishReason: choice?.finish_reason ?? undefined
+      finishReason: choice?.finish_reason ?? undefined,
+      terminalKind:'json',completionTokens:payload.usage?.completion_tokens,
     };
   }
   if (!response.body) throw new AnyModelResponseStreamError("AnyModel не вернул тело SSE-ответа");
@@ -288,7 +291,7 @@ export async function readAnyModelCompletion(
       throw new AnyModelResponseStreamError("AnyModel вернул повреждённый SSE-фрагмент", content);
     }
     recordDiagnosticEvent('info','anymodel.completion.usage',anyModelUsageDiagnostic(usage));
-    return { content, finishReason };
+    return { content, finishReason,terminalKind:sawDone?'done':'finish_reason',completionTokens:usage?.completion_tokens };
   } catch (error) {
     failureCode = safeNetworkErrorCode(error) || undefined;
     if (isResponseStreamFailure(error) && !(error instanceof AnyModelResponseStreamError)) {
@@ -2257,7 +2260,7 @@ export class AnyModelClient {
         }
         throw new Error(reason);
       }
-      let completion: { content: string; finishReason?: string };
+      let completion: { content: string; finishReason?: string;terminalKind?:'json'|'done'|'finish_reason';completionTokens?:number };
       try {
         activity?.();
         completion = await readAnyModelCompletion(response, useStreamingTransport, progress ? chunk => {
@@ -2287,7 +2290,8 @@ export class AnyModelClient {
       }
       const content = completion.content;
       const finishReason = completion.finishReason?.trim();
-      progress?.onTerminal?.({finishReason:finishReason?.slice(0,80),outputLimit:maxTokens,receivedCharacters:content.length});
+      progress?.onTerminal?.({finishReason:finishReason?.slice(0,80),terminalKind:completion.terminalKind,
+        completionTokens:completion.completionTokens,outputLimit:maxTokens,receivedCharacters:content.length});
       if (!content.trim()) {
         throw new AnyModelOutputFormatError(
           `AnyModel вернул пустой ответ${finishReason ? ` (finish_reason: ${finishReason.slice(0, 40)})` : ""}`, true, content

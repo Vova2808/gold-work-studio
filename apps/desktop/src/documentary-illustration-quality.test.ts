@@ -11,6 +11,8 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext,documentaryIll
 import {documentarySavedQualityIssue,documentarySourceText} from './documentary-source-quality.js';
 import {documentaryIllustrationQualityIssue,documentaryLegacyIllustrationRisk,documentaryInternalPartIssue,documentaryIllustrationQualityInstruction,documentaryIllustrationResponseInstruction,documentaryIllustrationQualityInstructionV1,documentaryIllustrationQualityInstructionV2} from './documentary-illustration-quality.js';
 import {effectFfmpeg} from './effect-media.js';
+import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction} from './documentary-illustration-quality.js';
+import {documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const clean={description:'A steamship with a hull, deck and smokestack.',suitable:true,reason:'Visible steamship illustrates steam transport.',
@@ -41,6 +43,42 @@ async function fixture(t:test.TestContext,target='steamship at sea'){
  const receipts=async()=>{const dir=join(root,'Documentary','Analysis');return Promise.all((await readdir(dir)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name)).map(async name=>({path:join(dir,name),bytes:await readFile(join(dir,name),'utf8')})));};
  return {root,project,scene,receipts};
 }
+
+test('a same-object illustration receives script-grounded optional details, while fallback retains the original person identity',async t=>{
+ for(const fallback of [false,true]){
+  const {root,project,scene}=await fixture(t,'Cutty Sark ship');
+  const narration=fallback?'John Willis commissioned Cutty Sark.':'After eight tea voyages, Cutty Sark left the trade for which she had been built.';
+  scene.narration=narration;project.videoBrief!.readyScript=narration;
+  const doc=scene.documentary!,req=doc.requirement,ai=req.aiSearchPlan!;
+  req.text=narration;doc.pinned=false;doc.caption={enabled:false,text:'',position:'bottom',animation:'fade',fontSize:32,
+   color:'#fff',backgroundColor:'#000',opacity:1};doc.layout='full';doc.effects=[];
+  ai.subject=fallback?'John Willis':'Cutty Sark';ai.visualScope='illustrative';
+  ai.visualTarget=fallback?'John Willis portrait':'Cutty Sark ship';ai.fallbackVisualTarget='Cutty Sark ship';ai.fallbackVideoQueries=['Cutty Sark'];
+  ai.grounding={version:1,mandatory:[{kind:'identity',required:ai.subject,scriptQuote:ai.subject}],
+   illustrations:[fallback?'A portrait of John Willis.':'A modern view of the same preserved ship.'],optionalDetails:['Tea cargo being loaded.']};
+  doc.selected!.title='Cutty Sark ship';doc.selected!.description='Cutty Sark ship';
+  ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
+  if(fallback)req.footageFallback={version:1,target:ai.fallbackVisualTarget,queries:ai.fallbackVideoQueries,
+   narration,originalTarget:ai.visualTarget,reason:'Primary search exhausted.',kind:'image',
+   automaticRecovery:{version:1,binding:documentaryThematicRecoveryBinding(project,scene),startedAt:'fixture',blockedSourceKeys:[]}};
+  let calls=0;
+  const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,input)=>{
+   calls++;assert.equal(system,fallback?documentaryGroundedFallbackIllustrationQualityInstruction:documentaryGroundedIllustrationQualityInstruction);
+   const task=JSON.parse(input);assert.equal(task.scriptGrounding.originalScript,narration);
+   assert.equal(task.scriptGrounding.grounding.mandatory[0].required,ai.subject);
+   assert.deepEqual(task.scriptGrounding.grounding.optionalDetails,['Tea cargo being loaded.']);
+   if(fallback)assert.ok(task.fallbackNarrativeContext.binding);
+   // Mocked semantic verdict: this test verifies contract plumbing and gates,
+   // not recognition of the synthetic local test image by a live model.
+   return JSON.stringify({...clean,description:'The preserved ship hull and rigging.',suitable:!fallback,targetVisible:!fallback,
+    targetEvidence:fallback?'A ship is visible; the named person is absent.':'Distinctive hull, masts and rigging of the same ship.',
+    reason:fallback?'A ship does not show the named person.':'Modern illustration of the same ship, not the historical event.',
+    ...(fallback?{narrativeFit:{version:1,binding:task.fallbackNarrativeContext.binding,status:'conflict',scriptQuote:'John Willis',
+     evidence:'The visible vessel does not depict the named person in the original scene.'}}:{})});
+  }},()=>root);
+  assert.equal((await service.inspectForSelection(project,scene)).review.status,fallback?'rejected':'accepted');assert.equal(calls,1);
+ }
+});
 
 test('visible target and text relevance are independent gates, including ordinary physical markings',()=>{
  const check=(value:Record<string,unknown>,target='steamship at sea')=>documentaryIllustrationQualityIssue(target,value,true);

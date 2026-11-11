@@ -18,7 +18,8 @@ import {documentaryContradictoryModelYear,documentaryExplicitModelYear} from './
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
 import {checkDocumentarySelectionRetry,documentarySelectionRetry} from './documentary-retry.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
-import {parseDocumentaryJson} from './documentary-json.js';
+import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
+import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction} from './documentary-illustration-quality.js';
 import {documentaryIllustrationFallback,documentaryThematicQueryAllowed,documentaryGroundedThematicQuery} from './documentary-illustration-fallback.js';
 import {documentaryReviewContract,documentaryOrdinaryVisualContract,documentaryNamedIntervalContract} from './documentary-review-contract.js';
 import {documentaryScriptEvidenceContract,documentaryScriptEvidence,documentaryScriptEvidenceIssue,documentaryRecoveryQueries,documentaryScriptRequirements,documentaryScriptRequirementsContract,documentaryScriptRequirementsProblem} from './documentary-script-evidence.js';
@@ -133,6 +134,7 @@ const singleReviewTaskKey=(input:Record<string,unknown>)=>createHash('sha256').u
   ...(input.analysisModel?[input.analysisModel]:[]),
   ...(input.singleReviewVersion?[input.singleReviewVersion]:[]),
   ...(input.fallbackNarrativeContext?[input.fallbackNarrativeContext]:[]),
+  ...(input.scriptGrounding?[input.scriptGrounding]:[]),
 ])).digest('hex');
 export class DocumentaryCachedAnalysisMissing extends Error {}
 /** Only emitted after old-receipt guards, before this request has a pending receipt or POST. */
@@ -323,7 +325,9 @@ const modelRefusal=(text:string)=>/the model could not generate output because|i
 export function documentaryJson(text: string): Record<string, unknown> {
   const parsed=parseDocumentaryJson(text);
   if(!parsed&&modelRefusal(text))throw new DocumentaryModelRefusal(text);
-  if(!parsed)throw new Error('Некорректный полный JSON/JSON5 ответ анализа Stock; ответ сохранён без повторной оплаты');
+  if(!parsed)throw new Error(documentaryJsonFormatIssue(text)==='incomplete-json'
+    ?'Получен незавершённый JSON анализа Stock: решение модели отсутствует. Причина обрыва не установлена; лимит токенов не подтверждён. Ответ сохранён без автоматической повторной оплаты.'
+    :'Некорректный полный JSON/JSON5 ответ анализа Stock; ответ сохранён без повторной оплаты');
   return parsed.result;
 }
 const completedGatewaySignature='[Error] The upstream provider is temporarily unavailable. Try again shortly.';
@@ -1087,10 +1091,12 @@ export class DocumentaryIntelligence {
     await options.explanationFeedback?.onIdentity(key);
     const root = join(this.rootFor(projectId), "Documentary", "Analysis"); await mkdir(root, { recursive: true });
     const previewSourceKey=this.previewSource.getStore()?.sourceKey;
+    const retryOriginScope=documentarySelectionRetry.getStore();
     const previewMetadata={...(previewSourceKey?{previewSourceKey}:{}),...(words.singleReview?{singleReviewBinding:{
       checksum:String(words.checksum),revision:JSON.stringify(words.fileRevision),start:Number(words.startSeconds),end:Number(words.endSeconds),
       taskKey:singleReviewTaskKey(words),...(words.fallbackNarrativeContext?{fallbackNarrativeBinding:words.fallbackNarrativeContext.binding}:{}),...(words.imagePreparation?{imagePreparation:words.imagePreparation}:{}),
-      ...(words.illustrationQualityVersion===1?{quality:{version:1,target:String(words.visualTarget),narration:String(words.narration)}}:{})}}:{})};
+      ...(words.scriptGrounding&&retryOriginScope&&'grant' in retryOriginScope?{groundedRetryOrigin:retryOriginScope.grant.id}:{}),
+      ...(words.illustrationQualityVersion===1?{quality:{version:1,target:String(words.visualTarget),narration:String(words.narration),...(words.sceneId?{sceneId:String(words.sceneId)}:{})}}:{})}}:{})};
     const legacyImages=images.length?this.inspection.getStore()?.legacyImageSamples:undefined;
     if(legacyImages)for(const previous of [{system,input},...previousRequests]){
       const oldKey=documentaryCheckpointKey(purpose,previous.system,previous.input,legacyImages);
@@ -1173,7 +1179,9 @@ export class DocumentaryIntelligence {
     if(saved?.rejection==='model-refusal')throw new DocumentaryAnalysisError(saved.error??'Модель отказалась анализировать материал.','pending',purpose);
     if(purpose==='search-plan'&&saved?.state==='invalid'&&saved.plannerFailure==='received-invalid-format')throw new DocumentaryPlanInvalidResponse(key);
     if(saved?.state==='rejected'&&saved.rejection==='provider-unavailable'&&!resumingGateway)throw new DocumentaryAnalysisError(saved.error??'AnyModel сообщил о недоступности провайдера. Ответ сохранён; автоматического повтора нет.','unavailable',purpose,false,false,undefined,confirmedGatewayUnavailable(saved));
-    if (saved?.state === "received") throw new DocumentaryAnalysisError("Ответ анализа получен, но его формат не распознан. Ответ сохранён; повторный платный запрос не отправлен.", "pending", purpose);
+    if (saved?.state === "received") throw new DocumentaryAnalysisError(saved.raw&&documentaryJsonFormatIssue(saved.raw)==='incomplete-json'
+      ?'Получен незавершённый JSON анализа: решения модели нет. Причина обрыва не установлена; лимит токенов не подтверждён. Исходный ответ сохранён; требуется явное разрешение одного повтора.'
+      :"Ответ анализа получен, но его формат не распознан. Ответ сохранён; повторный платный запрос не отправлен.", "pending", purpose);
     if (saved?.state === "partial") throw new DocumentaryAnalysisError(`Сохранён незавершённый ответ анализа (${saved.raw?.length ?? 0} знаков). Этот платный запрос не повторяется; можно использовать другие источники и уже готовую часть каталога.`, "pending", purpose);
     if (saved && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")&&!resumingGateway) throw new DocumentaryAnalysisError("Предыдущий запрос анализа Stock уже отправлялся, но результат не сохранён. Автоповтор отключён; проверьте журнал AnyModel.", "pending", purpose);
     // Adding sentence context must not disguise an uncertain paid request as a new retry.
@@ -1195,7 +1203,7 @@ export class DocumentaryIntelligence {
       if(purpose==='visual-illustration'&&system.endsWith(documentaryIllustrationQualityInstruction)
         &&previous.system!==system&&previousState?.state==='complete'&&previousState.result)
         continue;
-      if(purpose==='visual-illustration'&&words.singleReview&&previousState?.state==='complete'&&previousState.result){
+      if(purpose==='visual-illustration'&&words.singleReview&&!words.scriptGrounding&&previousState?.state==='complete'&&previousState.result){
         const prior=JSON.parse(previous.input),binding=previousState.singleReviewBinding;
         const sameTask=['checksum','startSeconds','endSeconds','visualTarget','narration','sourcePolicy','namedSubject','narrativeContext']
           .every(field=>JSON.stringify(prior[field])===JSON.stringify(words[field]))
@@ -1295,6 +1303,7 @@ export class DocumentaryIntelligence {
     const selectionRetryRequest=documentarySelectionRetry.getStore()?{
       id:key,purpose,model:singleReviewModel,binding:previewMetadata.singleReviewBinding,existing:Boolean(saved),
       legacyTaskKey:words.fallbackNarrativeContext?singleReviewTaskKey({...words,fallbackNarrativeContext:undefined}):undefined,
+      ...(words.scriptGrounding?{groundedTask:{sceneId:words.sceneId,narration:words.narration,...words.scriptGrounding}}:{}),
     }:undefined;
     const selectionRetry=selectionRetryRequest?await checkDocumentarySelectionRetry(root,selectionRetryRequest):undefined;
     // A local resource refusal must not become an uncertain paid checkpoint.
@@ -1309,7 +1318,7 @@ export class DocumentaryIntelligence {
       if(error.code==='ENOENT')return undefined;throw error;
     });
     if(approval&&(!approval.approvedAt||approval.maxAttempts!==1||approval.consumedAt&&(purpose==='semantic-montage'||saved?.state!=='failed')))throw new DocumentaryAnalysisError('Единственная разрешённая повторная отправка уже использована или не подтверждена. Новая оплата не выполнена.','pending',purpose);
-    if(selectionRetry==='narrative'&&approval)throw new DocumentaryAnalysisError('У текущего запроса уже есть собственное разрешение повтора.','pending',purpose);
+    if((selectionRetry==='narrative'||selectionRetry==='grounded')&&approval)throw new DocumentaryAnalysisError('У текущего запроса уже есть собственное разрешение повтора.','pending',purpose);
     const oneShotRecovery=Boolean(selectionRetry||approval&&!approval.consumedAt)||resumingGateway||resumingMotionRefusal||words.routeComparison===1;
     const releaseAnalysis=await this.acquireAnalysisSlot();
     try {
@@ -1433,7 +1442,8 @@ export class DocumentaryIntelligence {
       await writing;
       // Preserve a received response even if its format is invalid: do not charge again to parse it.
       if(purpose==='semantic-montage'&&writeFailure)throw writeFailure;
-      await atomicWrite(path, JSON.stringify({ state: "received", purpose, ...previewMetadata, model, overviewSamplingVersion, raw,...(completionMetadata?{completion:completionMetadata}:{}) }));
+      await atomicWrite(path, JSON.stringify({ state: "received", purpose, ...previewMetadata, model, overviewSamplingVersion, raw,
+        ...(documentaryJsonFormatIssue(raw)?{formatIssue:documentaryJsonFormatIssue(raw)}:{}),...(completionMetadata?{completion:completionMetadata}:{}) }));
       received = true;
       let parsed:Record<string,unknown>;
       try{
@@ -2859,9 +2869,10 @@ export class DocumentaryIntelligence {
     const analysisModel=await this.client.documentaryAnalysisModel?.('fast');
     const fullScript=project.videoBrief?.readyScript??[...project.scenes].sort((a,b)=>a.order-b.order).map(item=>item.narration).join('\n');
     const fallbackNarrativeContext=documentaryFallbackNarrativeContext(project,scene);
+    const scriptGrounding=documentaryIllustrationScriptGrounding(doc.requirement.aiSearchPlan,fullScript);
     const taskKey=singleReviewTaskKey({visualTarget:plan.visualTarget,narration:scene.narration,sourcePolicy:plan.sourcePolicy,
       namedSubject:plan.namedSubject,requiredYears:plan.requiredYears??[],analysisModel,singleReviewVersion:5,
-      activeListItem:documentaryActiveListItem(scene),narrativeContext:documentarySceneContext(project,scene),fullScript,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
+      activeListItem:documentaryActiveListItem(scene),narrativeContext:documentarySceneContext(project,scene),fullScript,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{}),...(scriptGrounding?{scriptGrounding}:{})});
     const savedRevision=previousMetadataRevision(doc.visualReview?.localReview,revision);
     if(savedRevision)predecessors.push(savedRevision);
     for(const name of await readdir(analysisRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
@@ -2984,10 +2995,14 @@ export class DocumentaryIntelligence {
     // task. Readiness does not change that authored policy on cached resumes.
     const automaticReserve=Boolean(fallbackNarrativeContext);
     const reserveInstruction=' This is a validated automatic thematic reserve after primary discovery was exhausted. visualTarget is the complete CURRENT visual task. narration, narrativeContext and fullScript remain story context, not additional identity, era, event, action or detail requirements. Do not require the primary story\'s named person, ship, location or date solely because it occurs in that context. A different real subject of the category requested by visualTarget is allowed. Every named identity, date or era, historical appearance, location, action and physical detail explicitly requested by visualTarget remains mandatory; a generic reserve never waives its own constraints. Require the actual target and its requested action/detail to be visibly supported in the supplied frames; for video they must hold throughout the interval. An unrelated object, a missing action, or merely the same category without an explicitly required identity/detail is unsuitable. Do not infer an unseen action or detail from the story or source metadata. Describe accepted material as thematic illustration, not an archival recording of the narrated event; do not invent identity or capture dates.';
-    const qualitySystem=documentaryIllustrationQualityInstruction;
+    const qualitySystem=scriptGrounding?(fallbackNarrativeContext?documentaryGroundedFallbackIllustrationQualityInstruction:documentaryGroundedIllustrationQualityInstruction):documentaryIllustrationQualityInstruction;
     const legacyQualityInput=JSON.stringify({...JSON.parse(sourceInput),illustrationQualityVersion:1,...(analysisModel?{analysisModel}:{})});
     const {requiredSubject:_legacySubject,...targetInput}=JSON.parse(legacyQualityInput);
-    const qualityTask={...targetInput,singleReviewVersion:5};
+    const legacyQualityTask={...targetInput,singleReviewVersion:5};
+    const qualityTask={...legacyQualityTask,...(scriptGrounding?{scriptGrounding,sceneId:scene.id}:{})};
+    if(scriptGrounding)for(const legacyTask of [legacyQualityTask,...(fallbackNarrativeContext?[{...legacyQualityTask,fallbackNarrativeContext}]:[])])
+      previousRequests.push({system:documentaryIllustrationQualityInstruction,input:JSON.stringify(legacyTask)},...(oldRevision?[{
+        system:documentaryIllustrationQualityInstruction,input:JSON.stringify({...legacyTask,fileRevision:oldRevision})}]:[]));
     if(fallbackNarrativeContext)previousRequests.push({system:qualitySystem,input:JSON.stringify(qualityTask)},...(oldRevision?[{
       system:qualitySystem,input:JSON.stringify({...qualityTask,fileRevision:oldRevision})}]:[]));
     const qualityInput=JSON.stringify({...qualityTask,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
