@@ -93,13 +93,25 @@ export function documentaryExactQuery(input: DocumentarySearchInput): string {
 
 /** Only caller-supplied identity or one explicitly quoted subject may broaden
  * an empty native query. Never infer a person's name from unquoted words. */
-function commonsSubjectQuery(input:DocumentarySearchInput):string|undefined{
+type DocumentaryDiscoveryInput=DocumentarySearchInput&{visualConstraints?:string[]};
+function commonsSubjectQuery(input:DocumentaryDiscoveryInput):string|undefined{
   const entities=[...new Set((input.entities??[]).map(value=>value.trim()).filter(Boolean))];
   const quoted=[...input.query.replace(/[“”]/g,'"').matchAll(/"([^"]+)"/g)].map(match=>match[1]!.trim());
   const subject=entities.length===1?entities[0]:!entities.length&&quoted.length===1
     &&(input.query.replace(/[“”]/g,'"').match(/"/g)?.length??0)===2?quoted[0]:undefined;
-  return subject&&subject.length>=2&&subject.length<=100&&/\p{L}/u.test(subject)&&!/["\r\n]/.test(subject)
-    &&metadataHas(input.query,subject)?`"${subject}"`:undefined;
+  if(!subject||subject.length<2||subject.length>100||!/\p{L}/u.test(subject)||/["\r\n]/.test(subject)
+    ||!metadataHas(input.query,subject))return;
+  // A subject-only fallback loses the very feature that distinguishes suitable
+  // illustrations (e.g. sailcloth from bare rigging). Keep content terms from
+  // the script-grounded action/condition, not optional style or date hints.
+  // OR broadens retrieval only; every original requirement still goes to vision.
+  const boilerplate=new Set(['the','a','an','and','or','of','in','on','at','to','for','with','from','by','is','are','be','being',
+    'all','fully','full','set','spread','visible','show','shows','showing','shown','view','image','photograph','photo','footage',
+    'и','или','на','в','с','со','для','из','все','полностью','виден','видна','видны','изображение','фотография']);
+  const identityWords=new Set(subject.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)??[]);
+  const terms=[...new Set((input.visualConstraints??[]).join(' ').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)??[])]
+    .filter(word=>word.length>1&&!boilerplate.has(word)&&!identityWords.has(word)).slice(0,8);
+  return `"${subject}"`+(terms.length?` (${terms.join(' OR ')})`:'');
 }
 
 export function rankDocumentaryCandidates(candidates: DocumentaryCandidate[], input: DocumentarySearchInput): DocumentaryCandidate[] {
@@ -195,7 +207,7 @@ export class DocumentarySearch {
     return Math.max(30_000, waits.length ? Math.min(...waits) : 60_000);
   }
 
-  async search(input: DocumentarySearchInput, licensedOnly = false,signal?:AbortSignal,independentPublicSources=false): Promise<DocumentarySearchResult> {
+  async search(input: DocumentaryDiscoveryInput, licensedOnly = false,signal?:AbortSignal,independentPublicSources=false): Promise<DocumentarySearchResult> {
     signal?.throwIfAborted();
     if (!input || typeof input.query !== "string" || input.query.trim().length < 2 || input.query.length > 240) throw new Error("Введите запрос от 2 до 240 символов");
     if (input.kind !== "image" && input.kind !== "video") throw new Error("Некорректный тип медиа");

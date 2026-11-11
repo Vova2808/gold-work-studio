@@ -60,6 +60,35 @@ for(const explicit of ['entities','quoted'] as const)test(`empty full Commons qu
   assert.deepEqual(request,before);
 });
 
+test('empty verbose search retains script-grounded physical conditions instead of reducing to the name alone',async()=>{
+  const request={query:'Cutty Sark full sails set archival photograph',kind:'image' as const,providers:['commons' as const],
+    entities:['Cutty Sark'],visualConstraints:['all sails set, full spread of canvas visible']};
+  const before=structuredClone(request),queries:string[]=[];
+  const search=new DocumentarySearch(undefined,async url=>{
+    queries.push(new URL(String(url)).searchParams.get('gsrsearch')!);return Response.json(queries.length===1?empty:payload);
+  },undefined,undefined,undefined,{search:async()=>assert.fail('No third/web request after native success')});
+  const result=await search.search(request,true,undefined,true);
+  assert.deepEqual(queries,['"Cutty Sark" full sails set archival photograph','"Cutty Sark" (sails OR canvas)']);
+  assert.equal(result.candidates.length,1);assert.equal(result.candidates[0]!.match,'unverified');
+  assert.deepEqual(request,before,'Retrieval does not change the required visual task');
+});
+
+test('condition fallback is generic, escaped and isolated from subject-only cached results',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-commons-condition-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const queries:string[]=[];
+  const search=new DocumentarySearch(undefined,async url=>{
+    const q=new URL(String(url)).searchParams.get('gsrsearch')!;queries.push(q);
+    return Response.json(q.includes(' OR ')||q==='"Orion"'?payload:empty);
+  },root,undefined,undefined,{search:async()=>assert.fail('Native result available')});
+  const input={query:'Orion aircraft landing gear archival photograph',kind:'image' as const,providers:['commons' as const],entities:['Orion']};
+  await search.search(input,true,undefined,true);
+  await search.search({...input,visualConstraints:['landing gear extended visible']},true,undefined,true);
+  assert.deepEqual(queries,['"Orion" aircraft landing gear archival photograph','"Orion"',
+    '"Orion" aircraft landing gear archival photograph','"Orion" (landing OR gear OR extended)']);
+  await search.search({...input,visualConstraints:['landing gear extended visible']},true,undefined,true);
+  assert.equal(queries.length,4,'Completed focused discovery is reused');
+});
+
 for(const request of [input,{...input,entities:['Richard Woodget','Cutty Sark']},
   {...input,query:'"Richard Woodget" "Cutty Sark" portrait'}, {...input,query:'"Richard Woodget" captain "portrait'},
   {...input,entities:['Someone Else']},{...input,query:'"1869" ship portrait'}])

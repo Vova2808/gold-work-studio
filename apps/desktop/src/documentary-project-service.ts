@@ -2941,6 +2941,9 @@ export class DocumentaryProjectService {
               ?documentaryCommonsDiscoverySubjects(requirement,currentDocumentaryAiSearchPlan(project,scene),query):[];
             const result = await measureDocumentaryStage("search", { projectId, sceneId: scene.id, providers }, () => this.searcher.search({ query, kind, providers,
               entities:this.intelligence?.simpleSelection?discoveryEntities:searchSubjects,
+              ...(this.intelligence?.simpleSelection&&providers.includes('commons')?{visualConstraints:
+                currentDocumentaryAiSearchPlan(project,taskScene)?.grounding?.mandatory
+                  .filter(check=>check.kind==='condition'||check.kind==='action').map(check=>check.required)}:{}),
               years:this.intelligence?.simpleSelection?[]:requirement.years },true,signal,Boolean(this.intelligence?.simpleSelection)));
             if(kind==='video'&&providers.includes('web'))session.rememberVideos(requirement,result.candidates);
             for (const source of result.sources.filter(source => source.error)) {
