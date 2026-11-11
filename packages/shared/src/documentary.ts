@@ -160,10 +160,40 @@ export function documentaryAiPlanContext(project: Project) {
 }
 
 /** Text-model search plan. Thematic queries are never evidence of the exact event. */
+export interface DocumentaryAiPlanGrounding {
+  version: 1;
+  mandatory: Array<{ kind: 'identity' | 'era' | 'geography' | 'action' | 'condition'; required: string; scriptQuote: string; aliases?: string[] }>;
+  /** Honest ways to depict the subject, not proof of the narrated event. */
+  illustrations: string[];
+  optionalDetails: string[];
+}
+/** Local provenance validation; semantic necessity still requires reading the script. */
+export function documentaryAiPlanGroundingIssue(plan: DocumentaryAiSearchPlan | undefined, originalScript: string): string | undefined {
+  const grounding = plan?.grounding;
+  if (!grounding) return 'AI-план не отделяет обязательные факты сценария от допустимой иллюстрации; требуется обновление плана.';
+  if (grounding.version !== 1 || !Array.isArray(grounding.mandatory) || !grounding.mandatory.length
+    || !Array.isArray(grounding.illustrations) || !grounding.illustrations.length || !Array.isArray(grounding.optionalDetails)
+    || [...grounding.illustrations, ...grounding.optionalDetails].some(value => typeof value !== 'string' || !value.trim() || value.length > 500)
+    || grounding.mandatory.length > 20 || grounding.illustrations.length > 8 || grounding.optionalDetails.length > 12) return 'Неверный формат обоснования AI-плана.';
+  for (const check of grounding.mandatory) {
+    if (!check || !['identity','era','geography','action','condition'].includes(check.kind)
+      || typeof check.required !== 'string' || !check.required.trim() || check.required.length > 500
+      || typeof check.scriptQuote !== 'string' || !check.scriptQuote.trim() || !originalScript.includes(check.scriptQuote)
+      || (check.aliases !== undefined && (check.kind !== 'identity' || !Array.isArray(check.aliases)
+        || check.aliases.length > 8 || check.aliases.some(alias => typeof alias !== 'string' || !alias.trim() || alias.length > 300 || !originalScript.includes(alias)
+          || /^(?:(?:the|an?|sailing|clipper|steam|historic|historical|modern|preserved)\s+)*(?:ship|vessel|boat|person|man|woman|captain|owner|portrait|aircraft|plane|locomotive|train|canal|bridge|museum|he|she|it|they)$|^(?:корабль|судно|капитан|владелец|человек|портрет|самол[её]т|поезд|канал|мост|музей|он|она|оно|они)$/iu.test(alias.trim()))))) {
+      return 'Обязательное условие AI-плана не подтверждено точной цитатой исходного сценария.';
+    }
+  }
+  if (!grounding.mandatory.some(check => check.kind === 'identity')) return 'AI-план не обосновал идентичность основного объекта.';
+  if (plan!.years.length && !grounding.mandatory.some(check => check.kind === 'era')) return 'Обязательный период AI-плана не обоснован сценарием.';
+}
 export interface DocumentaryAiSearchPlan {
   version: 1;
   inputHash: string;
   model: string;
+  /** Absent on legacy plans; refresh unfinished scenes before automatic reuse. */
+  grounding?: DocumentaryAiPlanGrounding;
   visualTarget: string;
   subject: string;
   years: string[];

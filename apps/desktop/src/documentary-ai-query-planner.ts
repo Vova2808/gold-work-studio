@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DocumentaryQueryPlanIssue, DocumentaryAiSearchPlan, DocumentaryRequirement, Project, Scene } from '@gold-work/shared';
-import {documentaryAiPlanContext,DOCUMENTARY_QUERY_CONTRACT_VERSION,documentaryThematicReserveIssue} from '@gold-work/shared';
+import {documentaryAiPlanContext,DOCUMENTARY_QUERY_CONTRACT_VERSION,documentaryThematicReserveIssue,documentaryAiPlanGroundingIssue} from '@gold-work/shared';
 import {AnyModelCompletionUncertainError,type AnyModelClient} from './anymodel-client.js';
 import {parseDocumentaryJson} from './documentary-json.js';
 import { ProxyConnectError } from './proxy-utils.js';
@@ -10,7 +10,7 @@ import {documentaryBoundFallbackNarrativeFit,documentaryFallbackNarrativeRevisio
 
 const VERSION = 1 as const;
 // The request revision records instructions without changing the project context or paid cache key.
-const PROMPT_REVISION = 10 as const;
+const PROMPT_REVISION = 11 as const;
 const BATCH_SIZE = 8;
 const MAX_ATTEMPTS = 2;
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -360,6 +360,8 @@ function completedRawFallbackPlans(cache: FallbackCache, context: ReturnType<typ
 const SYSTEM = `Plan stock documentary searches. Never edit narration. Read the entire originalScript and contextScenes as source data, resolve pronouns to the same physical subjects, and return one entry for each requested sceneId only.
 Return ONLY {"scenes":[{"sceneId":"unchanged id","subject":"canonical physical subject","visualTarget":"minimum sufficient visible subject or detail","years":[],"visualScope":"illustrative","preferredKind":"video","reservePolicy":"thematic|primary-only","imageQueries":["precise subject search"],"videoQueries":["precise subject search"],"fallbackVisualTarget":"honest related visible topic","fallbackVideoQueries":["short thematic search"]}]}.
 Separate the subject, narrated history and required pixels. subject names the physical person, object, place or component; do not put an event description, action, date or assessment into its identity.
+Every entry MUST also contain grounding:{"version":1,"mandatory":[{"kind":"identity|era|geography|action|condition","required":"the necessary visible fact","scriptQuote":"exact unchanged source quote","aliases":[]}],"illustrations":["permitted representation"],"optionalDetails":["nonessential narrated or visual detail"]}. Include at least one identity check resolving the same real subject through the full original script. Each mandatory identity, era, geography, action or condition needs an exact supporting source quote. aliases are optional identity names explicitly present in the original script, never similar subjects or vocabulary from candidates. The quote establishes provenance; separately decide whether its fact really MUST be visible. All mandatory facts must agree with visualTarget and years. Do not put narrative chronology into mandatory pixels merely because it has a source quote.
+A change of occupation, an end of trade, or a past voyage does not require loading, cargo handling or any characteristic action. Such narration ordinarily permits an authentic archival photograph, historical drawing, portrait or general view of the SAME real subject, including a preserved modern view unless a visible historical condition is essential. Keep those representations as alternatives in illustrations and queries; another named object or person cannot replace the subject. Put optional cargo, staging, viewpoint, date and activity in optionalDetails instead of making them mandatory. Require a specific historical event photo only for a literal visual request that actually needs it.
 Before minimizing, identify the shot's main point: the subject, a necessary visible state, or a relation between subjects. A type or role does not require the subject to be performing its characteristic activity. Require a visible state only when explicitly requested or necessary to demonstrate the point, not merely implied by a noun.
 visualPolicy.mode controls the default: subject-illustration (also thematic) permits an honest illustration of the same subject; literal requires the specifically narrated event, state and period. In subject-illustration, a historical event statement is NOT a request for a recording or reconstruction of that event. visualTarget should name the subject and only the visible detail needed to communicate this shot. A reference to an arrival or opening does not by itself require pixels of that dated arrival or an inauguration ceremony.
 ${VISUAL_EVIDENCE}
@@ -448,6 +450,7 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
     || (value.fallbackVisualTarget === '' ? fallbackVideoQueries.length > 0 : !shortText(value.fallbackVisualTarget, 500))) return;
   return {
     version: VERSION, inputHash, model, visualTarget: value.visualTarget.trim(), subject: value.subject.trim(),
+    ...(record(value.grounding) ? {grounding: structuredClone(value.grounding) as unknown as DocumentaryAiSearchPlan['grounding']} : {}),
     // Models also use unambiguous decade notation; keep its full interval rather than buying a repair.
     years: [...new Set((value.years as string[]).map(year => /^\d{3}0s$/.test(year)
       ? `${year.slice(0, 4)}-${Number(year.slice(0, 4)) + 9}` : year))], visualScope: value.visualScope, preferredKind: value.preferredKind,
@@ -458,9 +461,11 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
 }
 
 function requirement(scene: Scene, plan: DocumentaryAiSearchPlan): DocumentaryRequirement {
+  const identities = plan.grounding?.mandatory.filter(check => check.kind === 'identity')
+    .map(check => ({name:check.required,aliases:[...(check.aliases ?? [])]}));
   return {
     ...scene.documentary?.requirement,
-    text: scene.narration, entities: [plan.subject], identities: [{ name: plan.subject, aliases: [] }],
+    text: scene.narration, entities: identities?.map(item => item.name) ?? [plan.subject], identities: identities ?? [{ name: plan.subject, aliases: [] }],
     years: [...plan.years], detail: plan.visualTarget, preferredKind: plan.preferredKind,
     visualScope: plan.visualScope, plannedBy: 'semantic',
     queries: [...new Set(plan.preferredKind === 'video'
@@ -520,6 +525,8 @@ function completedRawPlans(cache: unknown, inputHash: string, model: string,
           || counts.get(scene.sceneId) !== 1 || plans.has(scene.sceneId)) continue;
         if ((mode === 'refresh') !== Boolean(Array.isArray(refreshIds) && refreshIds.includes(scene.sceneId))) continue;
         const plan = validate(scene, hash({ inputHash, sceneId: scene.sceneId }), model);
+        if (plan && (plan.grounding || typeof revision === 'number' && revision >= PROMPT_REVISION)
+          && documentaryAiPlanGroundingIssue(plan, String(input.originalScript ?? ''))) continue;
         if (plan) plans.set(scene.sceneId, plan);
       }
     } catch { /* Invalid or incomplete raw data is never a substitute for a valid plan. */ }
@@ -548,7 +555,8 @@ export class DocumentaryAiQueryPlanner {
     validateSceneIds(scenes);
     const model = (await this.client.documentaryQueryModel()).trim();
     if (!model) throw new Error('Для планирования запросов выберите текстовую модель AnyModel.');
-    const inputHash = hash({ version: VERSION, model, context: planningContext(project, scenes) });
+    const context = planningContext(project, scenes);
+    const inputHash = hash({ version: VERSION, model, context });
     const file = path.join(path.resolve(this.rootFor(project.id)), 'documentary-ai-query-plans', `${inputHash}.json`);
     let plans: Record<string, unknown> = Object.create(null);
     let savedCache: unknown;
@@ -574,7 +582,7 @@ export class DocumentaryAiQueryPlanner {
         rawPlans ??= completedRawPlans(savedCache, inputHash, model);
         plan = rawPlans.get(scene.id);
       }
-      if (plan) result.set(scene.id, requirement(scene, plan));
+      if (plan && (!plan.grounding || !documentaryAiPlanGroundingIssue(plan, context.originalScript))) result.set(scene.id, requirement(scene, plan));
     }
     return this.overlayFallbacks(project, scenes, result);
   }
@@ -708,7 +716,13 @@ export class DocumentaryAiQueryPlanner {
       ...(sources ? { purpose, sources } : {}),
     };
     const acceptPlan = (value: unknown, id: string, cached = false): DocumentaryAiSearchPlan | undefined => {
-      if (!fallbackOnly) return cached ? cachedPlan(value, sceneHash(id), model) : validate(value, sceneHash(id), model);
+      if (!fallbackOnly) {
+        const plan = cached ? cachedPlan(value, sceneHash(id), model) : validate(value, sceneHash(id), model);
+        // Legacy cached plans retain their receipts and need an explicit guarded refresh.
+        // Newly purchased output cannot bypass source grounding, including streamed entries.
+        if (plan && (!cached || plan.grounding) && documentaryAiPlanGroundingIssue(plan, context.originalScript)) return;
+        return plan;
+      }
       const source = cache.sources?.[id];
       if (!source || (cached && (!record(value) || hash(primaryOnly(value as unknown as DocumentaryAiSearchPlan)) !== hash(primaryOnly(source))))) return;
       return validateFallback(value, source, `${context.originalScript}\n${scenes.find(scene => scene.id === id)?.narration ?? ''}`, topicOnly);

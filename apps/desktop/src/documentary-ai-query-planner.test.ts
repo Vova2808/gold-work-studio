@@ -10,8 +10,12 @@ import { DocumentaryAiQueryPlanner } from './documentary-ai-query-planner.js';
 import { ProxyConnectError } from './proxy-utils.js';
 import {createHash} from 'node:crypto';
 import {documentaryAiPlanContext,currentDocumentaryAiSearchPlan} from './documentary-ai-plan-state.js';
+import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
 
 const MODEL = 'fixture/text-model';
+// Pipeline fixtures use synthetic provenance; semantic source grounding is
+// exercised separately below with unchanged, real multi-theme narration.
+const fixtureQuote = 'The fixture subject and its visible period are explicitly requested.';
 type Payload = { originalScript: string; contextScenes: Array<{ sceneId: string; narration: string }>;
   requestedScenes: Array<{ sceneId: string; narration: string }>;visualPolicy:{mode:string} };
 type Call = { system: string; data: Payload; model: string | undefined; images: string[] };
@@ -19,13 +23,94 @@ const scenesOf = (...narrations: string[]): Scene[] => narrations.map((narration
   ({ id: `scene-${order}`, order, narration, title: `Scene ${order}` } as Scene));
 const projectOf = (scenes: Scene[], script = scenes.map(scene => scene.narration).join('\n')): Project =>
   ({ id: 'fixture-project', title: 'Fixture', topic: 'History', language: 'ru', scenes,
-    videoBrief: { readyScript: script } } as Project);
+    videoBrief: { readyScript: script+'\n'+fixtureQuote } } as Project);
 const entry = (id: string, extra = {}) => ({ sceneId: id, subject: 'RMS Titanic',
+  grounding:{version:1,mandatory:[{kind:'identity',required:'RMS Titanic',scriptQuote:fixtureQuote},
+    {kind:'era',required:'1912',scriptQuote:fixtureQuote}],illustrations:['authentic photograph or drawing of the same subject'],optionalDetails:[]},
   visualTarget: 'RMS Titanic propellers 1912', years: ['1912'], visualScope: 'exact', preferredKind: 'video',reservePolicy:'thematic',
   imageQueries: ['RMS Titanic propellers 1912'], videoQueries: ['RMS Titanic 1912 footage'],
   fallbackVisualTarget: 'Early twentieth century ocean liner propellers',
   fallbackVideoQueries: ['ocean liner propellers archival footage'], ...extra });
 const response = (ids: string[]) => JSON.stringify({ scenes: ids.map(id => entry(id)) });
+
+const groundedEntry=(id:string,subject:string,quote:string,extra={})=>entry(id,{subject,visualTarget:subject,years:[],
+  visualScope:'illustrative',preferredKind:'image',imageQueries:[subject+' historical portrait drawing photograph'],videoQueries:[subject+' preserved view'],
+  grounding:{version:1,mandatory:[{kind:'identity',required:subject,scriptQuote:quote}],
+    illustrations:['archival photograph or drawing of '+subject,'present-day view of the same surviving subject'],
+    optionalDetails:['Narrated historical activity need not be occurring in the illustration.']},...extra});
+
+test('source-grounded plans keep history separate from visible requirements across ships, biography, engineering and places',async t=>{
+  const cases=[
+    {subject:'Cutty Sark',quote:'After eight tea voyages, Cutty Sark left the trade for which she had been built.'},
+    {subject:'Richard Woodget',quote:'In 1885, Richard Woodget became captain.'},
+    {subject:'Marie Curie',quote:'Marie Curie later left her teaching position to focus on research.'},
+    {subject:'Suez Canal',quote:'The Suez Canal changed the journey between the Mediterranean and the Red Sea.'},
+    {subject:'Power Jets W.1',quote:'The Power Jets W.1 demonstrated a new propulsion concept in 1941.'},
+  ];
+  const scenes=scenesOf(...cases.map(item=>item.quote));scenes[0]!.audioPath='retained-original-audio.mp3';
+  const project=projectOf(scenes);project.videoBrief!.readyScript=cases.map(item=>item.quote).join('\n');
+  const before=structuredClone(project);
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map((scene,index)=>
+    groundedEntry(scene.sceneId,cases[index]!.subject,cases[index]!.quote))}));
+  const plans=await f.planner().plan(project,scenes);
+  assert.equal(plans.size,cases.length);assert.deepEqual(project,before);
+  for(const [index,scene] of scenes.entries()){
+    const result=plans.get(scene.id)!,plan=result.aiSearchPlan!;
+    assert.equal(documentaryAiPlanGroundingIssue(plan,project.videoBrief!.readyScript!),undefined);
+    assert.deepEqual(plan.years,[]);assert.deepEqual(plan.grounding!.mandatory.map(check=>check.kind),['identity']);
+    assert.equal(result.identities![0]!.name,cases[index]!.subject);
+  }
+  assert.match(f.calls[0]!.system,/end of trade.*does not require loading/);
+  assert.match(f.calls[0]!.system,/another named object or person cannot replace the subject/);
+  assert.match(f.calls[0]!.system,/quote establishes provenance; separately decide/);
+});
+
+test('current paid output with invented quotes, invented aliases, missing grounding or unsupported mandatory era stops within the existing repair budget',async t=>{
+  for(const variant of ['quote','alias','generic-alias','missing','era'] as const){
+    const quote='Marie Curie left teaching to continue research on a ship.';
+    const row=groundedEntry('scene-0','Marie Curie',quote) as ReturnType<typeof entry>;
+    if(variant==='quote')row.grounding.mandatory[0]!.scriptQuote='She must be shown teaching at a blackboard.';
+    if(variant==='alias')Object.assign(row.grounding.mandatory[0]!,{aliases:['Mary Someone Else']});
+    if(variant==='generic-alias')Object.assign(row.grounding.mandatory[0]!,{aliases:['ship']});
+    if(variant==='missing')delete (row as {grounding?:unknown}).grounding;
+    if(variant==='era')row.years=['1903'];
+    const scenes=scenesOf(quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+    const f=await fixture(t,async()=>JSON.stringify({scenes:[row]}));
+    await assert.rejects(f.planner().plan(project,scenes),/исчерпаны/);
+    assert.equal(f.calls.length,2,variant);
+    assert.equal((await f.planner().readCached(project,scenes)).size,0);
+    await assert.rejects(f.planner().plan(project,scenes),/исчерпаны/);
+    assert.equal(f.calls.length,2,variant+' cannot reset its paid budget on restart');
+  }
+});
+
+test('legacy overstrict plan is explicitly refreshed in the same paid cache while pending scenes retain their protection',async t=>{
+  const quote='After eight tea voyages, Cutty Sark left the trade for which she had been built.';
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'Cutty Sark',quote))}));
+  const scenes=scenesOf(quote,quote),project=projectOf(scenes);project.videoBrief!.readyScript=quote;
+  const initial=await f.planner().plan(project,scenes);
+  for(const scene of scenes)scene.documentary={requirement:initial.get(scene.id)!,verified:false} as Scene['documentary'];
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const cache=JSON.parse(await readFile(file,'utf8'));
+  cache.attempts[0].request.promptRevision=10;
+  const raw=JSON.parse(cache.attempts[0].rawResponse);
+  for(const row of raw.scenes){delete row.grounding;row.visualTarget='Cutty Sark tea cargo being loaded';}
+  cache.attempts[0].rawResponse=JSON.stringify(raw);
+  for(const scene of scenes){delete cache.plans[scene.id].grounding;cache.plans[scene.id].visualTarget='Cutty Sark tea cargo being loaded';
+    scene.documentary!.requirement.aiSearchPlan=structuredClone(cache.plans[scene.id]);}
+  cache.attempts.push({ids:[scenes[1]!.id],status:'uncertain',responseState:'partial'});
+  await writeFile(file,JSON.stringify(cache));
+  const before=structuredClone(project);
+  assert.match(documentaryAiPlanGroundingIssue(scenes[0]!.documentary!.requirement.aiSearchPlan,quote)!,/обновление/);
+  const refreshed=await f.planner().plan(project,scenes,{refreshSceneIds:new Set(scenes.map(scene=>scene.id))});
+  assert.deepEqual(project,before);assert.equal(f.calls.length,2);
+  assert.deepEqual(f.calls[1]!.data.requestedScenes.map(scene=>scene.sceneId),[scenes[0]!.id]);
+  assert.equal(refreshed.get(scenes[0]!.id)!.aiSearchPlan!.visualTarget,'Cutty Sark');
+  assert.equal(refreshed.get(scenes[1]!.id)!.aiSearchPlan!.grounding,undefined);
+  const after=JSON.parse(await readFile(file,'utf8'));
+  assert.deepEqual(after.attempts.slice(0,2),cache.attempts);assert.deepEqual(after.plans,cache.plans);
+  assert.equal((await f.cacheFiles()).length,1,'Grounding refresh keeps the original receipt address');
+});
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void },
   handler: (call: Call, partial?: (text: string) => void) => Promise<string> = async call =>
@@ -630,7 +715,7 @@ test('prompt revision 5 separates narrated history from required pixels and pres
   const file = path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!);
   const cache = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(cache.version, 1, 'Prompt change does not silently invalidate already paid v1 receipts');
-  assert.equal(cache.attempts[0].request.promptRevision, 10);
+  assert.equal(cache.attempts[0].request.promptRevision, 11);
   assert.equal(cache.attempts[0].request.system, prompt);
 });
 
@@ -807,7 +892,7 @@ test('comparison plans preserve actual short04 context and remain usable as imag
   entry('scene-3',{subject:'Earth and Jupiter',visualTarget:'Side-by-side size comparison diagram of Earth and Jupiter at the same scale',
    years:[],visualScope:'illustrative',preferredKind:'image',reservePolicy:'primary-only',imageQueries:['Earth Jupiter size comparison diagram same scale'],videoQueries:[],fallbackVisualTarget:'',fallbackVideoQueries:[]})];
  const f=await fixture(t,async call=>{
-  assert.equal(call.data.originalScript,script);assert.deepEqual(call.data.requestedScenes,scenes.map(s=>({sceneId:s.id,narration:s.narration})));
+  assert.equal(call.data.originalScript,script+'\n'+fixtureQuote);assert.deepEqual(call.data.requestedScenes,scenes.map(s=>({sceneId:s.id,narration:s.narration})));
   return JSON.stringify({scenes:rows});
  });
  const project=projectOf(scenes,script),before=structuredClone(project),plans=await f.planner().plan(project,scenes);
