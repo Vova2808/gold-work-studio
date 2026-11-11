@@ -85,7 +85,10 @@ function fixture(topic: typeof topics[number]): Project {
 function answer(topic: typeof topics[number], sceneId: string) {
   return {sceneId, subject: topic.subject, visualTarget: topic.target, years: [...topic.years],
     visualScope: 'exact', preferredKind: 'video', reservePolicy: 'thematic', imageQueries: [...topic.images], videoQueries: [...topic.videos],
-    fallbackVideoQueries: [...topic.fallback], fallbackVisualTarget: topic.fallbackTarget};
+    fallbackVideoQueries: [...topic.fallback], fallbackVisualTarget: topic.fallbackTarget,
+    grounding:{version:1,mandatory:[{kind:'identity',required:topic.subject,scriptQuote:topic.narration.join('')},
+      ...topic.years.map(year=>({kind:'era',required:year,scriptQuote:topic.narration.join('')}))],
+      illustrations:[topic.target],optionalDetails:[]}};
 }
 
 async function temporary(t: {after(fn: () => Promise<void>): void}) {
@@ -260,7 +263,8 @@ test('AI query acceptance: resume preserves ready legacy scenes without AI metad
     scene.documentary!.verified = true;
     scene.documentary!.pinned = false;
     scene.audioPath = `paid-${scene.id}.mp3`;
-    scene.videoPath = `accepted-${scene.id}.mp4`;
+    scene.videoPath = join(root,`accepted-${scene.id}.mp4`);
+    await writeFile(scene.videoPath,'existing accepted fixture bytes');
     scene.documentary!.caption.text = `Existing caption ${scene.id}`;
     scene.documentary!.selected = {id: scene.id, kind: 'video', provider: 'local', title: 'Motorcycle rider cornering',
       description: 'Motorcycle rider leans through a curve', rights: 'user-confirmed'} as any;
@@ -280,7 +284,8 @@ test('AI query acceptance: resume preserves ready legacy scenes without AI metad
     documentaryCompletion: async (_system: string, text: string) => {
       const ids = JSON.parse(text).requestedScenes.map((scene: {sceneId: string}) => scene.sceneId);
       batches.push(ids);
-      return JSON.stringify({scenes: ids.map((id: string) => answer(topics[1], id))});
+      return JSON.stringify({scenes: ids.map((id: string) => answer({...topics[1],subject:'Motorcycle rider',
+        target:'Motorcycle rider leaning through a curve',years:[],narration:[source.videoBrief!.readyScript!]}, id))});
     },
   } as unknown as AnyModelClient;
   const service = new DocumentaryProjectService(projects, new LocalProjectStorage(join(root, 'Projects')), new DocumentarySearch(),
