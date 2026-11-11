@@ -2,6 +2,8 @@
 
 ## Current user task (2026-11-09)
 
+Latest explicit user instruction (2026-11-11) supersedes the former execution ban below: implement universal historical/biographical search-plan grounding and early candidate disambiguation; fix bounded downloads, incomplete visual JSON and route quotation evidence. Codex now MUST run appropriate builds, targeted tests, local checks and bounded live checks on saved problem scenes before integrated production continuation. Preserve existing paid receipts/uncertain-submission guards, accepted media, narration, queue and projects; do not resubmit completed Lumean orders. Coordinator owns TASK/STATUS and live-production orchestration. Workers may run their scoped local tests; coordinate live paid operations first to avoid concurrent duplicate work. Work in separate trees; never change the handed candidate or profile unintentionally.
+
 Read `TASK.md` and `STATUS.md` at the start of work and after context recovery. For this local migration, the coordinator's canonical live copies are `E:\GoldWorkStudio\TASK.md` and `E:\GoldWorkStudio\STATUS.md` when present; repository copies record the handoff snapshot. The current user instruction in TASK.md overrides all older execution/testing guidance below: Codex and every agent must not run tests, checks, lint/typecheck, builds/packages, the app/dev/preview, provider probes, generation/search/render/export, or benchmarks, and must not create new tests. Use file operations, Git and static source/diff review only; the user builds, runs and accepts each version. The coordinator alone updates TASK.md/STATUS.md. Do not change a source/profile candidate while the user is checking it.
 
 ## Scope and source of truth
