@@ -15,8 +15,9 @@ import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import {effectFfmpeg} from './effect-media.js';
+import {claimDocumentaryThematicRecovery,documentaryAutomaticThematicIssue,documentaryThematicDiscoveryRequirement} from './documentary-automatic-thematic-recovery.js';
 
-for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','mixed-photo-rejected','100-percent','force','pending-photo','manual-photo'] as const)
+for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','mixed-photo-rejected','automatic-reserve','automatic-reserve-rejected','automatic-reserve-pending','manual-reserve','100-percent','force','pending-photo','manual-photo'] as const)
 test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-photo-resume-order-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live requests in this fixture'));
@@ -46,6 +47,13 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
   author:'Fixture',license:'public domain',licenseUrl:'',rights:'public-domain',attribution:'Fixture',query:'Aurora red sails',retrievedAt:'now',match:'unverified',concerns:[]});
  doc.candidates=['mixed-shortlist','mixed-photo-rejected'].includes(mode)?[candidate('image'),candidate('video')]:[candidate('image')];
  if(mode!=='no-error')doc.autoError='Previous image lane did not find visible sailcloth.';
+ const automaticReserve=mode.startsWith('automatic-reserve');
+ if(automaticReserve||mode==='manual-reserve'){
+  doc.requirement.aiSearchPlan!.fallbackVisualTarget='Aurora red sails at sea';
+  doc.requirement.aiSearchPlan!.fallbackVideoQueries=['Aurora red sails at sea'];
+  if(mode==='manual-reserve')doc.requirement.footageFallback={version:1,target:'Aurora red sails at sea',queries:['Aurora red sails at sea'],kind:'video',
+   originalTarget:'Aurora red sails',narration,reason:'Earlier bounded primary search was exhausted'};
+ }
  if(mode==='manual-photo'){
   scene.imagePath=photo;doc.selected={...candidate('image'),id:'manual:preserved-photo',rights:'user-confirmed'};
   doc.verified=true;doc.pinned=true;doc.reviewNote='User selected this photo';
@@ -53,24 +61,46 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
  project=await projects.mutate(project.id,()=>project);
  const beforeManual=structuredClone(project.scenes[0]!);
  const searches:Array<'image'|'video'>=[],reviews:Array<'image'|'video'>=[];
- const search=new DocumentarySearch();search.search=async input=>{searches.push(input.kind);return {candidates:[candidate(input.kind)],sources:[]};};
+ const search=new DocumentarySearch();search.search=async input=>{
+  searches.push(input.kind);
+  return {candidates:automaticReserve&&input.kind==='image'?[]:[candidate(input.kind)],sources:[]};
+ };
  const service=new DocumentaryProjectService(projects,new LocalProjectStorage(join(root,'projects')),search,join(root,'Materials'),
   {download:async()=>assert.fail('A local prepared candidate must not download again')},()=>{},
-  {simpleSelection:true,available:async()=>true,plan:async()=>new Map([[scene.id,doc.requirement]]),inspect:async()=>assert.fail('Use selection review'),
+  {simpleSelection:true,available:async()=>true,plan:async current=>new Map([[scene.id,current.scenes[0]!.documentary!.requirement]]),inspect:async()=>assert.fail('Use selection review'),
    inspectForSelection:async(current,selected,_progress,_stop,cacheOnly)=>{
     if(cacheOnly)throw new DocumentaryCachedAnalysisMissing();
     const kind=selected.documentary!.selected!.kind;reviews.push(kind);
-    if(kind==='image'&&mode==='pending-photo')throw new DocumentaryAnalysisError('Unknown paid image response','pending');
+    if(kind==='image'&&automaticReserve){
+     assert.equal(selected.documentary!.requirement.footageFallback,undefined,'Primary photos are checked against the primary task, not the video reserve');
+     assert.equal(selected.documentary!.requirement.aiSearchPlan!.visualTarget,'Aurora red sails');
+     assert.deepEqual(selected.documentary!.requirement.identities,[{name:'Aurora',aliases:[]}]);
+     assert.deepEqual(selected.documentary!.requirement.aiSearchPlan!.grounding!.mandatory,doc.requirement.aiSearchPlan!.grounding!.mandatory);
+    }
+    if(kind==='image'&&['pending-photo','automatic-reserve-pending'].includes(mode))throw new DocumentaryAnalysisError('Unknown paid image response','pending');
     // Semantic outcomes are mocked. The local patterns exercise transport,
     // preparation and persistence only; they are not photographs of a vessel.
-    const accepted=kind==='image'&&!['photo-rejected','mixed-photo-rejected'].includes(mode);
+    const accepted=kind==='image'&&!['photo-rejected','mixed-photo-rejected','automatic-reserve-rejected'].includes(mode);
     const review={status:accepted?'accepted' as const:'rejected' as const,confidence:1,reason:accepted?'Mock matching sailcloth':'Mock missing sailcloth',
      viewDescription:'Mock frame description',quality:'',sampleSeconds:kind==='video'?[0,2,3.8]:[0],checkedAt:'now',footageOrigin:'camera' as const,
      fastRelevance:{version:1 as const,target:'Aurora red sails',relevant:accepted,evidence:'Mock visual verdict'}};
     return {usedNewAnalysis:true,review:{...review,...(accepted?{illustrationApproval:documentaryIllustrationApproval(current,
      {...selected,documentary:{...selected.documentary!,visualReview:review}})}:{})}};
-   }});
+   }},undefined,undefined,automaticReserve||mode==='manual-reserve'?{
+    // The application supplies a current AI query planner. A fixture without
+    // it enters legacy local planning, which rewrites requirement
+    // fields and invalidates the automatic reserve's authored-input binding.
+    plan:async(_current,scenes)=>new Map(scenes.map(source=>[source.id,source.documentary!.requirement])),
+   }:undefined);
  Reflect.set(service,'selectionResources',async()=>({workers:1}));service.localCandidates=async()=>[];
+ if(automaticReserve){
+  await service.planSearch(project.id,[scene.id]);
+  project=(await projects.get(project.id))!;
+  assert.equal(documentaryAutomaticThematicIssue(project,project.scenes[0]!),undefined);
+  const resumed=claimDocumentaryThematicRecovery(project,project.scenes[0]!);
+  project=await projects.mutate(project.id,()=>({scenes:[resumed]}));
+  assert.ok(documentaryThematicDiscoveryRequirement(project,project.scenes[0]!),'The saved automatic fallback must be active before resume');
+ }
  const result=await service.autoSelect(project.id,{sceneIds:[scene.id],...(mode==='force'?{force:true}:{})});
  const saved=result.project.scenes[0]!;
  assert.equal(saved.audioPath,'preserved-paid-voice.wav');
@@ -81,15 +111,15 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
   assert.deepEqual(reviews,[]);assert.deepEqual(searches,[]);
   assert.equal(saved.imagePath,beforeManual.imagePath);assert.equal(saved.documentary!.pinned,true);
   assert.deepEqual(saved.documentary!.selected,beforeManual.documentary!.selected);assert.equal(saved.documentary!.reviewNote,'User selected this photo');
- }else if(mode==='pending-photo'){
+ }else if(['pending-photo','automatic-reserve-pending'].includes(mode)){
   assert.equal(reviews[0],'image');assert.equal(reviews.filter(kind=>kind==='image').length,1);assert.equal(saved.documentary!.verified,false);
   await service.autoSelect(project.id,{sceneIds:[scene.id]});
   assert.equal(reviews.filter(kind=>kind==='image').length,1,'A second resume cannot submit the pending photo again');
  }else{
-  const expected=['resume','mixed-shortlist'].includes(mode)?['image']:['photo-rejected','mixed-photo-rejected'].includes(mode)?['image','video']:mode==='100-percent'?['video']:['video','image'];
+  const expected=['resume','mixed-shortlist','automatic-reserve'].includes(mode)?['image']:['photo-rejected','mixed-photo-rejected','automatic-reserve-rejected'].includes(mode)?['image','video']:['100-percent','manual-reserve'].includes(mode)?['video']:['video','image'];
   assert.deepEqual(reviews,expected,JSON.stringify({searches,failures:result.failures}));
-  if(['resume','mixed-shortlist'].includes(mode))assert.ok(searches.every(kind=>kind==='image'),'No video discovery before successful resumed photo');
-  assert.equal(saved.documentary!.verified,!['photo-rejected','mixed-photo-rejected','100-percent'].includes(mode));
+  if(['resume','mixed-shortlist','automatic-reserve'].includes(mode))assert.ok(searches.every(kind=>kind==='image'),'No video discovery before successful resumed photo');
+  assert.equal(saved.documentary!.verified,!['photo-rejected','mixed-photo-rejected','automatic-reserve-rejected','100-percent','manual-reserve'].includes(mode));
   if(saved.documentary!.verified)assert.equal(documentarySavedContextIssue(result.project,saved),undefined);
  }
 });

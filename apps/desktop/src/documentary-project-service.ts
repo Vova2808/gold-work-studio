@@ -2740,12 +2740,15 @@ export class DocumentaryProjectService {
           requirement:{...source.documentary!.requirement,footageFallback:undefined},searchRecovery:undefined}});
         const simpleStages=[stockStage(simpleKind),...(primaryPhotoFallback&&(!currentDocumentaryFootageFallback(scene)||primaryPhotoAfterReserve)?[stockStage('image')]:[])];
         const savedPhotoPool=savedCandidatePools.get(scene.id);
+        const activeResumeFallback=currentDocumentaryFootageFallback(scene);
         // A failed image-preferred task with saved photos already has a primary
         // photo lane. Resume it even if old videos remain in the shortlist, while
-        // retaining the original slot and the separate final video quota.
+        // retaining the original slot and the separate final video quota. A
+        // still-bound automatic reserve can resume this same primary lane;
+        // a manual reserve or changed authored input cannot opt into it.
         const resumePrimaryPhotos=Boolean(this.intelligence?.simpleSelection&&!options.force&&!videoOnly&&!previousReady
           &&project.settings.stockVideoPercent<100&&!pendingVideoReview&&!scene.documentary?.pinned&&!scene.documentary?.manualReview
-          &&scene.documentary?.autoError&&!currentDocumentaryFootageFallback(scene)
+          &&scene.documentary?.autoError&&(!activeResumeFallback||primaryPhotoAfterReserve&&activeResumeFallback.automaticRecovery)
           &&currentDocumentaryAiSearchPlan(project,scene)?.preferredKind==='image'
           &&savedPhotoPool?.binding===this.selectionResumeBinding(project,scene)&&savedPhotoPool.candidates.length
           &&savedPhotoPool.candidates.some(candidate=>candidate.kind==='image'));
@@ -2908,7 +2911,11 @@ export class DocumentaryProjectService {
           const requirement=reservePhoto?taskScene.documentary!.requirement:discoveryRequirement;
           const resumeBinding=this.selectionResumeBinding(project,taskScene);
           const savedPool=savedCandidatePools.get(scene.id);
-          const previousCandidates=savedPool?.binding===resumeBinding?savedPool.candidates:[];
+          // Removing only a still-bound automatic reserve changes the staging
+          // hash, not the saved source files. Carry its candidates as untrusted
+          // discovery hints; primary metadata/pixel and pending checks remain.
+          const previousCandidates=savedPool&&(savedPool.binding===resumeBinding
+            ||reservePhoto&&savedPool.binding===this.selectionResumeBinding(project,scene))?savedPool.candidates:[];
           const sameDiscoverySource=(candidate:DocumentaryCandidate,source:DocumentaryCandidate)=>candidate.id===source.id
             &&candidate.provider===source.provider&&candidate.kind===source.kind&&candidate.downloadUrl===source.downloadUrl;
           const savedSources=preparedSources.filter(source=>source.kind===kind
