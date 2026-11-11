@@ -7,6 +7,7 @@ import {join,resolve,sep} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
 import {createVoiceCalibration,type DocumentaryMotionGraphic,type Project,type Scene} from '@gold-work/shared';
 import {buildDocumentaryTimeline} from '../../../packages/remotion-video/src/documentary-timeline.js';
+import {documentaryRouteBounds,documentaryRouteKey} from '../../../packages/remotion-video/src/documentary-route.js';
 import {prepareDocumentaryScript} from './documentary-plan.js';
 import {planFastDocumentaryScene} from './documentary-fast-plan.js';
 import {DocumentaryProjectService} from './documentary-project-service.js';
@@ -121,6 +122,23 @@ test('resume keeps an automatic route blocked when the accepted media proof is s
   assert.equal(scene.documentary!.checksum,f.scene.documentary!.checksum);
   assert.deepEqual(scene.documentary!.effects,f.scene.documentary!.effects);
   assert.ok(missingAssemblyInputs(result.project).length);
+});
+
+test('accepted footage retains an ordinary automatic inset route without a comparison',async t=>{
+  const f=await fixture(t),review=await approvedReview(f.project,f.scene);
+  const route=[{name:'Suez',latitude:29.97,longitude:32.55},{name:'Port Said',latitude:31.26,longitude:32.3}];
+  const graphic:DocumentaryMotionGraphic={enabled:true,origin:'automatic',kind:'map-route',mapStyle:'inset',title:'Suez Canal',
+    startSeconds:0,durationSeconds:4,route,fromPlace:route[0]!,place:route[1]!,
+    detail:{kind:'satellite',imagePath:f.scene.imagePath!,latitude:30.6,longitude:32.4,radiusKm:80,featureCount:2,createdAt:'now',
+      bounds:documentaryRouteBounds(route),routeKey:documentaryRouteKey(route)}};
+  const before=await f.projects.mutate(f.project.id,current=>({scenes:current.scenes.map(scene=>({...scene,
+    documentary:{...scene.documentary!,motionGraphic:graphic,verified:true,visualReview:review}}))}));
+  assert.equal(documentarySavedContextIssue(before,before.scenes[0]!),undefined);
+  assert.deepEqual(missingAssemblyInputs(before),[]);
+  const {project,failures}=await f.service.autoSelect(f.project.id),scene=project.scenes[0]!;
+  assert.deepEqual(failures,[]);assert.deepEqual(scene.documentary!.motionGraphic,graphic);
+  assert.deepEqual(missingAssemblyInputs(project),[]);
+  assert.equal(buildDocumentaryTimeline(project).scenes[0]!.documentary!.motionGraphic!.enabled,true);
 });
 
 for(const enabled of [false,true])test(`accepting media preserves a manual route with enabled=${enabled}`,async t=>{

@@ -142,7 +142,7 @@ const documentaryAcceptedMaterialMetadata=(project:Project,scene:Scene,review:No
     illustrationLabelInEditorOnly:true,
     reviewNote:requirement.footageFallback?`Тематический видеоряд; не архив названного события. ${review.reason}`
       :portrait?`Портрет названного человека вне даты события. ${review.reason}`:review.reason,
-    ...(graphic?.origin==='automatic'&&graphic.kind==='map-route'?{motionGraphic:{...graphic,enabled:false}}:{}),
+    ...(graphic?.origin==='automatic'&&graphic.kind==='map-route'&&graphic.routeComparison?{motionGraphic:{...graphic,enabled:false}}:{}),
     autoError:undefined};
 };
 export function documentaryVisualRejectionKeys(candidate:DocumentaryCandidate,checksum?:string):string[]{
@@ -2464,9 +2464,9 @@ export class DocumentaryProjectService {
     project = await this.projects.mutate(projectId, current => {
       const scenes=current.scenes.map(scene => {
       const doc=scene.documentary,graphic=doc?.motionGraphic;
-      // Retire the old automatic route only while the saved media proof is valid.
+      // Retire the old automatic comparison only while the saved media proof is valid.
       if((!options.sceneIds||options.sceneIds.includes(scene.id))&&doc?.verified&&!doc.pinned&&doc.selected
-        &&doc.visualReview?.status==='accepted'&&graphic?.enabled&&graphic.origin==='automatic'&&graphic.kind==='map-route'){
+        &&doc.visualReview?.status==='accepted'&&graphic?.enabled&&graphic.origin==='automatic'&&graphic.kind==='map-route'&&graphic.routeComparison){
         const accepted={...scene,documentary:{...doc,...documentaryAcceptedMaterialMetadata(current,scene,doc.visualReview,Boolean(this.intelligence?.simpleSelection))}};
         if(!documentarySavedContextIssue(current,accepted))scene=accepted;
       }
