@@ -1,9 +1,24 @@
 import type {DocumentaryCandidate,DocumentaryRequirement,Scene} from '@gold-work/shared';
 import {documentaryThematicReserveIssue} from '@gold-work/shared';
 import {documentaryRequiredVisiblePart} from './documentary-detail-evidence.js';
+import {documentaryGroundedDiscoveryName} from './documentary-named-search.js';
+
+/** A reserve cannot discard a named identity which the original script still
+ * requires. This rejects an incompatible assignment, not unnamed candidates. */
+export function documentaryGroundedReserveIssue(requirement:DocumentaryRequirement,target?:string,queries?:string[]):string|undefined {
+  const plan=requirement.aiSearchPlan,name=documentaryGroundedDiscoveryName(plan);
+  if(!plan||!name)return;
+  const normalized=(text:string)=>` ${text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
+  const check=plan.grounding!.mandatory.find(check=>check.kind==='identity')!;
+  const names=[name,...(check.aliases??[]).filter(alias=>normalized(check.scriptQuote).includes(normalized(alias)))];
+  const proposed=[target??plan.fallbackVisualTarget,...queries??plan.fallbackVideoQueries];
+  if(!proposed.some(value=>names.some(identity=>normalized(value).includes(normalized(identity)))))
+    return 'Запасное поисковое задание потеряло обязательную идентичность исходной реплики: '+name+'.';
+}
 
 /** A thematic search must not quietly become an exact-person/model search. */
 export function documentaryThematicQueryAllowed(requirement:DocumentaryRequirement,query:string):boolean {
+  if(documentaryGroundedReserveIssue(requirement,query,[query]))return false;
   const normalized=(text:string)=>` ${text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
   const names=(requirement.narrativeIdentities??requirement.identities??[]).flatMap(identity=>[identity.name,...identity.aliases]);
   return query.trim().length>=8&&query.length<=100&&!/\b(?:1[0-9]|20)\d{2}\b/.test(query)

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {DocumentaryCandidate,DocumentaryRequirement,Project,Scene} from '@gold-work/shared';
-import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue} from './documentary-illustration-fallback.js';
+import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue,documentaryGroundedReserveIssue} from './documentary-illustration-fallback.js';
 import {documentaryNamedListPortrait,documentaryVisualReviewContext} from './documentary-scene-context.js';
 import {documentaryRequiredVisiblePart} from './documentary-detail-evidence.js';
 
@@ -26,6 +26,21 @@ test('thematic road racing does not silently switch to motocross, while a motocr
   assert.ok(documentaryThematicMetadataIssue(req,source,'Гран-при и гоночные мотоциклы'));
   assert.equal(documentaryThematicMetadataIssue(req,source,'Motocross Grand Prix'),undefined);
   assert.equal(documentaryThematicMetadataIssue({...req,visualScope:'exact'},source,'MotoGP'),undefined);
+});
+
+test('a reserve preserves only identities made mandatory by the original script, including genuine original aliases',()=>{
+  const plan={version:1,inputHash:'fixture',model:'fixture',years:[],visualScope:'illustrative',preferredKind:'image',
+    subject:'Richard Woodget',visualTarget:'Richard Woodget portrait',imageQueries:['Richard Woodget portrait'],videoQueries:[],
+    fallbackVisualTarget:'Cutty Sark sailing ship',fallbackVideoQueries:['Cutty Sark ship sailing'],
+    grounding:{version:1,mandatory:[{kind:'identity',required:'Richard Woodget, captain of Cutty Sark',scriptQuote:'Richard Woodget became captain.'}],illustrations:['portrait'],optionalDetails:[]}} as NonNullable<DocumentaryRequirement['aiSearchPlan']>;
+  const req={aiSearchPlan:plan} as DocumentaryRequirement;
+  assert.match(documentaryGroundedReserveIssue(req)!,/Richard Woodget/);
+  assert.equal(documentaryGroundedReserveIssue(req,'Captain Richard Woodget portrait',['archival portrait']),undefined);
+  assert.equal(documentaryGroundedReserveIssue({...req,aiSearchPlan:{...plan,grounding:undefined}}),undefined,'Legacy contextual substitution has no new mandatory identity');
+  assert.equal(documentaryGroundedReserveIssue({...req,aiSearchPlan:{...plan,grounding:{...plan.grounding!,mandatory:[]}}}),undefined);
+  const ship={...plan,subject:'Cutty Sark',grounding:{...plan.grounding!,mandatory:[{kind:'identity' as const,required:'the ship Cutty Sark',scriptQuote:'Cutty Sark was renamed Ferreira.',aliases:['Ferreira']}]}};
+  assert.equal(documentaryGroundedReserveIssue({aiSearchPlan:ship} as DocumentaryRequirement,'Ferreira vessel',['Ferreira ship']),undefined);
+  assert.match(documentaryGroundedReserveIssue({aiSearchPlan:ship} as DocumentaryRequirement,'Olympic ship',['Olympic underway'])!,/Cutty Sark/);
 });
 test('an explicit person introduction keeps exact names without borrowing an earlier event date',()=>{
   const scene={id:'people',order:1,narration:'За этим результатом стояли конкретные люди и детали: Росси, ',documentary:{requirement:{identities:[{name:'Valentino Rossi',aliases:['Росси']}],years:[]}}} as unknown as Scene;

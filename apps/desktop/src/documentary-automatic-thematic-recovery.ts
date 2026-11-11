@@ -4,6 +4,7 @@ import {documentaryThematicReserveIssue} from '@gold-work/shared';
 import {currentDocumentaryAiSearchPlan,documentaryAiPlanContext} from './documentary-ai-plan-state.js';
 import {currentDocumentaryFootageFallback} from './documentary-fast-plan.js';
 import {documentaryGeographicReservePlan,documentaryGeographicReserveIssue} from './documentary-thematic-location.js';
+import {documentaryGroundedReserveIssue} from './documentary-illustration-fallback.js';
 
 /** Bind automatic scope to the user's input/composition, not a downloaded source. */
 export function documentaryThematicRecoveryBinding(project:Project,scene:Scene):string {
@@ -46,6 +47,7 @@ export function documentaryAutomaticThematicIssue(project:Project,scene:Scene):s
   const doc=scene.documentary!,ai=currentDocumentaryAiSearchPlan(project,scene);
   if(doc.requirement.footageFallback)return 'Резерв уже сохранён; продолжение использует его существующую стадию.';
   if(!ai)return 'Нет актуального AI-плана.';
+  const groundedIssue=documentaryGroundedReserveIssue(doc.requirement);if(groundedIssue)return groundedIssue;
   if(!ai.fallbackVisualTarget.trim()||!ai.fallbackVideoQueries.length)return 'AI-план не содержит разрешённого тематического резерва.';
   if(ai.fallbackVideoQueries.some(query=>query.trim().length<2||query.length>240))return 'Некорректные запросы AI-резерва.';
   const bound=documentaryGeographicReservePlan(scene,ai);
@@ -75,6 +77,8 @@ export function claimDocumentaryThematicRecovery(project:Project,scene:Scene,blo
 /** Only discovery is projected. Primary identities/narration remain persisted and auditable. */
 export function documentaryThematicDiscoveryRequirement(project:Project,scene:Scene):DocumentaryRequirement|undefined {
   if(documentaryGeographicReserveIssue(scene))return;
+  const reserve=scene.documentary?.requirement.footageFallback;
+  if(scene.documentary&&documentaryGroundedReserveIssue(scene.documentary.requirement,reserve?.target,reserve?.queries))return;
   const fallback=currentDocumentaryFootageFallback(scene),ai=currentDocumentaryAiSearchPlan(project,scene);
   if(!fallback?.automaticRecovery||!ai||fallback.target!==ai.fallbackVisualTarget
     ||JSON.stringify(fallback.queries)!==JSON.stringify(ai.fallbackVideoQueries)

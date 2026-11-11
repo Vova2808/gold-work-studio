@@ -1,4 +1,5 @@
 import type {DocumentaryCandidate,Scene} from '@gold-work/shared';
+import {documentaryCandidateSubjectIssue} from './documentary-named-search.js';
 
 const words=(value:string)=>value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const hasName=(text:string,name:string)=>(' '+words(text)+' ').includes(' '+words(name)+' ');
@@ -9,8 +10,9 @@ const cleanIdentity=(value:string)=>value.replace(/^(?:the\s+)?(?:ship|vessel|cl
  * an unknown title proves what is actually visible in the media. */
 function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
   const requirement=scene.documentary?.requirement;
-  if(!requirement||requirement.footageFallback||requirement.fastSourcePolicy==='background')return;
+  if(!requirement)return;
   const mandatory=requirement.aiSearchPlan?.grounding?.mandatory;
+  if(!mandatory?.some(check=>check.kind==='identity')&&(requirement.footageFallback||requirement.fastSourcePolicy==='background'))return;
   const identities=(Array.isArray(mandatory)?mandatory.filter(check=>check?.kind==='identity'||check?.kind==='geography'):undefined)
     ?.map(check=>({name:check.required,aliases:check.aliases??[]}))??requirement.identities??[];
   const subject=requirement.aiSearchPlan?.subject;
@@ -21,11 +23,15 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   const contains=(text:string)=>names.some(name=>hasName(text,name));
   const refusal=(detail:string)=>'Исходный заголовок противоречит идентичности объекта сцены: '+detail;
   const roles='captain|owner|scientist|inventor|artist|composer|writer|admiral|president|king|queen|капитан|владелец|учёный|ученый|изобретатель|художник|писатель';
-  const target=requirement.detail??requirement.aiSearchPlan?.visualTarget??'';
+  const target=mandatory?.some(check=>check.kind==='identity')?requirement.aiSearchPlan!.visualTarget:requirement.detail??requirement.aiSearchPlan?.visualTarget??'';
   const personTarget=/\bportrait\b|портрет/iu.test(target)||names.some(name=>{
     const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     return new RegExp('(?:'+roles+')[,\\s]+(?:the\\s+)?'+escaped+'\\b|'+escaped+'[,\\s]+(?:(?:became|was|is|the|a|an)\\s+){0,3}(?:'+roles+')\\b','iu').test(scene.narration+' '+target);
   });
+  const primaryTitle=title.split(/[,;]|\s+[—–]\s+/u)[0]??title;
+  if(personTarget&&!contains(primaryTitle)&&/\b(?:ships?|vessels?|clippers?|steamships?|ship scale models|aircraft|airplanes?|locomotives?|engines?|hull|rigging|deck)\b|корабл|судн|самол[её]т|локомотив/iu.test(primaryTitle)
+    &&!/\b(?:portraits?|headshots?|captain|owner|crew|man|woman|person)\b|портрет|капитан|владелец|экипаж/iu.test(primaryTitle))
+    return refusal('основной предмет источника — объект или его деталь, а требуется конкретный человек.');
   if(personTarget&&!contains(title)&&/\b(?:skyline|cityscape|skyscraper)\b/iu.test(title)
     &&!/\b(?:portrait|man|woman|person)\b/iu.test(title))
     return refusal('название описывает городской пейзаж, а не требуемого человека.');
@@ -103,6 +109,14 @@ function workpieceMaterials(value:string):Set<Material>{
 /** An explicitly contradictory original title is a discovery refusal, never
  * proof that a generic metal image has the required composition or use. */
 export function documentaryMaterialMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
+  const requirement=scene.documentary?.requirement;
+  if(requirement){
+    const grounded=requirement.aiSearchPlan?.grounding?.mandatory.some(check=>check.kind==='identity');
+    const subjectRequirement=grounded&&requirement.footageFallback
+      ?{...requirement,footageFallback:undefined,detail:requirement.aiSearchPlan!.visualTarget}:requirement;
+    const subjectIssue=documentaryCandidateSubjectIssue(source,subjectRequirement,scene.narration);
+    if(subjectIssue)return subjectIssue;
+  }
   const target=scene.documentary?.requirement.aiSearchPlan?.visualTarget??scene.documentary?.requirement.detail??'';
   if(/\b(?:route|map|canal)\b|маршрут|карт[аыуе]/iu.test(target)
     &&/\b(?:toy\s+car|origami|paper\s+boat|rolled\s+(?:up\s+)?maps?|decorative\s+maps?)\b|игрушечн|оригами|бумажн\p{L}*\s+кораблик/iu.test(source.title))

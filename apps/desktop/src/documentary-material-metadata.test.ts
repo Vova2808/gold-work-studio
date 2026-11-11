@@ -80,6 +80,24 @@ test('honest same-subject illustrations and unknown metadata stay undecided; the
   const onlyGenerated=source('Untitled');onlyGenerated.description='Ship Blackadder';onlyGenerated.query='Blackadder';
   assert.equal(documentaryMaterialMetadataIssue(ship,onlyGenerated),undefined);
 });
+
+test('a saved reserve cannot bypass original grounded identity when its title explicitly depicts another subject',()=>{
+  const person=namedScene('Richard Woodget, captain of Cutty Sark','Richard Woodget became captain.','Richard Woodget portrait');
+  person.documentary!.requirement.aiSearchPlan={subject:'Richard Woodget',visualTarget:'Richard Woodget portrait',
+    grounding:{version:1,mandatory:[{kind:'identity',required:'Richard Woodget, captain of Cutty Sark',scriptQuote:person.narration}],illustrations:['portrait'],optionalDetails:[]}} as any;
+  person.documentary!.requirement.footageFallback={version:1,target:'Cutty Sark ship sailing',queries:[],reason:'',originalTarget:'Richard Woodget portrait'};
+  person.documentary!.requirement.fastSourcePolicy='background';
+  for(const title of ['The Cutty Sark ship','Ship Scale Models Navigational Sailing','Aircraft in a hangar'])
+    assert.match(documentaryMaterialMetadataIssue(person,source(title))!,/конкретный человек/,title);
+  assert.equal(documentaryMaterialMetadataIssue(person,source('Richard Woodget aboard Cutty Sark ship')),undefined);
+  assert.equal(documentaryMaterialMetadataIssue(person,source('Unidentified archive view')),undefined,'Absence of a name is not a contradiction');
+  assert.equal(documentaryMaterialMetadataIssue(person,source('Walking around Greenwich')),undefined,'A tour title alone does not prove absent subject');
+  const ship=namedScene('Cutty Sark','Cutty Sark left the tea trade.');
+  ship.documentary!.requirement.aiSearchPlan={subject:'Cutty Sark',visualTarget:'Cutty Sark ship',
+    grounding:{version:1,mandatory:[{kind:'identity',required:'the ship Cutty Sark',scriptQuote:ship.narration}],illustrations:['same ship'],optionalDetails:[]}} as any;
+  ship.documentary!.requirement.footageFallback={version:1,target:'sailing ship',queries:[],reason:'',originalTarget:'Cutty Sark'};
+  assert.match(documentaryMaterialMetadataIssue(ship,source("Clipper Ship 'Blackadder' under sail"))!,/противоречит/);
+});
 test('literal aluminium/steel workpiece conflict from actual 220 is refused without treating generic metadata as proof',()=>{
  assert.match(documentaryMaterialMetadataIssue(scene('aluminium body component'),source('machine cutting steel plate'))!,/противоречит/);
  assert.match(documentaryMaterialMetadataIssue(scene('steel plate'),source('cutting an aluminum sheet'))!,/противоречит/);

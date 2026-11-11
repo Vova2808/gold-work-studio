@@ -110,6 +110,28 @@ function metadataIdentityNames(identity:NonNullable<DocumentaryRequirement['iden
   return [...new Set([...(primary?[primary.name]:[]),...aliases])];
 }
 
+/** A current plan may describe its identity as a sentence. Recover only its
+ * explicit canonical name, witnessed by the original quote, for discovery.
+ * Neither a related owner/vehicle nor a shortened model family is an alias. */
+export function documentaryGroundedDiscoveryName(plan:DocumentaryRequirement['aiSearchPlan']):string|undefined {
+  const checks=plan?.grounding?.mandatory.filter(check=>check.kind==='identity');
+  if(!plan||checks?.length!==1)return;
+  const check=checks[0]!;
+  const name=plan.subject.trim().replace(/\s+\((?:(?:sailing|steam|clipper|historic|preserved|passenger|military)\s+)*(?:ship|vessel|aircraft|locomotive|automobile|motorcycle|building|bridge|canal|person)\)$/iu,'');
+  if(name.length<3||!has(check.required,name)||!has(check.scriptQuote,name))return;
+  const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(!new RegExp('(^|[^\\p{L}\\p{N}’\'-])'+escaped+'(?=$|[^\\p{L}\\p{N}’\'-])','iu').test(check.scriptQuote))return;
+  const match=new RegExp('(^|[^\\p{L}\\p{N}])('+escaped+')(?=$|[^\\p{L}\\p{N}])','iu').exec(check.required);
+  if(!match)return;
+  const prefix=check.required.slice(0,match.index+match[1]!.length).trim();
+  // "owner of X" and "Captain Y, aboard X" do not make X the identity.
+  if(prefix&&!/^(?:(?:the|a|an|named|depicted|is|ship|vessel|clipper|aircraft|locomotive|automobile|motorcycle|camera|engine|building|bridge|canal|person|captain|owner|scientist|inventor)\s*)+$/iu.test(prefix))return;
+  const tail=check.required.slice(match.index+match[0].length);
+  if(/^(?:[-/]\d|\s+(?:\d|[A-Z][\p{L}\p{N}'’-]*))/u.test(tail))return;
+  const parsed=metadataIdentityNames({name,aliases:[]},[...plan.imageQueries,...plan.videoQueries]);
+  return parsed.includes(name)?name:undefined;
+}
+
 /** The caller supplies only a current validated plan. This changes discovery
  * hints, never the stored requirement or the subject used by visual approval. */
 export function documentaryPlannedDiscoveryRequirement(requirement:DocumentaryRequirement,currentPlan:DocumentaryRequirement['aiSearchPlan']):DocumentaryRequirement {
@@ -118,6 +140,9 @@ export function documentaryPlannedDiscoveryRequirement(requirement:DocumentaryRe
   const queries=[...currentPlan.imageQueries,...currentPlan.videoQueries];
   const identity=requirement.identities[0]!;
   const supported=(name:string)=>has(target,name)&&queries.some(query=>has(query,name));
+  const grounded=documentaryGroundedDiscoveryName(currentPlan);
+  if(grounded&&supported(grounded)&&identity.name!==grounded)
+    return {...requirement,identities:[{name:grounded,aliases:[]}]};
   if(metadataIdentityNames(identity,requirement.queries).some(supported))return requirement;
   // Aliases already passed the canonical discriminator guard above. Splitting
   // them again as new identities would turn "Airbus, passenger aircraft" into

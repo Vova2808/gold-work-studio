@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
 import {createVoiceCalibration} from '@gold-work/shared';
 import type {DocumentaryCandidate,DocumentaryRequirement} from '@gold-work/shared';
-import {documentaryNamedDiscoveryQueries,documentaryNamedMetadataShortlist,documentaryExactRequirementForRetry,documentaryNamedMetadataIssue,documentaryYouTubeNameFallback,documentaryNamedVideo,documentaryCandidateSubjectIssue,documentaryPlannedDiscoveryRequirement} from './documentary-named-search.js';
+import {documentaryNamedDiscoveryQueries,documentaryNamedMetadataShortlist,documentaryExactRequirementForRetry,documentaryNamedMetadataIssue,documentaryYouTubeNameFallback,documentaryNamedVideo,documentaryCandidateSubjectIssue,documentaryPlannedDiscoveryRequirement,documentaryCommonsDiscoverySubjects,documentaryGroundedDiscoveryName} from './documentary-named-search.js';
 import {DocumentarySelectionSession} from './documentary-selection-session.js';
 import {discoverDocumentarySourceBatches} from './documentary-discovery.js';
 import {documentaryIdentityReviewIssue,documentaryIdentityMatches,documentaryListsNamedSubjects,documentaryCatalogIdentityConflict} from './documentary-visual-relevance.js';
@@ -116,6 +116,39 @@ test('discovery projection leaves exact, stale, ambiguous, action and unmatched 
   const model=plannedTarget('Airbus A320','Airbus A380 cockpit',['Airbus A380 cockpit']);
   assert.equal(documentaryPlannedDiscoveryRequirement(model,model.aiSearchPlan),model);
   assert.deepEqual(documentaryNamedMetadataShortlist([candidate('a380','Airbus A380')],model,model.text),[]);
+});
+
+test('grounded sentence identities retain their canonical subject for native Commons discovery without changing visual evidence',()=>{
+  for(const [subject,required,quote] of [
+    ['Cutty Sark','the ship Cutty Sark','Cutty Sark left the tea trade.'],
+    ['Cutty Sark (clipper ship)','the ship is Cutty Sark, later renamed Ferreira under Portuguese ownership','Cutty Sark was sold and renamed Ferreira.'],
+    ['Marie Curie','the scientist Marie Curie','Marie Curie continued her research.'],
+    ['Nikon D850','the camera Nikon D850','The Nikon D850 had a larger sensor.']
+  ]){
+    const name=subject!.replace(' (clipper ship)','');
+    const requirement=plannedTarget(required!,name!+' portrait or preserved view',[name!+' historical photograph']);
+    requirement.aiSearchPlan!.subject=subject!;
+    requirement.aiSearchPlan!.grounding={version:1,mandatory:[{kind:'identity',required:required!,scriptQuote:quote!}],illustrations:['same subject'],optionalDetails:[]};
+    const before=structuredClone(requirement);
+    assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,requirement.aiSearchPlan,requirement.queries[0]!),[name]);
+    assert.deepEqual(requirement,before,'Discovery does not rewrite saved meaning or quotes');
+    assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,undefined,requirement.queries[0]!),[]);
+  }
+});
+
+test('grounded discovery never substitutes an incidental object or shortens a required model discriminator',()=>{
+  for(const [subject,required,quote] of [
+    ['Cutty Sark','John Willis, owner of Cutty Sark','John Willis owned Cutty Sark.'],
+    ['Airbus','the aircraft Airbus A320','The Airbus A320 entered service.'],
+    ['Airbus A320','the aircraft Airbus A320-200','The Airbus A320-200 entered service.'],
+    ['Nikon D850','the camera Nikon D850','An unidentified camera was used.'],
+    ['Marie Curie','the scientist Marie Curie','Marie Curie-Sklodowska was the required full identity.']
+  ]){
+    const requirement=plannedTarget(required!,subject!,[subject!+' photograph']);
+    requirement.aiSearchPlan!.subject=subject!;
+    requirement.aiSearchPlan!.grounding={version:1,mandatory:[{kind:'identity',required:required!,scriptQuote:quote!}],illustrations:['same subject'],optionalDetails:[]};
+    assert.equal(documentaryGroundedDiscoveryName(requirement.aiSearchPlan),undefined,required);
+  }
 });
 
 test('discovery projection retains model discriminators in delimited aliases and canonical segments',()=>{

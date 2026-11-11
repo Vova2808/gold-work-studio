@@ -18,7 +18,7 @@ import {documentaryNativeFallbackReady} from './documentary-native-fallback.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import {documentaryAutomaticMaterialReady} from './documentary-auto-readiness.js';
 import {assertDocumentaryAutoExport} from './documentary-workflow.js';
-import {claimDocumentaryThematicRecovery,documentaryAutomaticThematicIssue,documentaryThematicDiscoveryRequirement} from './documentary-automatic-thematic-recovery.js';
+import {claimDocumentaryThematicRecovery,documentaryAutomaticThematicIssue,documentaryThematicDiscoveryRequirement,documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
 import {documentaryFallbackNarrativeContext,documentaryFallbackNarrativeTask} from './documentary-fallback-narrative.js';
 import {DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {effectFfmpeg} from './effect-media.js';
@@ -93,6 +93,25 @@ test('the ordinary selector searches YouTube for a claimed reserve and keeps its
  assert.equal(result.failed,0,JSON.stringify(result.failures));
  assert.equal(result.project.scenes[0]!.audioPath,'saved-voice.mp3');
  assert.ok(documentaryThematicDiscoveryRequirement(result.project,result.project.scenes[0]!));
+});
+
+test('mandatory source identity prevents claiming a wrong-object reserve and resuming a previously claimed one',async t=>{
+ const f=await fixture(t),project=structuredClone(f.project),scene=project.scenes[0]!;
+ scene.narration='Captain Smith became commander.';
+ scene.documentary!.requirement.text=scene.narration;
+ project.videoBrief!.readyScript=scene.narration;
+ const plan=scene.documentary!.requirement.aiSearchPlan!;
+ plan.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
+ const oldClaim=claimDocumentaryThematicRecovery(project,scene);
+ assert.ok(oldClaim.documentary!.requirement.footageFallback,'Old contextual plan could claim the reserve');
+ plan.grounding={version:1,mandatory:[{kind:'identity',required:'Captain Smith',scriptQuote:scene.narration}],illustrations:['same captain portrait'],optionalDetails:[]};
+ assert.match(documentaryAutomaticThematicIssue(project,scene)!,/обязательную идентичность/);
+ assert.equal(claimDocumentaryThematicRecovery(project,scene),scene);
+ oldClaim.documentary!.requirement.aiSearchPlan=plan;
+ oldClaim.documentary!.requirement.footageFallback!.automaticRecovery!.binding=documentaryThematicRecoveryBinding(project,oldClaim);
+ assert.equal(documentaryThematicDiscoveryRequirement(project,oldClaim),undefined);
+ assert.deepEqual(f.searches,[]);assert.deepEqual(f.reviews,[]);
+ assert.equal(scene.audioPath,'saved-voice.mp3');
 });
 
 test('production with narration waits does not plan reserves while primary queries are missing',async t=>{
