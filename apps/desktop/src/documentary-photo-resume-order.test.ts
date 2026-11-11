@@ -16,7 +16,7 @@ import {DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import {effectFfmpeg} from './effect-media.js';
 
-for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','100-percent','force','pending-photo','manual-photo'] as const)
+for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','mixed-photo-rejected','100-percent','force','pending-photo','manual-photo'] as const)
 test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-photo-resume-order-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live requests in this fixture'));
@@ -44,7 +44,7 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
   description:'An attributed view of Aurora with its red sails',localPath:kind==='image'?photo:video,width:1280,height:720,
   ...(kind==='video'?{durationSeconds:4}:{}),downloadUrl:`https://example.test/${kind}`,pageUrl:`https://example.test/${kind}`,
   author:'Fixture',license:'public domain',licenseUrl:'',rights:'public-domain',attribution:'Fixture',query:'Aurora red sails',retrievedAt:'now',match:'unverified',concerns:[]});
- doc.candidates=mode==='mixed-shortlist'?[candidate('image'),candidate('video')]:[candidate('image')];
+ doc.candidates=['mixed-shortlist','mixed-photo-rejected'].includes(mode)?[candidate('image'),candidate('video')]:[candidate('image')];
  if(mode!=='no-error')doc.autoError='Previous image lane did not find visible sailcloth.';
  if(mode==='manual-photo'){
   scene.imagePath=photo;doc.selected={...candidate('image'),id:'manual:preserved-photo',rights:'user-confirmed'};
@@ -63,7 +63,7 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
     if(kind==='image'&&mode==='pending-photo')throw new DocumentaryAnalysisError('Unknown paid image response','pending');
     // Semantic outcomes are mocked. The local patterns exercise transport,
     // preparation and persistence only; they are not photographs of a vessel.
-    const accepted=kind==='image'&&mode!=='photo-rejected';
+    const accepted=kind==='image'&&!['photo-rejected','mixed-photo-rejected'].includes(mode);
     const review={status:accepted?'accepted' as const:'rejected' as const,confidence:1,reason:accepted?'Mock matching sailcloth':'Mock missing sailcloth',
      viewDescription:'Mock frame description',quality:'',sampleSeconds:kind==='video'?[0,2,3.8]:[0],checkedAt:'now',footageOrigin:'camera' as const,
      fastRelevance:{version:1 as const,target:'Aurora red sails',relevant:accepted,evidence:'Mock visual verdict'}};
@@ -86,10 +86,10 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
   await service.autoSelect(project.id,{sceneIds:[scene.id]});
   assert.equal(reviews.filter(kind=>kind==='image').length,1,'A second resume cannot submit the pending photo again');
  }else{
-  const expected=mode==='resume'?['image']:mode==='photo-rejected'?['image','video']:mode==='100-percent'?['video']:['video','image'];
+  const expected=['resume','mixed-shortlist'].includes(mode)?['image']:['photo-rejected','mixed-photo-rejected'].includes(mode)?['image','video']:mode==='100-percent'?['video']:['video','image'];
   assert.deepEqual(reviews,expected,JSON.stringify({searches,failures:result.failures}));
-  if(mode==='resume')assert.ok(searches.every(kind=>kind==='image'),'No video discovery before successful resumed photo');
-  assert.equal(saved.documentary!.verified,!['photo-rejected','100-percent'].includes(mode));
+  if(['resume','mixed-shortlist'].includes(mode))assert.ok(searches.every(kind=>kind==='image'),'No video discovery before successful resumed photo');
+  assert.equal(saved.documentary!.verified,!['photo-rejected','mixed-photo-rejected','100-percent'].includes(mode));
   if(saved.documentary!.verified)assert.equal(documentarySavedContextIssue(result.project,saved),undefined);
  }
 });

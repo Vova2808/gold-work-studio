@@ -2740,15 +2740,15 @@ export class DocumentaryProjectService {
           requirement:{...source.documentary!.requirement,footageFallback:undefined},searchRecovery:undefined}});
         const simpleStages=[stockStage(simpleKind),...(primaryPhotoFallback&&(!currentDocumentaryFootageFallback(scene)||primaryPhotoAfterReserve)?[stockStage('image')]:[])];
         const savedPhotoPool=savedCandidatePools.get(scene.id);
-        // A failed pass with only saved photos already reached the primary
-        // photo lane. Continue that lane before paying for more video, while
+        // A failed image-preferred task with saved photos already has a primary
+        // photo lane. Resume it even if old videos remain in the shortlist, while
         // retaining the original slot and the separate final video quota.
         const resumePrimaryPhotos=Boolean(this.intelligence?.simpleSelection&&!options.force&&!videoOnly&&!previousReady
           &&project.settings.stockVideoPercent<100&&!pendingVideoReview&&!scene.documentary?.pinned&&!scene.documentary?.manualReview
           &&scene.documentary?.autoError&&!currentDocumentaryFootageFallback(scene)
           &&currentDocumentaryAiSearchPlan(project,scene)?.preferredKind==='image'
           &&savedPhotoPool?.binding===this.selectionResumeBinding(project,scene)&&savedPhotoPool.candidates.length
-          &&savedPhotoPool.candidates.every(candidate=>candidate.kind==='image'));
+          &&savedPhotoPool.candidates.some(candidate=>candidate.kind==='image'));
         const stages = this.intelligence?.simpleSelection
           ?resumePrimaryPhotos?[...simpleStages.filter(stage=>stage.kind==='image'),...simpleStages.filter(stage=>stage.kind==='video')]:simpleStages
           :videoOnly ? videos : scene.documentary?.selectionPlan?.kind==='image' ? [...photos,...videos] : [...videos,...photos];
