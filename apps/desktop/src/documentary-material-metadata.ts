@@ -26,6 +26,13 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
     const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     return new RegExp('(?:'+roles+')[,\\s]+(?:the\\s+)?'+escaped+'\\b|'+escaped+'[,\\s]+(?:(?:became|was|is|the|a|an)\\s+){0,3}(?:'+roles+')\\b','iu').test(scene.narration+' '+target);
   });
+  if(personTarget&&!contains(title)&&/\b(?:skyline|cityscape|skyscraper)\b/iu.test(title)
+    &&!/\b(?:portrait|man|woman|person)\b/iu.test(title))
+    return refusal('название описывает городской пейзаж, а не требуемого человека.');
+  const visibleSubject=target+' '+identities.map(identity=>identity.name).join(' ');
+  if(/\b(?:ship|vessel|clipper|sails?|rigging|hull|portrait)\b|корабл|судн|парус|портрет/iu.test(visibleSubject)
+    &&/\b(?:bedroom\s+apartment|apartment\s+for\s+(?:sale|rent)|property\s+tour|real\s+estate|villa\s+for\s+sale)\b|квартир\p{L}*\s+(?:на\s+)?продаж/iu.test(title))
+    return refusal('источник является показом недвижимости, а не требуемого объекта.');
   // A named grave/monument is a different depicted object from its namesake.
   if(contains(title)&&/\b(?:grave|tomb|gravestone|headstone|tombstone|memorial|monument)\b|могил|надгроб|памятник/iu.test(title)
     && !/\b(?:grave|tomb|memorial|monument)\b|могил|надгроб|памятник/iu.test(requirement.detail??requirement.aiSearchPlan?.visualTarget??''))

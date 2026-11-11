@@ -28,6 +28,15 @@ test('decorative map props are not evidence for a geographic route',()=>{
  assert.equal(documentaryMaterialMetadataIssue(route,source('Historic world route map')),undefined);
 });
 
+test('a namesake building and a property listing cannot stand in for a person or ship',()=>{
+ assert.match(documentaryMaterialMetadataIssue(namedScene('John Willis','Her owner, John Willis, was betting on speed.','John Willis portrait'),
+  source('Dramatic view of Chicago skyline with Willis Tower under cloudy skies.'))!,/городской пейзаж/);
+ assert.match(documentaryMaterialMetadataIssue(namedScene('Cutty Sark','Cutty Sark carried sails.','Cutty Sark with sails set'),
+  source('3 Bedroom Apartment for sale in Western Cape | Garden Route | Cutty S'))!,/недвижимости/);
+ assert.equal(documentaryMaterialMetadataIssue(namedScene('John Willis','Her owner, John Willis, was betting on speed.','John Willis portrait'),
+  source('John Willis portrait with a skyline background')),undefined);
+});
+
 test('explicit different named vessels, aircraft, locomotives and canals are rejected from the original title before visual payment',()=>{
   const cases=[
     ['Cutty Sark','Clipper Ship \'Blackadder\' at sea with foremast and mainmast broken RMG PY8584.tiff'],

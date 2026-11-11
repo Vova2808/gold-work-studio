@@ -2745,8 +2745,8 @@ export class DocumentaryProjectService {
         let uncertainCandidates=await readDocumentaryRejections(uncertainPath,uncertainScope);
         const failedTransfers=session.failedTransfers;
         const metadataRefusals=new Set<string>();
-        const plausibleMetadata=(candidate:DocumentaryCandidate)=>{
-          const issue=documentaryMaterialMetadataIssue(scene,candidate);
+        const plausibleMetadata=(candidate:DocumentaryCandidate,taskScene:Scene)=>{
+          const issue=documentaryMaterialMetadataIssue(taskScene,candidate);
           if(!issue)return true;
           const key=JSON.stringify([candidate.provider,candidate.id]);
           if(!metadataRefusals.has(key)){
@@ -3051,7 +3051,7 @@ export class DocumentaryProjectService {
             &&!isUncertain(candidate)
             &&availableForReview(candidate)
             &&(this.intelligence!.simpleSelection||!documentaryContradictoryModelYear(candidate,requirement,context))
-            &&plausibleMetadata(candidate)
+            &&plausibleMetadata(candidate,taskScene)
             &&(this.intelligence!.simpleSelection||!(requirement.identities?.length&&documentaryNamedMetadataIssue(candidate)))
             &&(this.intelligence!.simpleSelection?!documentaryGameplayMetadataIssue(candidate,fastPlan.visualTarget)
               :!documentaryKnownQualityIssue(candidate,latestProject,scene))
