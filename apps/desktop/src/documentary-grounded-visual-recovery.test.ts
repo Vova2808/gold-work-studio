@@ -61,6 +61,9 @@ test('one explicit terminal-incomplete receipt can commission a grounded visual 
   await assert.rejects(documentarySelectionRetry.run({grant,probe:false},()=>inspect({scriptGrounding:{...scriptGrounding,
     grounding:{...scriptGrounding.grounding,optionalDetails:['Another optional view.']}}})),/не совпадает/);
   assert.equal(calls,2,'Changing optional wording cannot spend the same grant again');
+  await assert.rejects(documentarySelectionRetry.run({grant,probe:false},inspectOld),/не совпадает/);
+  await assert.rejects(inspectOld(),/уже использована/);
+  assert.equal(calls,2,'The original exact request cannot reuse the grant spent on its grounded successor');
   assert.equal(await readFile(join(directory,'RetryHistory',`${item.id}-${item.revision}.json`),'utf8'),original);
   const receipts=await Promise.all((await readdir(directory)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name))
     .map(async name=>JSON.parse(await readFile(join(directory,name),'utf8'))));

@@ -16,10 +16,10 @@ import {documentaryActiveListItem,documentaryContextApproval,documentaryIllustra
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
 import {documentaryContradictoryModelYear,documentaryExplicitModelYear} from './documentary-model-year.js';
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
-import {checkDocumentarySelectionRetry,documentarySelectionRetry} from './documentary-retry.js';
+import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched} from './documentary-retry.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
 import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
-import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction} from './documentary-illustration-quality.js';
+import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
 import {documentaryIllustrationFallback,documentaryThematicQueryAllowed,documentaryGroundedThematicQuery} from './documentary-illustration-fallback.js';
 import {documentaryReviewContract,documentaryOrdinaryVisualContract,documentaryNamedIntervalContract} from './documentary-review-contract.js';
 import {documentaryScriptEvidenceContract,documentaryScriptEvidence,documentaryScriptEvidenceIssue,documentaryRecoveryQueries,documentaryScriptRequirements,documentaryScriptRequirementsContract,documentaryScriptRequirementsProblem} from './documentary-script-evidence.js';
@@ -1095,7 +1095,7 @@ export class DocumentaryIntelligence {
     const previewMetadata={...(previewSourceKey?{previewSourceKey}:{}),...(words.singleReview?{singleReviewBinding:{
       checksum:String(words.checksum),revision:JSON.stringify(words.fileRevision),start:Number(words.startSeconds),end:Number(words.endSeconds),
       taskKey:singleReviewTaskKey(words),...(words.fallbackNarrativeContext?{fallbackNarrativeBinding:words.fallbackNarrativeContext.binding}:{}),...(words.imagePreparation?{imagePreparation:words.imagePreparation}:{}),
-      ...(words.scriptGrounding&&retryOriginScope&&'grant' in retryOriginScope?{groundedRetryOrigin:retryOriginScope.grant.id}:{}),
+      ...(retryOriginScope&&'grant' in retryOriginScope?{groundedRetryOrigin:retryOriginScope.grant.id}:{}),
       ...(words.illustrationQualityVersion===1?{quality:{version:1,target:String(words.visualTarget),narration:String(words.narration),...(words.sceneId?{sceneId:String(words.sceneId)}:{})}}:{})}}:{})};
     const legacyImages=images.length?this.inspection.getStore()?.legacyImageSamples:undefined;
     if(legacyImages)for(const previous of [{system,input},...previousRequests]){
@@ -1318,6 +1318,8 @@ export class DocumentaryIntelligence {
       if(error.code==='ENOENT')return undefined;throw error;
     });
     if(approval&&(!approval.approvedAt||approval.maxAttempts!==1||approval.consumedAt&&(purpose==='semantic-montage'||saved?.state!=='failed')))throw new DocumentaryAnalysisError('Единственная разрешённая повторная отправка уже использована или не подтверждена. Новая оплата не выполнена.','pending',purpose);
+    if(approval&&purpose==='visual-illustration'&&await documentarySelectionRetryWasDispatched(root,key))
+      throw new DocumentaryAnalysisError('Единственная разрешённая повторная отправка уже использована для уточнённой проверки. Новая оплата не выполнена.','pending',purpose);
     if((selectionRetry==='narrative'||selectionRetry==='grounded')&&approval)throw new DocumentaryAnalysisError('У текущего запроса уже есть собственное разрешение повтора.','pending',purpose);
     const oneShotRecovery=Boolean(selectionRetry||approval&&!approval.consumedAt)||resumingGateway||resumingMotionRefusal||words.routeComparison===1;
     const releaseAnalysis=await this.acquireAnalysisSlot();
@@ -2030,7 +2032,7 @@ export class DocumentaryIntelligence {
     const model=await this.client.documentaryMotionModel?.()??await this.client.documentaryQueryModel?.()??await this.client.documentaryMontageModel?.()??'configured-text-model';
     const request=await this.routeComparisonRequest(project,scene,'correction',{
       rawHash:createHash('sha256').update(JSON.stringify(original)).digest('hex'),
-      system:routeComparisonSystem+' This is the ONLY correction. Audit ALL source quotations AND geometry, not only the first reported error. Keep routes, named stops, countries, order and all already valid exact citations/labels byte-for-byte unchanged. Repair ONLY invalid quotations or labels using exact script text that explicitly names the place/label and supports THIS SAME trade/topic. A country mention cannot establish a specific port; do not borrow an unrelated voyage merely because a place name matches. Never invent a quote or infer a port from its country. Repair points/bends, include EVERY stop in order, and use open sea bends around continents. The final response must pass both quotation and sea geometry checks. If the full script cannot establish this comparison, refuse; no third request will be made.',
+      system:routeComparisonSystem+' This is the ONLY correction. Audit ALL source quotations AND geometry, not only the first reported error. Keep routes, named stops, countries, order and all already valid source citations and valid label/quote pairs byte-for-byte unchanged. A label and quote are a valid pair only when the exact quote contains the exact label; otherwise repair their link. Repair ONLY invalid quotations or labels using exact script text that explicitly names the place/label and supports THIS SAME trade/topic. A country mention cannot establish a specific port; do not borrow an unrelated voyage merely because a place name matches. Never invent a quote or infer a port from its country. Repair points/bends, include EVERY stop in order, and use open sea bends around continents. The final response must pass both quotation and sea geometry checks. If the full script cannot establish this comparison, refuse; no third request will be made.',
       input:JSON.stringify({routeComparison:1,routeComparisonCorrection:1,sceneId:scene.id,script:routeComparisonContext(project),target:routeComparisonTarget(scene),original,validationError})});
     const raw=await this.complete(project.id,'semantic-montage',request.system,request.input,[],[],undefined,{signal});
     signal?.throwIfAborted();
@@ -3006,6 +3008,11 @@ export class DocumentaryIntelligence {
     if(fallbackNarrativeContext)previousRequests.push({system:qualitySystem,input:JSON.stringify(qualityTask)},...(oldRevision?[{
       system:qualitySystem,input:JSON.stringify({...qualityTask,fileRevision:oldRevision})}]:[]));
     const qualityInput=JSON.stringify({...qualityTask,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
+    if(scriptGrounding){
+      const previousGroundedSystem=fallbackNarrativeContext?documentaryGroundedFallbackIllustrationQualityInstructionV1:documentaryGroundedIllustrationQualityInstructionV1;
+      previousRequests.push({system:previousGroundedSystem,input:qualityInput},...(oldRevision?[{system:previousGroundedSystem,
+        input:JSON.stringify({...JSON.parse(qualityInput),fileRevision:oldRevision})}]:[]));
+    }
     // Preserve the exact predecessor checkpoint, including byte-proven old
     // revisions. A corrected task instruction cannot repay unknown work or
     // reinterpret a completed refusal as an approval.
@@ -3057,12 +3064,14 @@ export class DocumentaryIntelligence {
     const originIssue=suitable===true&&footageOrigin?documentaryVideoOriginIssue(footageOrigin):undefined;
     const qualityVersion=value.__illustrationQualityVersion===1;
     const qualityIssue=suitable===true?documentaryIllustrationQualityIssue(plan.visualTarget,value,qualityVersion):undefined;
+    const scriptFitIssue=suitable===true&&scriptGrounding?documentaryGroundedScriptFitIssue(scene.narration,value):undefined;
     const narrativeFit=documentaryFallbackNarrativeFit(project,scene,value);
     const narrativeIssue=suitable===true?documentaryFallbackNarrativeIssue(project,scene,value):undefined;
-    const evidence=originIssue??qualityIssue?.reason??narrativeIssue?.reason??String(value.reason??value.evidence??description).slice(0,1800);
+    const evidence=originIssue??qualityIssue?.reason??scriptFitIssue?.reason??narrativeIssue?.reason??String(value.reason??value.evidence??description).slice(0,1800);
     let status:Review['status']=!description||suitable===undefined?'uncertain':suitable?'accepted':'rejected';
     if(status==='accepted'&&originIssue)status=footageOrigin==='non-camera'?'rejected':'uncertain';
     if(status==='accepted'&&qualityIssue)status=qualityIssue.status;
+    if(status==='accepted'&&scriptFitIssue)status=scriptFitIssue.status;
     if(status==='accepted'&&narrativeIssue)status=narrativeIssue.status;
     const finalRevision=await revisionOf(file);
     // Touching a timestamp or adding a hardlink can change metadata during a paid review.

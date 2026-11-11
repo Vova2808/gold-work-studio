@@ -11,7 +11,7 @@ import {documentarySavedContextIssue,revalidateDocumentaryContext,documentaryIll
 import {documentarySavedQualityIssue,documentarySourceText} from './documentary-source-quality.js';
 import {documentaryIllustrationQualityIssue,documentaryLegacyIllustrationRisk,documentaryInternalPartIssue,documentaryIllustrationQualityInstruction,documentaryIllustrationResponseInstruction,documentaryIllustrationQualityInstructionV1,documentaryIllustrationQualityInstructionV2} from './documentary-illustration-quality.js';
 import {effectFfmpeg} from './effect-media.js';
-import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction} from './documentary-illustration-quality.js';
+import {documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
 import {documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -71,6 +71,7 @@ test('a same-object illustration receives script-grounded optional details, whil
    // Mocked semantic verdict: this test verifies contract plumbing and gates,
    // not recognition of the synthetic local test image by a live model.
    return JSON.stringify({...clean,description:'The preserved ship hull and rigging.',suitable:!fallback,targetVisible:!fallback,
+    scriptFit:{kind:'subject-context',scriptQuote:narration,requiredVisible:ai.subject,visible:!fallback,evidence:'Visible ship hull and rigging.'},
     targetEvidence:fallback?'A ship is visible; the named person is absent.':'Distinctive hull, masts and rigging of the same ship.',
     reason:fallback?'A ship does not show the named person.':'Modern illustration of the same ship, not the historical event.',
     ...(fallback?{narrativeFit:{version:1,binding:task.fallbackNarrativeContext.binding,status:'conflict',scriptQuote:'John Willis',
@@ -78,6 +79,56 @@ test('a same-object illustration receives script-grounded optional details, whil
   }},()=>root);
   assert.equal((await service.inspectForSelection(project,scene)).review.status,fallback?'rejected':'accepted');assert.equal(calls,1);
  }
+});
+
+test('a measured physical feature cannot pass on identity alone, while historical trade context allows a same-subject view',()=>{
+ const sailLine='With all sails set, its canvas covered thirty-two thousand square feet.';
+ const fit={kind:'physical-feature',scriptQuote:sailLine,requiredVisible:'The sailcloth or an identified sail-plan depiction',
+  visible:false,evidence:'Bare yards and rigging; no sailcloth is shown.'};
+ assert.equal(documentaryGroundedScriptFitIssue(sailLine,{...clean,scriptFit:fit})?.status,'rejected');
+ assert.equal(documentaryGroundedScriptFitIssue(sailLine,clean)?.status,'uncertain');
+ assert.equal(documentaryGroundedScriptFitIssue(sailLine,{...clean,scriptFit:{...fit,scriptQuote:'Invented sentence.'}})?.status,'uncertain');
+ assert.equal(documentaryGroundedScriptFitIssue(sailLine,{...clean,scriptFit:{...fit,visible:true,evidence:'Spread canvas on each mast.'}}),undefined);
+ const tradeLine='The ship left the tea trade.';
+ assert.equal(documentaryGroundedScriptFitIssue(tradeLine,{...clean,scriptFit:{kind:'subject-context',scriptQuote:tradeLine,
+  requiredVisible:'The identified ship',visible:true,evidence:'The distinctive ship hull is visible in a modern museum.'}}),undefined);
+});
+
+for(const priorState of ['complete','received'] as const)test(`grounded physical-feature contract preserves ${priorState} old receipt and rejects missing cloth`,async t=>{
+ const {root,project,scene,receipts}=await fixture(t,'Clipper ship');
+ const narration='The clipper carried a large spread of canvas with all sails set.';
+ scene.narration=narration;project.videoBrief!.readyScript=narration;
+ const ai=scene.documentary!.requirement.aiSearchPlan!;ai.subject='The clipper';
+ ai.grounding={version:1,mandatory:[{kind:'identity',required:'The clipper',scriptQuote:'The clipper'}],
+  illustrations:['Modern view of the ship'],optionalDetails:['All sails set']};
+ scene.documentary!.requirement.text=narration;
+ ai.inputHash=hash({inputHash:hash({version:1,model:'fixture',context:documentaryAiPlanContext(project)}),sceneId:scene.id});
+ let calls=0;
+ const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system)=>{
+  calls++;
+  if(system===documentaryGroundedIllustrationQualityInstructionV1)return priorState==='received'?'\u007b"description":"unfinished':JSON.stringify(clean);
+  return JSON.stringify({...clean,scriptFit:{kind:'physical-feature',scriptQuote:narration,
+   requiredVisible:'The spread of sailcloth',visible:false,evidence:'Only bare yards and rigging are visible.'}});
+ }},()=>root);
+ const original=(service as any).complete.bind(service);let seeded=false;let oldBytes='';
+ t.mock.method(service as any,'complete',async(...args:any[])=>{
+  if(!seeded&&args[2]===documentaryGroundedIllustrationQualityInstruction){
+   seeded=true;
+   try{await original(args[0],args[1],documentaryGroundedIllustrationQualityInstructionV1,args[3],args[4]);}catch{/* Save the unresolved receipt for the actual path below. */}
+   oldBytes=(await receipts())[0]!.bytes;
+  }
+  return original(...args);
+ });
+ if(priorState==='complete'){
+  const result=await service.inspectForSelection(project,scene);
+  assert.equal(result.review.status,'rejected');assert.match(result.review.reason,/существенный предмет|sailcloth/);
+  assert.equal(calls,2,'One settled predecessor permits one corrected question');
+  assert.equal((await service.inspectForSelection(project,scene)).review.status,'rejected');assert.equal(calls,2,'New verdict resumes from its own receipt');
+ }else{
+  await assert.rejects(service.inspectForSelection(project,scene),/неизвестный результат/);
+  assert.equal(calls,1,'A corrected prompt cannot repay an unresolved old request');
+ }
+ assert.ok((await receipts()).some(receipt=>receipt.bytes===oldBytes),'Original paid bytes stay intact');
 });
 
 test('visible target and text relevance are independent gates, including ordinary physical markings',()=>{

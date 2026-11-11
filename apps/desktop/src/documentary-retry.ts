@@ -90,6 +90,17 @@ export const documentarySelectionRetry = new AsyncLocalStorage<
 >();
 export class DocumentarySelectionRetryProbePassed extends Error {}
 
+/** Also guard callers resuming the original exact receipt without retry scope.
+ * The original grant stays readable for byte-matched cached-result recovery. */
+export async function documentarySelectionRetryWasDispatched(directory:string,id:string):Promise<boolean>{
+  for(const file of await readdir(directory)){
+    if(!/^[a-f0-9]{64}\.json$/.test(file))continue;
+    const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
+    if(receipt?.purpose==='visual-illustration'&&receipt.singleReviewBinding?.groundedRetryOrigin===id)return true;
+  }
+  return false;
+}
+
 type RetryRequest={id:string;purpose:string;model?:string;binding?:{checksum:string;taskKey?:string;start:number;end:number};legacyTaskKey?:string;existing:boolean;
   groundedTask?:{sceneId:string;narration:string;originalScript:string;grounding:DocumentaryAiPlanGrounding}};
 
@@ -115,7 +126,7 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
   if(!exact&&!narrative&&!grounded)throw mismatch();
   const current=await readDocumentarySelectionRetryGrant(directory,grant.id);
   if(!current||current.revision!==grant.revision||current.approvedAt!==grant.approvedAt)throw mismatch();
-  if(narrative||grounded){
+  {
     // A different file revision or prompt key must not commission this same
     // narrative check a second time after its first dispatch.
     for(const file of await readdir(directory)){
@@ -124,7 +135,7 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
       const prior=receipt?.singleReviewBinding;
       if(receipt?.purpose===request.purpose&&receipt.model===request.model&&prior?.checksum===binding.checksum
         &&prior.start===binding.start&&prior.end===binding.end
-        &&(prior.taskKey===binding.taskKey||grounded&&prior.groundedRetryOrigin===grant.id))throw mismatch();
+        &&(prior.groundedRetryOrigin===grant.id||!exact&&prior.taskKey===binding.taskKey))throw mismatch();
     }
   }
   if(scope.probe)throw new DocumentarySelectionRetryProbePassed();
