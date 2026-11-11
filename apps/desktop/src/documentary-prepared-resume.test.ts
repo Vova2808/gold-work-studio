@@ -34,11 +34,15 @@ for(const mode of ['ordinary','pending','ai-illustrative','ai-fallback'] as cons
  p=await projects.mutate(p.id,()=>p);let newReviews=0,downloads=0,searches=0;
  const planner=mode.startsWith('ai-')?new DocumentaryAiQueryPlanner({documentaryQueryModel:async()=> 'fixture-text',documentaryCompletion:async(_system:string,input:string)=>
    JSON.stringify({scenes:JSON.parse(input).requestedScenes.map((row:{sceneId:string})=>({sceneId:row.sceneId,subject:'bird',visualTarget:'bird moving in a tree',years:[],visualScope:mode==='ai-fallback'?'exact':'illustrative',
-     preferredKind:'video',imageQueries:['bird tree photo'],videoQueries:['bird moving tree'],fallbackVideoQueries:mode==='ai-fallback'?['bird in tree']:[],fallbackVisualTarget:mode==='ai-fallback'?'bird in a tree':''}))})} as unknown as AnyModelClient,id=>join(root,'plans',id)):undefined;
+     grounding:{version:1,mandatory:[{kind:'identity',required:'bird',scriptQuote:'A bird moves in a tree.'},
+       {kind:'action',required:'bird moving in a tree',scriptQuote:'A bird moves in a tree.'}],
+       illustrations:['Footage of a bird moving in a tree illustrates the narrated subject and action.'],optionalDetails:[]},
+     reservePolicy:'thematic',preferredKind:'video',imageQueries:['bird tree photo'],videoQueries:['bird moving tree'],
+     fallbackVideoQueries:mode==='ai-fallback'?['bird moving tree branch']:[],fallbackVisualTarget:mode==='ai-fallback'?'bird moving on a tree branch':''}))})} as unknown as AnyModelClient,id=>join(root,'plans',id)):undefined;
  if(mode==='ai-fallback'){
   const requirement=(await planner!.plan(p,p.scenes)).get(s.id)!;
   p=await projects.mutate(p.id,current=>({scenes:current.scenes.map(scene=>({...scene,documentary:{...scene.documentary!,requirement:{...requirement,
-    footageFallback:{version:1,target:'bird in a tree',queries:['bird in tree'],narration:scene.narration,originalTarget:requirement.aiSearchPlan!.visualTarget,reason:'Fixture exact search failed'}}}}))}));
+    footageFallback:{version:1,target:'bird moving on a tree branch',queries:['bird moving tree branch'],narration:scene.narration,originalTarget:requirement.aiSearchPlan!.visualTarget,reason:'Fixture exact search failed'}}}}))}));
  }
  let savedReview:Awaited<ReturnType<import('./documentary-intelligence.js').DocumentaryIntelligence['inspectForSelection']>>['review']|undefined;
  const search=new DocumentarySearch();search.search=async()=>{searches++;return {candidates:[],sources:[]};};
@@ -48,7 +52,10 @@ for(const mode of ['ordinary','pending','ai-illustrative','ai-fallback'] as cons
     if(pending)throw new DocumentaryAnalysisError('Прежний оплаченный просмотр имеет неизвестный результат','pending');
     if(cacheOnly){if(savedReview)return {usedNewAnalysis:false,review:savedReview};throw new DocumentaryCachedAnalysisMissing();}
     newReviews++;
+    // Semantic verdicts are mocked; the generated pattern only exercises real
+    // local file/poster handling. It is not evidence of a photographed bird.
     const review={status:'accepted' as const,confidence:1,reason:'Mock orchestration evidence only',quality:'',sampleSeconds:[.12,2,3.88],checkedAt:'now',trimStartSeconds:0,trimEndSeconds:4,
+      footageOrigin:'camera' as const,viewDescription:'Mock verdict: a bird moves on a tree branch in continuous camera footage.',
       fastRelevance:{version:1 as const,target:planFastDocumentaryScene(project,scene).visualTarget,relevant:true,evidence:'Fixture bird subject moves in the tree'}};
     savedReview={...review,illustrationApproval:documentaryIllustrationApproval(project,{...scene,trimStartSeconds:0,trimEndSeconds:4,documentary:{...scene.documentary!,visualReview:review}})};
     return {usedNewAnalysis:true,review:savedReview};
