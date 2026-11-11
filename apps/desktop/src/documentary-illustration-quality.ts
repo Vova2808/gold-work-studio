@@ -138,6 +138,12 @@ function documentaryForegroundSubjectIssue(target:string,value:Record<string,unk
   const evidence=[value.description??value.viewDescription,value.targetEvidence].filter(item=>typeof item==='string').join('\n');
   const clauses=evidence.split(/[.!?;\n]+|\b(?:while|whereas|but)\b/iu).map(clause=>clause.trim()).filter(Boolean);
   const affirmative=(clause:string)=>! /\b(?:no|not|without|never|isn't|doesn't)\b/iu.test(clause);
+  const targetClauses=clauses.filter(clause=>affirmative(clause)&&hasTarget(clause));
+  const incidental=targetClauses.some(clause=>/\b(?:tiny|incidental|unreadable|indistinct)\b|\b(?:too small|barely visible)\b/iu.test(clause));
+  const readable=targetClauses.some(clause=>/\b(?:clearly|plainly|fully|independently)\s+(?:readable|legible)\b|\bclearly visible\b[^.!?;]*\b(?:fine|detailed|distinctive)\b[^.!?;]*\b(?:details?|features?|structure)\b/iu.test(clause));
+  // Depth alone is not prominence: a clearly readable whole subject may
+  // remain behind another vessel/person in an informative wide composition.
+  if(readable&&!incidental)return;
   const behind=clauses.some(clause=>affirmative(clause)&&hasTarget(clause)&&/\b(?:background|far distance)\b/iu.test(clause));
   const dominantOther=clauses.some(clause=>affirmative(clause)&&!hasTarget(clause)&&category.test(clause)
     &&/\bforeground\b/iu.test(clause)&&/\b(?:large|larger|huge|massive|dominant|dominates|dominating)\b|\b(?:fills?|occupies|takes? up)\s+(?:most|much)\b/iu.test(clause));

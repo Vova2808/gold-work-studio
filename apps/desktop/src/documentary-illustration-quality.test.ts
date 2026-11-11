@@ -44,6 +44,8 @@ test('a named background subject cannot borrow a dominant different foreground o
   ['Aurora ship','Aurora appears in the background. There is no large vessel in the foreground.'],
   ['Aurora ship','A large ship dominates the foreground. A small distant ship is visible behind it.'],
   ['Aurora ship','Aurora is clearly visible with fine hull and rigging details. A large ship passes across the foreground.'],
+  ['Aurora ship','Aurora is clearly readable in the background with detailed hull and rigging. A large vessel occupies the foreground.'],
+  ['Aurora ship','Aurora is clearly visible in the background with fine hull and rigging details. A large vessel occupies the foreground.'],
   ['Suez Canal with shipping','Suez Canal is in the background. A large vessel dominates the foreground.'],
   ['Wide view of Aurora ship in its setting','Aurora is in the background. A large ship occupies the foreground.'],
   ['Aurora and Borealis ships together','Aurora is in the background. A large vessel occupies the foreground.'],
@@ -52,6 +54,9 @@ test('a named background subject cannot borrow a dominant different foreground o
  ])assert.equal(check(target!,description!),undefined,target);
  assert.equal(documentaryIllustrationQualityIssue('Aurora ship',{...clean,description:'Aurora is plainly shown.',
   sourceText:{kind:'physical',text:'Aurora in the background. A large ship occupies the foreground.'}},true),undefined,'Source text is not observed composition');
+ assert.equal(documentaryIllustrationQualityIssue('Aurora ship',{...clean,
+  description:'Aurora is in the background. A large vessel occupies the foreground.',
+  targetEvidence:'Aurora remains clearly readable with detailed hull and rigging.'},true),undefined,'Positive readability evidence permits the wide composition');
 });
 
 test('prominence wording preserves V3 identities and explicitly permits informative geographic and wide views',()=>{
