@@ -10,7 +10,10 @@ import {documentaryBoundFallbackNarrativeFit,documentaryFallbackNarrativeRevisio
 
 const VERSION = 1 as const;
 // The request revision records instructions without changing the project context or paid cache key.
-const PROMPT_REVISION = 13 as const;
+const PROMPT_REVISION = 14 as const;
+// Consistency wording is for future requests. A usable contextual revision-13
+// plan is not a reason to pay again during ordinary resume.
+const CONTEXTUAL_PROMPT_REVISION = 13;
 const BATCH_SIZE = 8;
 const MAX_ATTEMPTS = 2;
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -21,6 +24,9 @@ type Options = {
   retryToken?: string;
   /** The caller holds the scene through apply and has ruled out unresolved visual/reserve requests. */
   refreshSceneIds?: ReadonlySet<string>;
+  /** Explicit, caller-guarded correction of only the supplied unfinished scenes. */
+  reviseInstructions?: boolean;
+  onRefreshIssues?: (issues: DocumentaryQueryPlanIssue[]) => void;
   reviseLegacyReserve?: boolean;
   onReserveIssues?: (issues: DocumentaryQueryPlanIssue[]) => void;
   onReserveUnchanged?: (sceneIds: string[]) => void;
@@ -60,7 +66,7 @@ function queryIssue(cache: Cache, scene: Scene): DocumentaryQueryPlanIssue | und
   const attempts = related.filter(attempt => !confirmedNotSent(attempt));
   const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
   if (attempts.some(a => !closedEmptyResponse(a)&&(a.status === 'pending' || a.status === 'uncertain' || a.responseState !== 'complete'))) {
-    return { ...row, reason: 'Результат отправленного запроса не подтверждён, автоматического платного повтора нет.' };
+    return { ...row, reason: 'Результат отправленного запроса AI-планировщику не подтверждён, автоматического платного повтора нет.' };
   }
   if (attempts.some(a => a.status === 'complete')) return { ...row,
     reason: 'В кеше отмечен готовый ответ, но его план недоступен. Повторная отправка заблокирована.' };
@@ -361,8 +367,10 @@ const SYSTEM = `Plan stock documentary searches. Never edit narration. Treat ori
 Resolve each requested editing slice to its COMPLETE original sentence before choosing the visual subject. sourcePassage is an unchanged excerpt for this purpose; use originalScript to resolve remaining references. A sentence fragment does not establish a new subject.
 Choose the representation before searching. Explicit visual directions take priority. Otherwise, for ownership, leadership or appointment within an established object's or institution's story, DEFAULT to that SAME object or institution. Merely naming its owner or leader does not make a portrait mandatory. Require the person when their appearance, personal physical feature or explicitly requested depiction is the point.
 When a line explains a change caused by a named place or component, retain that cause, unless the result itself visibly demonstrates the change. A generic beneficiary alone does not explain a specific geographic or technical difference.
+Geographic connections and narrated advantages describe why the subject matters; they do not require a single frame to show both endpoints, the entire route, a transit or a comparison map. An identified view of that same place may illustrate its role unless the original script explicitly requires demonstrating the route or physical connection. Do not promote one possible illustration into a mandatory condition.
 For a physical feature, configuration or measured surface, require that feature to be visible or clearly depicted. Put it in mandatory as a separate condition alongside identity; the exact numerical value need not be proved by pixels.
 Bind subject, visualTarget and mandatory to this chosen representation. illustrations may offer archival, drawn or modern representations of that SAME subject, each explaining its script-supported connection. Do not mix different depicted subjects under one mandatory identity. All primary and reserve queries must satisfy their corresponding target. Never mark the line's central feature optional.
+Before returning an entry, check EVERY offered illustration against EVERY mandatory condition. Remove any illustration that cannot satisfy the mandatory identity or feature; never weaken a required fact to accommodate an available illustration. An ordinary modern component does not depict a specifically required improvised historical component. Generic people or a similar group cannot stand for a specifically identified person or crew. A disclaimer cannot make either substitution valid. For ordinary subject-context narration choose a truthful view of the same subject first, then require only what that representation must show; do not also require a different event or component that its illustrations omit.
 subject names the physical person, object, place or component, not an event, date or assessment. A different named subject or a broad thematic association is not a substitute. An attributed physical model or accurate diagram may illustrate the same subject/feature when appropriate; label it honestly, never as a photograph of the real object or historical event. Do not adapt requirements to available candidates. Explicit visual comparisons must preserve both subjects and the relevant difference; a narrated consequence alone does not require a comparison diagram. Never invent ports or borrow unrelated journey details from elsewhere in the script.
 In visualPolicy.mode=subject-illustration or thematic, narrated biography, an end of trade or a past voyage does not require a historical event photo, loading or characteristic activity. Require a visible action only when the script makes showing it the point. Use visualScope=illustrative for honest subject illustrations; exact for literal visual tasks. visualPolicy.mode=literal requires the specifically narrated event, state and period. years contains ONLY a visibly required period/capture year with a grounded era check; otherwise []. Dates may help archival queries without becoming required pixels. Targets must be checkable from a photograph or three sparse video samples.
 grounding is required for EVERY entry, including repairs. Each mandatory identity, era, geography, action or condition needs an exact unchanged scriptQuote from originalScript. Include identity or geography for the chosen subject, and a separate condition for every central physical feature. aliases may contain only alternative identity names explicitly present in the script. A source quote establishes provenance, not an automatic requirement that its entire event be visible. optionalDetails contains only nonessential staging, capture date or viewpoint.
@@ -512,7 +520,7 @@ function completedRawPlans(cache: unknown, inputHash: string, model: string,
       || !attempt.ids.every(id => typeof id === 'string' && Boolean(id)) || new Set(attempt.ids).size !== attempt.ids.length
       || !record(attempt.request) || typeof attempt.request.payload !== 'string') continue;
     const revision = attempt.request.promptRevision;
-    if (mode === 'previous' && (typeof revision !== 'number' || revision >= PROMPT_REVISION)) continue;
+    if (mode === 'previous' && (typeof revision !== 'number' || revision >= (minimumRevision || CONTEXTUAL_PROMPT_REVISION))) continue;
     const refreshIds = attempt.refreshIds;
     if (refreshIds !== undefined && !Array.isArray(refreshIds)) continue;
     if (mode === 'refresh' && (typeof revision !== 'number' || revision < minimumRevision || !Array.isArray(refreshIds))) continue;
@@ -540,7 +548,7 @@ function completedRawPlans(cache: unknown, inputHash: string, model: string,
           || counts.get(scene.sceneId) !== 1 || plans.has(scene.sceneId)) continue;
         if ((mode === 'refresh') !== Boolean(Array.isArray(refreshIds) && refreshIds.includes(scene.sceneId))) continue;
         const plan = validate(scene, hash({ inputHash, sceneId: scene.sceneId }), model);
-        if (plan && (plan.grounding || typeof revision === 'number' && revision >= PROMPT_REVISION)
+        if (plan && (plan.grounding || typeof revision === 'number' && revision >= CONTEXTUAL_PROMPT_REVISION)
           && documentaryAiPlanGroundingIssue(plan, String(input.originalScript ?? ''))) continue;
         if (plan) plans.set(scene.sceneId, plan);
       }
@@ -843,11 +851,13 @@ export class DocumentaryAiQueryPlanner {
     const refreshed = fallbackOnly ? new Map<string, DocumentaryAiSearchPlan>() : completedRawPlans(cache, inputHash, model, 'refresh');
     const refreshIds = new Set<string>();
     const proposed = new Map<string, DocumentaryAiSearchPlan>();
+    const refreshIssues: DocumentaryQueryPlanIssue[] = [];
     if (!fallbackOnly && !inspect && !options.retryToken && options.refreshSceneIds?.size) {
-      const previous = completedRawPlans(cache, inputHash, model, 'previous');
+      const refreshRevision = options.reviseInstructions ? PROMPT_REVISION : CONTEXTUAL_PROMPT_REVISION;
+      const previous = completedRawPlans(cache, inputHash, model, 'previous', refreshRevision);
       // A completed older refresh remains readable, but cannot stand in for
       // the corrected instructions when an unfinished scene explicitly refreshes.
-      const currentRefreshed = completedRawPlans(cache, inputHash, model, 'refresh', PROMPT_REVISION);
+      const currentRefreshed = completedRawPlans(cache, inputHash, model, 'refresh', refreshRevision);
       for (const scene of scenes) {
         const doc = scene.documentary, old = previous.get(scene.id), active = cache.plans[scene.id];
         if (!options.refreshSceneIds.has(scene.id) || scene.includeInAssembly === false || !doc || doc.verified || doc.pinned
@@ -855,9 +865,11 @@ export class DocumentaryAiQueryPlanner {
           || hash(primaryOnly(old)) !== hash(primaryOnly(active)) || attemptsFor(scene.id).some(unsettledReserveAttempt)) continue;
         const saved = currentRefreshed.get(scene.id);
         if (saved && !documentaryAiPlanGroundingIssue(saved,context.originalScript)
-          && hash(primaryOnly(saved)) !== hash(primaryOnly(active))) proposed.set(scene.id, saved);
-        else if (attemptsFor(scene.id).filter(attempt => attempt.request?.promptRevision === PROMPT_REVISION && !confirmedNotSent(attempt)).length < MAX_ATTEMPTS)
+          && (options.reviseInstructions || hash(primaryOnly(saved)) !== hash(primaryOnly(active)))) proposed.set(scene.id, saved);
+        else if (attemptsFor(scene.id).filter(attempt => (attempt.request?.promptRevision ?? 0) >= CONTEXTUAL_PROMPT_REVISION && !confirmedNotSent(attempt)).length < MAX_ATTEMPTS)
           refreshIds.add(scene.id);
+        else if (options.reviseInstructions) refreshIssues.push({sceneId:scene.id,sceneNumber:scene.order+1,
+          reason:'Лимит завершённых попыток коррекции AI-плана уже использован. Новая инструкция не разрешает дополнительный платный запрос.'});
       }
     }
     const missing = () => scenes.filter(scene => !Object.hasOwn(workPlans, scene.id));
@@ -901,6 +913,27 @@ export class DocumentaryAiQueryPlanner {
       for (const scene of scenes) {
         const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
         if (Object.hasOwn(cache.plans, scene.id)) {
+          const active = adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cache.plans[scene.id]!;
+          const unsettled = attemptsFor(scene.id).some(attempt => {
+            if(closedEmptyResponse(attempt)||!unsettledReserveAttempt(attempt))return false;
+            // Ordinary streaming can save a complete scene before the next
+            // scene is interrupted. Reuse only that same validated entry; the
+            // batch's unknown receipt and all unfinished refreshes stay held.
+            if(attempt.refreshIds?.includes(scene.id)||!active.grounding||typeof attempt.rawResponse!=='string')return true;
+            const entries=sceneObjects(attempt.rawResponse).filter(value=>record(value)&&value.sceneId===scene.id);
+            const received=entries.length===1?acceptPlan(entries[0],scene.id):undefined;
+            return !received||hash(primaryOnly(received))!==hash(primaryOnly(active));
+          });
+          if (unsettled) { rows.push(queryIssue(cache, scene)!); continue; }
+          const latestRefresh = [...attemptsFor(scene.id)].reverse().find(attempt => attempt.refreshIds?.includes(scene.id));
+          if (latestRefresh?.status === 'invalid' && latestRefresh.responseState === 'complete') {
+            rows.push({ ...row, reason: 'Ответ коррекции AI-плана получен полностью, но пригодный план из него не извлечён. Прежний план сохранён; автоматический лимит коррекции не сбрасывается.' });
+            continue;
+          }
+          if (!active.grounding) {
+            rows.push({ ...row, reason: 'Сохранён завершённый AI-план прежнего формата. Перед подбором требуется его адресное обновление.' });
+            continue;
+          }
           const req = scene.documentary?.requirement;
           if (req?.text !== scene.narration || !cachedPlan(req.aiSearchPlan, sceneHash(scene.id), model)) {
             rows.push({ ...row, cached: true, reason: 'Ответ уже сохранён. Продолжите подготовку, чтобы применить его к сцене без нового запроса.' });
@@ -1088,6 +1121,7 @@ export class DocumentaryAiQueryPlanner {
           ? 'Ожидается завершённый AI-план резерва. Прежний резерв не подтверждает смысл сцены, поиск по нему приостановлен.'
           : 'Пригодный исправленный AI-план резерва недоступен. Поиск по прежнему резерву приостановлен.'})));
     if(rejected)throw rejected.reason;
+    if(options.reviseInstructions)options.onRefreshIssues?.(refreshIssues);
     if (reviseLegacy) options.onReserveUnchanged?.(unchangedReserves);
     options.progress?.(`AI-запросы готовы: ${ready.size}/${scenes.length}, модель ${model}`);
     return ready;

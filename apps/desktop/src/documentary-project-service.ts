@@ -1694,7 +1694,7 @@ export class DocumentaryProjectService {
     private readonly library?: EffectLibrary,
     private readonly youtube?: Pick<DocumentaryYouTube, "download"> & Partial<Pick<DocumentaryYouTube, "downloadAvailable"|"preview">>,
     private readonly queryPlanner?: {readIssues?(project:Project,scenes:Scene[]):Promise<DocumentaryQueryPlanIssue[]>;
-      plan(project:Project,scenes:Scene[],options?:{signal?:AbortSignal;progress?:(message:string)=>void;retryToken?:string;refreshSceneIds?:ReadonlySet<string>}):Promise<Map<string,DocumentaryRequirement>>;
+      plan(project:Project,scenes:Scene[],options?:{signal?:AbortSignal;progress?:(message:string)=>void;retryToken?:string;refreshSceneIds?:ReadonlySet<string>;reviseInstructions?:boolean;onRefreshIssues?:(issues:DocumentaryQueryPlanIssue[])=>void}):Promise<Map<string,DocumentaryRequirement>>;
       readCached?(project:Project,scenes:Scene[]):Promise<Map<string,DocumentaryRequirement>>;
       planFallbacks?(project:Project,scenes:Scene[],options?:{signal?:AbortSignal;progress?:(message:string)=>void;reviseLegacyReserve?:boolean;
         onReserveIssues?:(issues:DocumentaryQueryPlanIssue[])=>void;onReserveUnchanged?:(sceneIds:string[])=>void}):Promise<Map<string,DocumentaryRequirement>>;
@@ -1793,7 +1793,10 @@ export class DocumentaryProjectService {
   async getDocumentaryQueryPlanIssues(projectId:string):Promise<DocumentaryQueryPlanIssue[]> {
     const project=await this.projects.get(projectId,{omitCandidates:true});
     if(!project||!this.queryPlanner?.readIssues||project.mediaMode!=='stock'||project.settings.assembly.documentary?.version!==2)return [];
-    return this.queryPlanner.readIssues(project,project.scenes.filter(scene=>scene.includeInAssembly!==false&&!scene.documentary?.pinned&&!documentaryMaterialUsable(scene)));
+    const scenes=project.scenes.filter(scene=>scene.includeInAssembly!==false&&!scene.documentary?.pinned&&!documentaryMaterialUsable(scene));
+    const issues=await this.queryPlanner.readIssues(project,scenes),blocked=new Map<string,string>();
+    if(issues.length)await this.queryRefreshScope(project,scenes,undefined,{blocked});
+    return issues.map(issue=>blocked.has(issue.sceneId)?{...issue,reason:blocked.get(issue.sceneId)!}:issue);
   }
 
   retryDocumentaryQueryPlan(projectId:string,sceneId:string,retryToken:string):Promise<Project> {
@@ -1801,7 +1804,7 @@ export class DocumentaryProjectService {
     return this.planSearch(projectId,[sceneId],undefined,{refreshReady:true,retryToken});
   }
 
-  async planSearch(projectId: string, sceneIds?: string[],signal?:AbortSignal,options?:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean}): Promise<Project> {
+  async planSearch(projectId: string, sceneIds?: string[],signal?:AbortSignal,options?:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean;reviseInstructions?:boolean}): Promise<Project> {
     const controller=new AbortController();
     const controllers=this.planningControllers.get(projectId)??new Set<AbortController>();
     const runs=this.planningRuns.get(projectId)??new Set<Promise<Project>>();
@@ -1823,12 +1826,14 @@ export class DocumentaryProjectService {
     }
   }
 
-  private async queryRefreshScope(project:Project,scenes:Scene[],signal?:AbortSignal):Promise<Set<string>>{
+  private async queryRefreshScope(project:Project,scenes:Scene[],signal?:AbortSignal,options:{blocked?:Map<string,string>;reviseInstructions?:boolean}={}):Promise<Set<string>>{
     const originalScript=documentaryAiPlanContext(project).originalScript;
     const eligible=scenes.filter(scene=>{
       const doc=scene.documentary;
-      if(!doc?.autoError||doc.autoError===documentaryMissingSelectedMaterialMessage||doc.verified||doc.pinned||doc.manualReview||doc.visualReview?.status==='accepted'
+      if(!doc||doc.verified||doc.pinned||doc.manualReview||doc.visualReview?.status==='accepted'
         ||!currentDocumentaryAiSearchPlan(project,scene))return false;
+      if(options.reviseInstructions)return true;
+      if(!doc.autoError||doc.autoError===documentaryMissingSelectedMaterialMessage)return false;
       // Legacy plans may add requirements that the script never made. Refresh
       // only unfinished scenes, under the same paid-receipt guards below.
       if(documentaryAiPlanGroundingIssue(doc.requirement.aiSearchPlan,originalScript))return true;
@@ -1838,6 +1843,8 @@ export class DocumentaryProjectService {
     });
     const ids=new Set(eligible.map(scene=>scene.id));
     if(!ids.size)return ids;
+    const block=(id:string,reason:string)=>{if(ids.delete(id))options.blocked?.set(id,reason);};
+    const holdAll=(reason:string)=>{for(const id of [...ids])block(id,reason);return ids;};
     const root=this.storage.projectDirectory(project.id);
     const checkpoints=async (directory:string)=>(await readdir(directory).catch((error:NodeJS.ErrnoException)=>{
       if(error.code==='ENOENT')return [];
@@ -1850,11 +1857,11 @@ export class DocumentaryProjectService {
         for(const name of await checkpoints(directory)){
           signal?.throwIfAborted();
           const saved=JSON.parse(await readFile(join(directory,name),'utf8'));
-          if(!Array.isArray(saved?.attempts))return new Set();
+          if(!Array.isArray(saved?.attempts))return holdAll('Обновление плана заблокировано: история отправленных AI-запросов недоступна или повреждена. Автоматического платного повтора нет.');
           for(const attempt of saved.attempts){
             if(attempt?.responseState==='complete'&&['complete','invalid'].includes(attempt.status))continue;
-            if(!Array.isArray(attempt?.ids)||!attempt.ids.every((id:unknown)=>typeof id==='string'))return new Set();
-            for(const id of attempt.ids)ids.delete(id);
+            if(!Array.isArray(attempt?.ids)||!attempt.ids.every((id:unknown)=>typeof id==='string'))return holdAll('Обновление плана заблокировано: неизвестна принадлежность прежнего AI-запроса. Автоматического платного повтора нет.');
+            for(const id of attempt.ids)block(id,'Результат отправленного запроса AI-планировщику не подтверждён. Прежний план сохранён; автоматического платного повтора нет.');
           }
         }
       }
@@ -1865,8 +1872,8 @@ export class DocumentaryProjectService {
         const saved=JSON.parse(await readFile(join(analysis,name),'utf8'));
         if(saved?.state==='complete'&&saved.result||['failed','rejected','invalid'].includes(saved?.state))continue;
         const narration=saved?.singleReviewBinding?.quality?.narration;
-        if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))return new Set();
-        for(const scene of eligible)if(scene.narration===narration)ids.delete(scene.id);
+        if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))return holdAll('Обновление плана заблокировано: неизвестна принадлежность прежней проверки материала. Автоматического платного повтора нет.');
+        for(const scene of eligible)if(scene.narration===narration)block(scene.id,'Прежний план сохранён. Его обновление заблокировано: предыдущая визуальная проверка материала имеет неизвестный результат. Автоматического платного повтора нет.');
       }
       const retryModel=(await this.intelligence?.selectionReviewIdentity?.())?.model;
       const grants=retryModel?(await readDocumentarySelectionRetryEvidence(root,retryModel)).grants:[];
@@ -1888,13 +1895,14 @@ export class DocumentaryProjectService {
           });
           if(raw===undefined)continue;
           const saved=JSON.parse(raw);
-          if(saved?.version!==1||!Array.isArray(saved.keys)||saved.keys.some((key:unknown)=>typeof key!=='string'||!authorizedKeys.has(key)))ids.delete(scene.id);
+          if(saved?.version!==1||!Array.isArray(saved.keys)||saved.keys.some((key:unknown)=>typeof key!=='string'||!authorizedKeys.has(key)))
+            block(scene.id,'Прежний план сохранён. Его обновление заблокировано отметкой о незавершённой проверке сохранённого источника. Завершённые проверки других сцен не снимают эту блокировку.');
         }
       }
     }catch(error){
       signal?.throwIfAborted();
       recordDiagnosticEvent('warn','documentary.query-refresh.checkpoints-unavailable',{projectId:project.id});
-      return new Set();
+      return holdAll('Обновление плана заблокировано: не удалось прочитать историю оплаченных проверок. Автоматического платного повтора нет.');
     }
     return ids;
   }
@@ -1919,8 +1927,12 @@ export class DocumentaryProjectService {
     },{candidateSceneIds:[]});
   }
 
-  private async planSearchPrepared(projectId:string,sceneIds?:string[],signal?:AbortSignal,options:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean}={}):Promise<Project>{
+  private async planSearchPrepared(projectId:string,sceneIds?:string[],signal?:AbortSignal,options:{refreshReady?:boolean;retryToken?:string;cachedOnly?:boolean;beforeSelection?:boolean;allowActiveNarration?:boolean;reviseInstructions?:boolean}={}):Promise<Project>{
     const {refreshReady,retryToken,cachedOnly}=options;
+    if(options.reviseInstructions&&(!sceneIds?.length||refreshReady||retryToken||cachedOnly))
+      throw new Error('Для коррекции инструкций укажите конкретные непринятые сцены без другого режима повтора.');
+    if(options.reviseInstructions&&(!this.queryPlanner||this.autoRuns.has(projectId)))
+      throw new Error('Адресная коррекция AI-плана доступна после остановки текущего подбора.');
     signal?.throwIfAborted();
     let project = await this.projects.get(projectId);
     if (!project) throw new Error("Проект не найден");
@@ -1950,29 +1962,41 @@ export class DocumentaryProjectService {
       const pending=project.scenes.filter(scene=>inScope(scene)&&scene.includeInAssembly!==false&&!scene.documentary?.pinned&&!preservedReady.has(scene.id)
         &&(refreshReady||!documentaryLegacyFallbackNarrativeApproval(project!,scene)));
       if(!pending.length)return project;
+      const refreshBlocked=new Map<string,string>();
       const refreshSceneIds=!refreshReady&&!retryToken&&!cachedOnly&&(!this.autoRuns.has(projectId)||options.beforeSelection)
-        ?await this.queryRefreshScope(project,pending,signal):new Set<string>();
+        ?await this.queryRefreshScope(project,pending,signal,{blocked:refreshBlocked,reviseInstructions:options.reviseInstructions}):new Set<string>();
       const toApply=cachedOnly?new Set((await this.queryPlanner.readIssues!(project,pending)).filter(row=>row.cached).map(row=>row.sceneId)):undefined;
       let plan:Map<string,DocumentaryRequirement>,planningError:string|undefined;
       let issues:DocumentaryQueryPlanIssue[]=[];
-      try{plan=cachedOnly?await this.queryPlanner.readCached!(project,pending):await this.queryPlanner.plan(project,pending,{signal,retryToken,refreshSceneIds,
+      try{plan=cachedOnly?await this.queryPlanner.readCached!(project,pending):await this.queryPlanner.plan(project,pending,{signal,retryToken,refreshSceneIds,reviseInstructions:options.reviseInstructions,
+        onRefreshIssues:rows=>{issues.push(...rows);},
         progress:message=>this.publish({projectId,phase:'preparing',completed:0,total:pending.length,selected:0,skipped:0,failed:0,message})});}
       catch(error){
         signal?.throwIfAborted();
         if(cachedOnly)throw error;
         plan=await this.queryPlanner.readCached?.(project,pending)??new Map<string,DocumentaryRequirement>();
-        if(error instanceof QueryPlanIssuesError)issues=error.issues;
+        if(error instanceof QueryPlanIssuesError)issues.push(...error.issues);
         planningError=String(error).replace(/https?:\/\/\S+/g,'[URL]').slice(0,1200);
       }
+      // A completed refresh is staged until apply below. Diagnose the returned
+      // proposal, not the superseded scene copy, without changing either receipt.
+      const issueProject={...project,scenes:project.scenes.map(scene=>plan.has(scene.id)
+        ?{...scene,documentary:{...scene.documentary!,requirement:plan.get(scene.id)!}}:scene)};
+      const pendingIds=new Set(pending.map(scene=>scene.id));
+      const savedIssues=await this.queryPlanner.readIssues?.(issueProject,issueProject.scenes.filter(scene=>pendingIds.has(scene.id)))??[];
+      const issueById=new Map([...savedIssues,...issues].map(issue=>[issue.sceneId,issue]));
       for(const scene of pending){
         const requirement=plan.get(scene.id);
         if(!requirement)continue;
         const groundingIssue=documentaryAiPlanGroundingIssue(requirement.aiSearchPlan,documentaryAiPlanContext(project).originalScript);
-        if(groundingIssue){
+        const savedIssue=issueById.get(scene.id);
+        if(groundingIssue||savedIssue&&!savedIssue.cached||options.reviseInstructions&&refreshBlocked.has(scene.id)){
           plan.delete(scene.id);
-          issues.push({sceneId:scene.id,sceneNumber:scene.order+1,reason:groundingIssue});
+          issueById.set(scene.id,{sceneId:scene.id,sceneNumber:scene.order+1,
+            reason:refreshBlocked.get(scene.id)??savedIssue?.reason??groundingIssue!});
         }
       }
+      issues=[...issueById.values()];
       const missing=pending.filter(scene=>!plan.has(scene.id));
       const reason=issues.length?` ${formatQueryIssues(issues)}`:planningError?` Причина: ${planningError.replace(/^Error:\s*/, '').slice(0,300)}`:'';
       const applyPlans=(current:Project)=>{
@@ -2048,6 +2072,7 @@ export class DocumentaryProjectService {
         const scope=project.scenes.filter(scene=>scene.includeInAssembly!==false&&!scene.documentary?.pinned);
         reportPlans=await this.queryPlanner.readCached(project,scope);
         reportIssues=await this.queryPlanner.readIssues(project,scope.filter(scene=>!documentaryMaterialUsable(scene)));
+        reportIssues=[...new Map([...reportIssues,...issues.filter(issue=>!issue.cached)].map(issue=>[issue.sceneId,issue])).values()];
         const problemIds=new Set(reportIssues.map(issue=>issue.sceneId));
         reportMissing=scope.filter(scene=>problemIds.has(scene.id)||(!reportPlans.has(scene.id)&&!documentaryMaterialUsable(scene)));
       }

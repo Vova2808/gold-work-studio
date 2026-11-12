@@ -140,7 +140,7 @@ for(const sample of [
   assert.equal(row.narration,sample.line);
 });
 
-for(const status of ['pending','uncertain'] as const)test(`revision 13 keeps an unresolved revision 12 ${status} receipt despite the new source passage`,async t=>{
+for(const status of ['pending','uncertain'] as const)test(`revision 14 keeps an unresolved revision 12 ${status} receipt despite the new source passage`,async t=>{
   const f=await fixture(t,async()=>{throw new AnyModelCompletionUncertainError('Unknown paid response','{"scenes":[','connection');});
   const scenes=scenesOf('The canal opened.'),project=projectOf(scenes);
   await assert.rejects(f.planner().plan(project,scenes));
@@ -839,7 +839,7 @@ test('cache-only read does not wait for a pending completion to settle', async t
   assert.equal((await running).size, 2);
 });
 
-test('prompt revision 13 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
+test('prompt revision 14 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
   const expected = [
     entry('scene-0', { subject: 'Yamaha YZR-M1', visualTarget: 'Yamaha YZR-M1 motorcycle cornering', years: ['2003'],
       imageQueries: ['Yamaha YZR-M1 2003 cornering'], videoQueries: ['Yamaha YZR-M1 2003 race footage'],
@@ -888,7 +888,7 @@ test('prompt revision 13 separates narrated history from required pixels and pre
   const file = path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!);
   const cache = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(cache.version, 1, 'Prompt change does not silently invalidate already paid v1 receipts');
-  assert.equal(cache.attempts[0].request.promptRevision, 13);
+  assert.equal(cache.attempts[0].request.promptRevision, 14);
   assert.equal(cache.attempts[0].request.system, prompt);
 });
 
