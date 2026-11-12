@@ -3116,9 +3116,18 @@ export class DocumentaryProjectService {
               // A library card keeps its original provider, so candidate.provider
               // cannot tell whether the fresh Commons lane has finished.
               if(!commonsDiscovered)await fastBatches.waitFor('commons');
-              // Dedup keeps the first source: retain prepared local copies when
-              // discovery returns the same URL without its saved file binding.
-              resumeBatch=[...resumeBatch,...(first.value??[]),...fastBatches.takeReady()];
+              // Keep saved files first, but refresh an undownloaded source's
+              // URL/metadata by stable identity (including its excerpt). Old
+              // unmatched cards remain available; paid/rejection fingerprints
+              // still bind the same source independently of its download URL.
+              const refreshed=[...resumeBatch.filter(source=>source.localPath),...(first.value??[]),
+                ...fastBatches.takeReady(),...resumeBatch.filter(source=>!source.localPath)];
+              const seenSources=new Set<string>();
+              resumeBatch=refreshed.filter(source=>{
+                const key=source.id?`${source.kind}:${rejectedCandidateFingerprint(source)}`:documentaryCandidateKey(source);
+                if(seenSources.has(key))return false;
+                seenSources.add(key);return true;
+              });
             }finally{session.accountSearch(scene.id,kind,Date.now()-waiting);}
           }
           selectionBatches: while(!accepted&&canAttempt(scene.id,kind)&&inspections<inspectionLimit&&(attemptCounts.get(inspectionKey)??0)<inspectionLimit){
