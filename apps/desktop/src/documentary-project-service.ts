@@ -23,6 +23,7 @@ import {documentarySceneSeconds} from './documentary-sequences.js';
 import {DocumentarySelectionSession,type DocumentaryTransferFailures} from './documentary-selection-session.js';
 import {documentarySelectionFailure} from './documentary-selection-failure.js';
 import {documentarySelectionRetry,DocumentarySelectionRetryProbePassed,readDocumentarySelectionRetryEvidence,type DocumentarySelectionRetryGrant} from './documentary-retry.js';
+import {documentaryTerminalEmptySources,type DocumentaryTerminalEmptySource} from './documentary-terminal-empty.js';
 import {documentaryAutomaticMaterialReady,documentaryMissingSelectedMaterialMessage,documentarySelectedMaterialMissing} from './documentary-auto-readiness.js';
 import {claimDocumentaryThematicRecovery,documentaryThematicRecoveryBinding,documentaryThematicDiscoveryRequirement,repairDocumentaryGeographicReserve} from './documentary-automatic-thematic-recovery.js';
 import {applyDocumentaryAutomaticNativeFallback,documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
@@ -161,6 +162,9 @@ function uncertainCandidateFingerprints(candidate:DocumentaryCandidate):string[]
     ??(candidate.localPath?/^([a-f0-9]{64})\./.exec(basename(candidate.localPath))?.[1]:undefined);
   return [rejectedCandidateFingerprint(candidate),...(checksum?[uncertainFileFingerprint(checksum)]:[])];
 }
+const settledEmptySourceKeys=(sources:DocumentaryTerminalEmptySource[]=[]):Set<string>=>new Set(sources.flatMap(source=>[
+  ...uncertainCandidateFingerprints(source),...uncertainCandidateFingerprints({...source,provider:'local',id:'local:'+source.checksum}),
+  uncertainFileFingerprint(source.checksum)]));
 
 /** A still has one view. For video only a short clip or an exact indexed
  * excerpt is safe to skip after a completed visual rejection; a long source
@@ -1868,6 +1872,7 @@ export class DocumentaryProjectService {
       const analysis=join(root,'Documentary','Analysis');
       const retryModel=(await this.intelligence?.selectionReviewIdentity?.())?.model;
       const retryEvidence=retryModel?await readDocumentarySelectionRetryEvidence(root,retryModel):undefined;
+      const emptySources=retryModel?await documentaryTerminalEmptySources(root,retryModel,eligible):new Map<string,DocumentaryTerminalEmptySource[]>();
       for(const name of await checkpoints(analysis)){
         signal?.throwIfAborted();
         if(!ids.size)return ids;
@@ -1889,7 +1894,10 @@ export class DocumentaryProjectService {
       }
       for(const scene of eligible){
         if(!ids.has(scene.id))continue;
-        const authorizedKeys=new Set<string>();
+        // Terminal empty answers settle transport, not pixels. They can stop
+        // blocking the planner only because selection keeps these sources held
+        // independently of the refreshed task below.
+        const authorizedKeys=settledEmptySourceKeys(emptySources.get(scene.id));
         const sourceEvidence=[...(retryEvidence?.grants.filter(item=>item.groundedNarration===scene.narration)??[]),
           ...(retryEvidence?.exactCompletions.filter(item=>item.narration===scene.narration).map(item=>item.grant)??[])];
         for(const grant of sourceEvidence){
@@ -2647,6 +2655,8 @@ export class DocumentaryProjectService {
     const reviewIdentity=this.intelligence?.simpleSelection?await this.intelligence.selectionReviewIdentity?.():undefined;
     const retryEvidence=reviewIdentity&&this.intelligence?.inspectForSelection
       ?await readDocumentarySelectionRetryEvidence(this.storage.projectDirectory(projectId),reviewIdentity.model):undefined;
+    const emptySources=reviewIdentity?await documentaryTerminalEmptySources(this.storage.projectDirectory(projectId),reviewIdentity.model,scenes)
+      :new Map<string,DocumentaryTerminalEmptySource[]>();
     const blockedCatalogs = new Set<string>();
     project=await this.projects.mutate(projectId,current=>{
       const videoPercent=current.settings.stockVideoPercent;
@@ -2945,7 +2955,8 @@ export class DocumentaryProjectService {
         // the same model remains protected across prompt revisions.
         const uncertaintyFor=(scope:string)=>reviewIdentity?createHash('sha256').update(JSON.stringify([scope,reviewIdentity.model])).digest('hex'):scope;
         let uncertainScope=uncertaintyFor(oldRejectionScope);
-        let uncertainCandidates=await readDocumentaryRejections(uncertainPath,uncertainScope);
+        const terminalEmptyKeys=settledEmptySourceKeys(emptySources.get(scene.id));
+        let uncertainCandidates=new Set([...terminalEmptyKeys,...await readDocumentaryRejections(uncertainPath,uncertainScope)]);
         const failedTransfers=session.failedTransfers;
         const metadataRefusals=new Set<string>();
         const plausibleMetadata=(candidate:DocumentaryCandidate,taskScene:Scene)=>{
@@ -2969,6 +2980,8 @@ export class DocumentaryProjectService {
         const isUncertain=(candidate:DocumentaryCandidate)=>!retryFor(candidate)&&(hasGroundedGrant(candidate)
           ||uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key)));
         const probeRetry=(candidate:DocumentaryCandidate,taskScene:Scene,savedSource?:typeof preparedSources[number]):Promise<void>|undefined=>{
+          if(uncertainCandidateFingerprints(candidate).some(key=>terminalEmptyKeys.has(key))
+            ||savedSource?.checksum&&terminalEmptyKeys.has(uncertainFileFingerprint(savedSource.checksum)))return;
           // A prepared Commons/provider source keeps its original identity. Only
           // a validated manifest for this task supplies its checksum; arbitrary
           // remote-card checksum fields cannot open the paid retry gate.

@@ -75,9 +75,12 @@ test('legacy, unknown planner, unknown pixels and source quarantine retain disti
  assert.match(issues[1]!.reason,/запроса AI-планировщику не подтверждён/);
  assert.match(issues[2]!.reason,/визуальная проверка материала имеет неизвестный результат/);
  assert.match(issues[3]!.reason,/отметкой о незавершённой проверке сохранённого источника/);
- assert.ok(issues.every(issue=>!issue.retryToken&&!issue.canContinue),'Unknown responses must not offer a blind paid retry');
+ assert.ok(issues.filter((_,index)=>index!==1).every(issue=>!issue.retryToken&&!issue.canContinue),'Visual/foreign history cannot authorize a planner retry');
+ assert.equal(issues[1]!.retryKind,'unknown');assert.ok(issues[1]!.retryToken);
+ assert.notEqual(issues[1]!.canContinue,true,'Unknown query only offers the separate explicit approval, never ordinary continuation');
  const status=JSON.parse(await readFile(join(f.home,'Documentary','Plans','ai-query-status.json'),'utf8'));
- assert.deepEqual(status.issues,issues);assert.deepEqual(status.missingSceneIds,issues.map(issue=>issue.sceneId));
+ assert.deepEqual(status.issues,issues.map(({retryToken:_token,retryKind:_kind,...diagnostic})=>diagnostic));
+ assert.deepEqual(status.missingSceneIds,issues.map(issue=>issue.sceneId));
  assert.deepEqual(status.aiSceneIds,[f.project.scenes[4]!.id]);
  assert.equal(f.requests.length,1,'Diagnostic reads and normal resume cannot re-pay old unknown requests or usable revision 13');
  assert.equal(await readFile(f.file,'utf8'),before);assert.equal(await readFile(visualFile,'utf8'),visualBytes);
