@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {documentarySourceQualityIssue,enforceDocumentaryTechnicalQuality,documentarySavedQualityIssue,documentaryKnownQualityIssue,documentaryAutoPortraitTemplate,receivedDocumentarySourceText} from './documentary-source-quality.js';
+import {documentarySourceQualityIssue,enforceDocumentaryTechnicalQuality,documentarySavedQualityIssue,documentaryKnownQualityIssue,documentaryKnownOriginalGeometryIssue,documentaryAutoPortraitTemplate,receivedDocumentarySourceText} from './documentary-source-quality.js';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
 import type {DocumentaryRequirement,Project,Scene} from '@gold-work/shared';
 import {documentaryEditErrors} from './documentary-validation.js';
@@ -31,6 +31,36 @@ test('sharp portrait photographs remain usable and original dimensions reject wa
   assert.equal(documentaryKnownQualityIssue({provider:'local',kind:'video',localPath:'catalogued-original.mp4',width:1920,height:1080} as never,{aspectRatio:'16:9'},scene),undefined);
   assert.equal(documentaryKnownQualityIssue({...source,provider:'youtube'} as never,{aspectRatio:'16:9'},scene),undefined,'YouTube previews are not original dimensions');
   assert.equal(documentaryKnownQualityIssue({...source,width:undefined} as never,{aspectRatio:'16:9'},scene),undefined);
+});
+
+test('detailed vertical stills have no aspect-ratio gap before download or on saved continuation, without forcing a layout',()=>{
+  const project={aspectRatio:'16:9'} as const;
+  for(const [width,height] of [[1280,1462],[1839,2101],[1080,1920],[1087,1280],[1088,1280],[1120,1280]] as const){
+    const source={provider:'commons',kind:'image',width,height} as const;
+    assert.equal(documentarySourceQualityIssue(source,project.aspectRatio),undefined,`${width}x${height}`);
+    for(const layout of ['full','contain'] as const){
+      const scene={durationSeconds:5,narration:'With all her sails set, she carried around 32,000 square feet of canvas.',
+        documentary:{layout,caption:{enabled:false},verified:true,pinned:false,selected:source,
+        ...(layout==='contain'?{template:'contain',templateOrigin:'manual'}:{})}} as Scene;
+      const before=JSON.stringify(scene);
+      assert.equal(documentaryKnownQualityIssue(source as never,project,scene),undefined,`Search geometry: ${width}x${height}`);
+      assert.equal(documentaryKnownOriginalGeometryIssue(project,scene),undefined,`Downloaded geometry: ${width}x${height}`);
+      assert.equal(documentarySavedQualityIssue(project,scene),undefined,`Saved geometry: ${width}x${height}`);
+      assert.equal(documentaryAutoPortraitTemplate(scene,source,project.aspectRatio),undefined,'Detailed still does not need an automatic portrait template');
+      assert.equal(JSON.stringify(scene),before,'The user layout and saved selection remain untouched');
+    }
+  }
+});
+
+test('the wider portrait allowance retains detail, minimum pixels, scale, video and strip gates',()=>{
+  for(const [width,height] of [[960,594],[960,679],[960,627],[959,1280],[1080,1279],[479,1600],[1920,300],[4000,500]] as const)
+    assert.ok(documentarySourceQualityIssue({kind:'image',width,height},'16:9'),`Unusable still ${width}x${height}`);
+  for(const [width,height] of [[1080,1920],[1280,1462],[1839,2101]] as const)
+    assert.match(documentarySourceQualityIssue({kind:'video',width,height},'16:9')!,/менее половины кадра/,`Video ${width}x${height}`);
+  assert.match(documentarySourceQualityIssue({kind:'image',width:960,height:679},'16:9')!,/слишком мал/,'The enlargement limit remains unchanged');
+  const review={status:'accepted',technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Sharp actual source',orientation:'upright',continuousShot:true}};
+  for(const bad of [{detail:'unusable'},{compression:'severe'},{pixelated:true}])
+    assert.equal(enforceDocumentaryTechnicalQuality({...review,technicalQuality:{...review.technicalQuality,...bad}},true,true).status,'rejected');
 });
 
 test('a narrow original may pass only when the automatic portrait panel can display it sharply',()=>{

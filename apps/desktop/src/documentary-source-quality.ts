@@ -14,8 +14,10 @@ export function documentarySourceQualityIssue(source:Pick<DocumentaryCandidate,'
   // Subject isolation changes the occupied shape; its resulting pixel size is
   // checked after segmentation instead of rejecting a landscape source here.
   // Stills are already fitted without cropping in the portrait/contain layouts.
-  // A detailed portrait is usable there; aspect ratio alone is not bad quality.
-  const detailedPortrait=source.kind==='image'&&w/h<.85&&w>=960&&h>=1280;
+  // All detailed vertical stills fit there, including wider portraits that do
+  // not need the separate narrow portrait-panel template. There must be no
+  // rejection gap between that template's .85 ratio and half-frame occupancy.
+  const detailedPortrait=source.kind==='image'&&w<h&&w>=960&&h>=1280;
   if(!presentation&&occupancy<.5&&!detailedPortrait)return `Формат оригинала ${w}×${h} занимает менее половины кадра ${aspectRatio}. Для крупного изображения нужен другой исходник без сильной обрезки.`;
 }
 
