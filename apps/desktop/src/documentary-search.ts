@@ -150,6 +150,40 @@ function commonsAttributionLicense(candidate: DocumentaryCandidate): Documentary
   return candidate;
 }
 
+/** The 1920px API request returns an unscaled original for small photos.
+ * Use only a near-original standard size; never invent a transcode or upscale.
+ * https://www.mediawiki.org/wiki/Common_thumbnail_sizes/en */
+function commonsSmallRaster(page:RecordValue,info:RecordValue):{url:string;width:number;height:number}|undefined{
+  const mime=string(info.mime),width=Number(info.width),height=Number(info.height);
+  if(!['image/jpeg','image/png'].includes(mime)||!Number.isInteger(width)||!Number.isInteger(height)
+    ||width<=960||width>1920||height<=0||info.thumbmime&&info.thumbmime!==mime)return;
+  const size=[1280,960].find(value=>value<width&&value>=width*.9);
+  if(!size)return;
+  const originalUrl=safeHttps(info.url),renderedUrl=safeHttps(info.thumburl);
+  if(!originalUrl||!renderedUrl)return;
+  const original=new URL(originalUrl),rendered=new URL(renderedUrl);
+  const ordinaryUrl=(url:URL)=>!url.port&&!url.hash&&[...url.searchParams.keys()].every(key=>['utm_source','utm_campaign','utm_content'].includes(key));
+  if(original.hostname!=='upload.wikimedia.org'||!ordinaryUrl(original)||!ordinaryUrl(rendered))return;
+  const file=original.pathname.match(/^\/wikipedia\/commons\/([a-f0-9])\/([a-f0-9]{2})\/([^/]+)$/i);
+  if(!file||!file[2]!.startsWith(file[1]!))return;
+  let name:string;
+  try{name=decodeURIComponent(file[3]!);}catch{return;}
+  if(/[\/\\\u0000-\u001f]/u.test(name)||!name||name!==name.trim()
+    ||!(mime==='image/jpeg'?/\.jpe?g$/i:/\.png$/i).test(name)
+    ||name.replace(/_/g,' ').normalize('NFC')!==string(page.title).replace(/^File:/,'').replace(/_/g,' ').normalize('NFC'))return;
+  const relative=`${file[1]}/${file[2]}/${file[3]}`;
+  const pathname=`/wikipedia/commons/thumb/${relative}/${size}px-${file[3]}`;
+  const scaledHeight=Math.round(height*size/width);
+  if(['upload.wikimedia.org','thumb.wikimedia.org'].includes(rendered.hostname)&&rendered.pathname===pathname
+    &&Number(info.thumbwidth)===size&&Number(info.thumbheight)===scaledHeight)return {url:renderedUrl,width:size,height:scaledHeight};
+  // Only the API's unscaled same-file response permits constructing a URL.
+  // Preserve the encoded basename twice; do not guess page/frame/lossy names
+  // or the separate shortened-thumb convention for long UTF-8 filenames.
+  if(rendered.hostname!==original.hostname||rendered.pathname!==original.pathname
+    ||Number(info.thumbwidth)!==width||Number(info.thumbheight)!==height||Buffer.byteLength(name,'utf8')>150)return;
+  return {url:`https://thumb.wikimedia.org${pathname}`,width:size,height:scaledHeight};
+}
+
 export function commonsCandidates(payload: unknown, query: string, automatic=false): DocumentaryCandidate[] {
   return list(record(record(payload).query).pages).flatMap<DocumentaryCandidate>(pageValue => {
     const page = record(pageValue), info = record(list(page.imageinfo)[0]), ext = record(info.extmetadata);
@@ -172,17 +206,18 @@ export function commonsCandidates(payload: unknown, query: string, automatic=fal
         &&Math.abs(Number(info.width)/Number(info.height)-Number(info.thumbwidth)/Number(info.thumbheight))<.01;
     }
     const kind = /^video\//.test(mime) ? "video" : /^image\/(?:jpeg|png|webp|tiff)/.test(mime)||vectorRaster ? "image" : undefined;
-    const workingRaster=vectorRaster||rasterCopy;
-    const downloadUrl = workingRaster ? rendered : safeHttps(info.url), pageUrl = safeHttps(info.descriptionurl);
+    const smallRaster=automatic&&!vector&&!rasterCopy?commonsSmallRaster(page,info):undefined;
+    const workingRaster=vectorRaster||rasterCopy||Boolean(smallRaster);
+    const downloadUrl = smallRaster?.url??(workingRaster ? rendered : safeHttps(info.url)), pageUrl = safeHttps(info.descriptionurl);
     if (!kind || !downloadUrl || !pageUrl) return [];
     const license = meta("LicenseShortName") || meta("UsageTerms");
     const rights = /^(?:CC0|Public domain|PDM)/i.test(license) ? "public-domain" as const
       : /^(?:CC BY(?:-SA)? [\d.]+|FAL|GFDL)$/i.test(license) ? "licensed" as const : "unknown" as const;
     const author = meta("Artist");
     return [{ id: `commons:${String(page.pageid)}`, provider: "commons" as const, kind, title: string(page.title).replace(/^File:/, ""),
-      description: meta("ImageDescription"), pageUrl, downloadUrl, previewUrl: safeHttps(info.thumburl) || undefined,
+      description: meta("ImageDescription"), pageUrl, downloadUrl, previewUrl: smallRaster?.url??(safeHttps(info.thumburl) || undefined),
       author, license, licenseUrl: safeHttps(record(ext.LicenseUrl).value), rights,
-      attribution: [author, meta("Credit"), license, pageUrl].filter(Boolean).join(" · "), width: Number(workingRaster?info.thumbwidth:info.width) || undefined, height: Number(workingRaster?info.thumbheight:info.height) || undefined,
+      attribution: [author, meta("Credit"), license, pageUrl].filter(Boolean).join(" · "), width: smallRaster?.width??(Number(workingRaster?info.thumbwidth:info.width) || undefined), height: smallRaster?.height??(Number(workingRaster?info.thumbheight:info.height) || undefined),
       durationSeconds: Number(info.duration) || undefined, bytes: workingRaster?undefined:Number(info.size) || undefined, query, retrievedAt: new Date().toISOString(), capturedAt: meta("DateTimeOriginal") || meta("DateTime") || undefined, match: "unverified" as const, concerns: vectorRaster?['PNG-визуализация исходной SVG-схемы Wikimedia Commons; содержание требует проверки']:[] }];
   }).map(commonsAttributionLicense);
 }
@@ -264,7 +299,7 @@ export class DocumentarySearch {
     const isolatedPublic=independentPublicSources&&['web','commons','internet-archive','loc','youtube'].includes(provider);
     const warningKey=this.webWarningKey(query,kind)+(independentPublicSources?':'+provider:'');
     // Earlier public-only YouTube results must not hide the configured API.
-    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-3':'commons-native-subject-2')
+    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-4':'commons-native-subject-2')
       :provider==='youtube'&&kind==='video'?'youtube-api-public-cc-2':'public-source-2';
     // subjectQuery includes the title-first mode and feature terms, so old
     // broad metadata batches cannot mask a newly focused image search.
