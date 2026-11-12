@@ -20,8 +20,12 @@ const museumDescription='When we took a Thames River Cruise from London to Green
 
 test('a deferred list cannot turn a nearby object or depiction into the excluded mandatory subject',()=>{
  const current=groundedScene('Aurora','Aurora was a ship.','Aurora','Aurora ship');
- for(const item of ['the museum next to Aurora','the museum near Aurora','the interior of Aurora','a painting of Aurora','the museum displaying paintings of Aurora'])
+ for(const item of ['the museum next to Aurora','the museum near Aurora','the interior of Aurora','a painting of Aurora','the museum displaying paintings of Aurora',
+  'the museum next to Orion and Aurora','the museum next to Orion or Aurora','the museum next to Orion, Aurora'])
   assert.equal(documentaryMaterialMetadataIssue(current,{...source('Harbour walking tour'),description:'We will have to wait till next time: '+item+'.'}),undefined,item);
+ const person=groundedScene('Albert Einstein','Albert Einstein was a scientist.','Albert Einstein','Albert Einstein portrait');
+ assert.equal(documentaryMaterialMetadataIssue(person,{...source('Science museum tour'),
+  description:'We will have to wait till next time: portraits of Marie Curie and Albert Einstein.'}),undefined);
 });
 
 test('the saved museum source explicitly defers the mandatory ship, including an active unrelated reserve',()=>{
