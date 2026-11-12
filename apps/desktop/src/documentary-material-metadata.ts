@@ -34,7 +34,7 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   });
   const primaryTitle=title.split(/[,;]|\s+[—–]\s+/u)[0]??title;
   const vehicleCue=/\b(?:ships?|vessels?|clippers?|sailboats?|yachts?|warships?|aircraft|locomotives?)\b|корабл|судн|парусник|самол[её]т|локомотив/iu;
-  const beverageCue=/\b(?:whisk(?:y|ey)|bourbon|cocktail|juice|beer|vodka|liqueur)\b|виски|коктейл|водк|пив[оа]|ジュース|果汁/iu;
+  const beverageCue=/\b(?:whisk(?:y|ey)|bourbon|cocktail|juice|beer|vodka|rum|gin|wine|champagne|liqueur)\b|виски|коктейл|водк|пив[оа]|ジュース|果汁/iu;
   const venueCue=/\b(?:pubs?|public house|taverns?|restaurants?|hotels?|railway station|subway station)\b|\b(?:паб|ресторан|гостиница)\p{L}*/iu;
   const metadata=primaryTitle+' '+(source.description??'');
   // A venue after an explicit spatial relation is context, not the named
@@ -45,8 +45,16 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   if(vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))&&!venueCue.test(target)
     &&contains(primaryTitle)&&venueIsTitleSubject&&!vehicleCue.test(metadata))
     return refusal('источник прямо описывает заведение или станцию с совпадающим названием, а не требуемый транспортный объект.');
-  if(vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))&&!beverageCue.test(target)
-    &&beverageCue.test(primaryTitle)&&!vehicleCue.test(primaryTitle))
+  const nauticalDetailCue=/\b(?:sails?|rigging|hulls?|rudders?)\b|парус|такелаж/iu;
+  const vehicleTarget=vehicleCue.test(target+' '+identities.map(identity=>identity.name).join(' '))
+    ||!personTarget&&nauticalDetailCue.test(target);
+  // A definition of the namesake brand establishes the primary product;
+  // mentioning its historic vessel later does not make that vessel visible.
+  // Keep incidental drinks aboard a real ship and mixed-subject titles.
+  const beverageDefinition=/^[^.!?\n]{1,100}\b(?:is|was)\s+(?:(?:a|an|the)\s+)?(?:range|brand|blend|type)\s+of\s+(?:[\p{L}'’-]+\s+){0,4}(?:whisk(?:y|ey)|bourbon|vodka|rum|gin|beer|wine|champagne)\b/iu;
+  if(vehicleTarget&&!beverageCue.test(target)
+    &&(beverageCue.test(primaryTitle)||contains(primaryTitle)&&beverageDefinition.test((source.description??'').trim().slice(0,350)))
+    &&!vehicleCue.test(primaryTitle)&&!nauticalDetailCue.test(primaryTitle))
     return refusal('источник описывает напиток с совпадающим названием, а не требуемый транспортный объект.');
   // Stock keyword lists may include "portrait" or "owner" while naming only
   // an animal. An explicit human/animal scene remains undecided for pixels.

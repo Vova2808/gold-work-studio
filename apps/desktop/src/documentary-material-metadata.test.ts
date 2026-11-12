@@ -15,6 +15,24 @@ const groundedScene=(required:string,quote:string,subject:string,target=subject)
  return result;
 };
 
+test('namesake drinks fail before pixels even when a nautical target omits the word ship',()=>{
+ for(const name of ['Cutty Sark','Aurora']){
+  const current=groundedScene(name,name+' lost her rudder in heavy weather.',name,name+' at sea under sail');
+  for(const title of ['台湾のオレンジジュースが美味しい。光泉果汁時刻 加 '+name,name]){
+   const candidate={...source(title),kind:'video' as const,provider:'local' as const,
+    description:name+' is a range of blended Scotch whisky produced by a distillery. The brand was named after the historic ship '+name+'.'};
+   assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/напит/iu,title);
+  }
+  for(const description of [name+' is a ship unloading whisky barrels.',name+' sailing past a whisky advertisement.',name+' at sea.'])
+   assert.equal(documentaryMaterialMetadataIssue(current,{...source(name),description}),undefined,description);
+  assert.equal(documentaryMaterialMetadataIssue(groundedScene(name,name+' whisky',name,name+' whisky bottle with a ship on its label'),
+   {...source(name),description:name+' is a brand of Scotch whisky.'}),undefined);
+  for(const drink of ['rum','gin','wine','champagne'])
+   assert.equal(documentaryMaterialMetadataIssue(groundedScene(name,name+' '+drink,name,name+' '+drink+' bottle with a ship on its label'),
+    {...source(name),description:name+' is a brand of '+drink+'.'}),undefined,drink);
+ }
+});
+
 test('a homonymous venue is rejected before vision, without rejecting the actual vehicle beside a venue',()=>{
  for(const [name,target,venue] of [['Cutty Sark','Cutty Sark clipper ship','public house'],['Spitfire','Spitfire aircraft','tavern']]){
   const current=groundedScene(name!,name!+' entered service.',name!,target!);
