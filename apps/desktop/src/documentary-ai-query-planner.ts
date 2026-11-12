@@ -102,7 +102,11 @@ function closedEmptyResponse(attempt:Attempt):boolean {
 
 /** A confirmed new answer can supply the plan explicitly requested by the
  * user. It does not relabel the earlier batch or resolve its other scenes. */
-function replacedUnknownPlanAttempts(cache:Cache,scene:Scene,active:DocumentaryAiSearchPlan):Set<Attempt>{
+function completedExplicitQueryPlan(value:unknown,scene:Scene):{plan:DocumentaryAiSearchPlan;previous:Set<Attempt>}|undefined{
+  if(!record(value)||value.version!==VERSION||typeof value.inputHash!=='string'||typeof value.model!=='string'
+    ||!Array.isArray(value.attempts)||!value.attempts.every(attempt=>record(attempt)&&Array.isArray(attempt.ids)
+      &&attempt.ids.every(id=>typeof id==='string')&&typeof attempt.status==='string'))return;
+  const cache=value as unknown as Cache;
   for(let index=cache.attempts.length-1;index>=0;index--){
     const attempt=cache.attempts[index]!,permission=attempt.explicitRetry;
     if(permission?.previousOutcome!=='unknown'||permission.sceneId!==scene.id
@@ -112,9 +116,12 @@ function replacedUnknownPlanAttempts(cache:Cache,scene:Scene,active:DocumentaryA
     if(issue?.retryKind!=='unknown'||issue.retryToken!==permission.token)continue;
     const recovered=completedRawPlans({...cache,attempts:[attempt]},cache.inputHash,cache.model,
       attempt.refreshIds?.includes(scene.id)?'refresh':'ordinary').get(scene.id);
-    if(recovered&&hash(primaryOnly(recovered))===hash(primaryOnly(active)))return new Set(previous);
+    if(recovered)return {plan:recovered,previous:new Set(previous)};
   }
-  return new Set();
+}
+function replacedUnknownPlanAttempts(cache:Cache,scene:Scene,active:DocumentaryAiSearchPlan):Set<Attempt>{
+  const completed=completedExplicitQueryPlan(cache,scene);
+  return completed&&hash(primaryOnly(completed.plan))===hash(primaryOnly(active))?completed.previous:new Set();
 }
 
 // A feedback plan is a distinct task: the primary reserve may itself be too
@@ -632,7 +639,7 @@ export class DocumentaryAiQueryPlanner {
     const refreshed = completedRawPlans(savedCache, inputHash, model, 'refresh');
     for (const scene of scenes) {
       const sceneHash = hash({ inputHash, sceneId: scene.id });
-      let plan = adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cachedPlan(plans[scene.id], sceneHash, model)
+      let plan = completedExplicitQueryPlan(savedCache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cachedPlan(plans[scene.id], sceneHash, model)
         ?? cachedPlan(scene.documentary?.requirement?.aiSearchPlan, sceneHash, model);
       if (!plan && !Object.hasOwn(plans, scene.id)) {
         // A rejected old response may fill a missing entry, never hide a corrupt canonical plan.
@@ -964,7 +971,7 @@ export class DocumentaryAiQueryPlanner {
       for (const scene of scenes) {
         const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
         if (Object.hasOwn(cache.plans, scene.id)) {
-          const active = adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cache.plans[scene.id]!;
+          const active = completedExplicitQueryPlan(cache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cache.plans[scene.id]!;
           const unsettled = activePlanUnsettled(scene,active);
           if (unsettled) { rows.push(queryIssue(cache, scene)!); continue; }
           const latestRefresh = [...attemptsFor(scene.id)].reverse().find(attempt => attempt.refreshIds?.includes(scene.id));
@@ -977,7 +984,8 @@ export class DocumentaryAiQueryPlanner {
             continue;
           }
           const req = scene.documentary?.requirement;
-          if (req?.text !== scene.narration || !cachedPlan(req.aiSearchPlan, sceneHash(scene.id), model)) {
+          if (req?.text !== scene.narration || !cachedPlan(req.aiSearchPlan, sceneHash(scene.id), model)
+            ||hash(primaryOnly(req.aiSearchPlan!))!==hash(primaryOnly(active))) {
             rows.push({ ...row, cached: true, reason: 'Ответ уже сохранён. Продолжите подготовку, чтобы применить его к сцене без нового запроса.' });
           }
         } else if (cache.attempts.length) {
@@ -1005,7 +1013,7 @@ export class DocumentaryAiQueryPlanner {
     if (migratedIncompleteAttempt) await save();
     const result = () => new Map(scenes.filter(scene => Object.hasOwn(workPlans, scene.id)).map(scene => [scene.id, fallbackOnly
       ? fallbackRequirement(scene, workPlans[scene.id]!) : requirement(scene,
-        proposed.get(scene.id) ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? workPlans[scene.id]!)]));
+        proposed.get(scene.id) ?? completedExplicitQueryPlan(cache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? workPlans[scene.id]!)]));
     const blocked = () => missing().filter(scene => cache.attempts.some(attempt => attempt.ids.includes(scene.id)
       && (attempt.status === 'pending' || attempt.status === 'uncertain'&&!closedEmptyResponse(attempt))));
     let retryToken = options.retryToken;
@@ -1014,7 +1022,7 @@ export class DocumentaryAiQueryPlanner {
     }
     let explicitCachedIssue:DocumentaryQueryPlanIssue|undefined;
     if(retryToken!==undefined){
-      const scene=scenes[0]!,active=adoptedPrimaryRefresh(scene,refreshed.get(scene.id))??workPlans[scene.id];
+      const scene=scenes[0]!,active=completedExplicitQueryPlan(cache,scene)?.plan??adoptedPrimaryRefresh(scene,refreshed.get(scene.id))??workPlans[scene.id];
       const issue=!active||activePlanUnsettled(scene,active)?queryIssue(cache,scene):undefined;
       if(issue?.retryToken!==retryToken)throw new DocumentaryQueryRetryScopeError('Состояние попыток изменилось. Обновите список сцен перед повтором.');
       if(active){

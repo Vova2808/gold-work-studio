@@ -149,6 +149,11 @@ test('unknown-plan retry refreshes an existing plan once without replacing it be
   const after=JSON.parse(await readFile(file,'utf8'));
   assert.deepEqual(after.plans,cache.plans);assert.deepEqual(after.attempts.slice(0,2),cache.attempts);
   assert.deepEqual(after.attempts[2].refreshIds,[scenes[0]!.id]);
+  assert.equal((await f.planner().readCached(project,scenes)).get(scenes[0]!.id)!.aiSearchPlan!.visualTarget,'A stern view of Aurora');
+  const cachedIssue=(await f.planner().readIssues(project,scenes))[0]!;
+  assert.equal(cachedIssue.cached,true);assert.equal(cachedIssue.retryToken,undefined);
+  assert.equal((await f.planner().plan(project,scenes)).get(scenes[0]!.id)!.aiSearchPlan!.visualTarget,'A stern view of Aurora');
+  assert.equal(f.calls.length,2,'A complete paid correction survives a restart before project apply');
   scenes[0]!.documentary!.requirement=result.get(scenes[0]!.id)!;
   assert.deepEqual(await f.planner().readIssues(project,scenes),[]);
   await f.planner().plan(project,scenes);assert.equal(f.calls.length,2);

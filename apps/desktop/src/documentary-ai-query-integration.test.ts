@@ -274,7 +274,7 @@ test('primary planning drains independent batches, then retries only a displayed
     documentary:{...structuredClone(base.documentary!),requirement:{...base.documentary!.requirement,text:narration}},
   }))}));
   const bad=new Set(['scene-0','scene-1']), calls:string[][]=[];
-  let disconnect=false, entered!:()=>void, release!:()=>void;
+  let disconnect=false,correctedTarget=false, entered!:()=>void, release!:()=>void;
   const started=new Promise<void>(resolve=>{entered=resolve;});
   const gate=new Promise<void>(resolve=>{release=resolve;});
   const client={documentaryQueryModel:async()=>'fixture-model',documentaryCompletion:async(_system:string,payload:string)=>{
@@ -286,7 +286,7 @@ test('primary planning drains independent batches, then retries only a displayed
     if(disconnect){entered();await gate;throw new Error('Fixture connection closed');}
     return JSON.stringify({scenes:ids.filter(id=>!bad.has(id)).map(sceneId=>({sceneId,subject:'steam locomotive',
       grounding:{version:1,mandatory:[{kind:'identity',required:'steam locomotive',scriptQuote:lines[Number(sceneId.slice(6))]}],illustrations:['A steam locomotive pulling a train'],optionalDetails:[]},
-      visualTarget:'steam locomotive pulling a train',years:[],visualScope:'illustrative',preferredKind:'video',reservePolicy:'thematic',
+      visualTarget:correctedTarget?'steam locomotive pulling a train beside a station':'steam locomotive pulling a train',years:[],visualScope:'illustrative',preferredKind:'video',reservePolicy:'thematic',
       imageQueries:['steam locomotive photograph'],videoQueries:['steam locomotive pulling train'],
       fallbackVisualTarget:'',fallbackVideoQueries:[]}))});
   }} as unknown as AnyModelClient;
@@ -360,11 +360,21 @@ test('primary planning drains independent batches, then retries only a displayed
   await writeFile(receipt,JSON.stringify(beforeCorrection));
   const correction=(await service.getDocumentaryQueryPlanIssues(project.id)).find(issue=>issue.sceneId===second.sceneId)!;
   assert.equal(correction.retryKind,'unknown');assert.ok(correction.retryToken);
+  correctedTarget=true;
   const corrected=await service.retryDocumentaryQueryPlan(project.id,second.sceneId,correction.retryToken);
   assert.deepEqual(calls.slice(7),[[second.sceneId]]);
-  assert.deepEqual(corrected.scenes,recovered.scenes);
+  assert.deepEqual(corrected.scenes.filter(s=>s.id!==second.sceneId),recovered.scenes.filter(s=>s.id!==second.sceneId));
+  assert.deepEqual(corrected.scenes.map(s=>s.audioPath),recovered.scenes.map(s=>s.audioPath));
   assert.deepEqual(await service.getDocumentaryQueryPlanIssues(project.id),[]);
   assert.deepEqual(JSON.parse(await readFile(receipt,'utf8')).attempts.slice(0,-1),beforeCorrection.attempts);
+  // Simulate restart after receipt COMPLETE but before the project write.
+  await projects.mutate(project.id,current=>({scenes:current.scenes.map(s=>s.id===second.sceneId?recovered.scenes.find(old=>old.id===s.id)!:s)}));
+  service=restart();
+  const cached=(await service.getDocumentaryQueryPlanIssues(project.id)).find(issue=>issue.sceneId===second.sceneId)!;
+  assert.equal(cached.cached,true);assert.equal(cached.retryToken,undefined);
+  const applied=await service.planSearch(project.id,[second.sceneId],undefined,{cachedOnly:true});
+  assert.equal(applied.scenes.find(s=>s.id===second.sceneId)!.documentary!.requirement.aiSearchPlan!.visualTarget,'steam locomotive pulling a train beside a station');
+  assert.deepEqual(calls.slice(7),[[second.sceneId]],'Reapplying the received correction must make zero additional POSTs');
 });
 
 test('partial 1/3 AI planning saves valid work and stops without heuristic substitution or paid resubmission',async t=>{
