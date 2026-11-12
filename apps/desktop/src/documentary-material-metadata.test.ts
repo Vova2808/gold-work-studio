@@ -25,6 +25,9 @@ test('namesake drinks fail before pixels even when a nautical target omits the w
   }
   for(const description of [name+' is a ship unloading whisky barrels.',name+' sailing past a whisky advertisement.',name+' at sea.'])
    assert.equal(documentaryMaterialMetadataIssue(current,{...source(name),description}),undefined,description);
+  for(const drink of ['whisky','rum','gin','wine','champagne'])
+   assert.equal(documentaryMaterialMetadataIssue(current,{...source(name+' with '+drink+' barrels on deck'),
+    description:'The ship '+name+' unloading '+drink+' barrels at the quay.'}),undefined,drink+' cargo');
   assert.equal(documentaryMaterialMetadataIssue(groundedScene(name,name+' whisky',name,name+' whisky bottle with a ship on its label'),
    {...source(name),description:name+' is a brand of Scotch whisky.'}),undefined);
   for(const drink of ['rum','gin','wine','champagne'])

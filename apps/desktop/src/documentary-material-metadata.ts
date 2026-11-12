@@ -52,8 +52,9 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   // mentioning its historic vessel later does not make that vessel visible.
   // Keep incidental drinks aboard a real ship and mixed-subject titles.
   const beverageDefinition=/^[^.!?\n]{1,100}\b(?:is|was)\s+(?:(?:a|an|the)\s+)?(?:range|brand|blend|type)\s+of\s+(?:[\p{L}'’-]+\s+){0,4}(?:whisk(?:y|ey)|bourbon|vodka|rum|gin|beer|wine|champagne)\b/iu;
+  const namesakeBrand=contains(primaryTitle)&&beverageDefinition.test((source.description??'').trim().slice(0,350));
   if(vehicleTarget&&!beverageCue.test(target)
-    &&(beverageCue.test(primaryTitle)||contains(primaryTitle)&&beverageDefinition.test((source.description??'').trim().slice(0,350)))
+    &&(namesakeBrand||beverageCue.test(primaryTitle)&&!vehicleCue.test(metadata)&&!nauticalDetailCue.test(metadata))
     &&!vehicleCue.test(primaryTitle)&&!nauticalDetailCue.test(primaryTitle))
     return refusal('источник описывает напиток с совпадающим названием, а не требуемый транспортный объект.');
   // Stock keyword lists may include "portrait" or "owner" while naming only
