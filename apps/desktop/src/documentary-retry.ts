@@ -41,7 +41,7 @@ export type DocumentarySelectionRetryGrant = {
 };
 
 async function readSelectionAuthorization(directory:string,id:string):Promise<
-  {grant:DocumentarySelectionRetryGrant;available:boolean;completed:boolean}|undefined
+  {grant:DocumentarySelectionRetryGrant;available:boolean;completed:boolean;exactCompletedNarration?:string;unsettledExact?:{narration?:string}}|undefined
 >{
   if(!/^[a-f0-9]{64}$/.test(id))return;
   const read=async(file:string)=>readFile(file,'utf8').catch((error:NodeJS.ErrnoException)=>{
@@ -57,7 +57,6 @@ async function readSelectionAuthorization(directory:string,id:string):Promise<
     const available=state.state==='failed'&&state.approvedRetryAt===grant.approvedAt
       &&state.previousRevision===grant.replacesRevision&&grant.consumedAt===undefined;
     const completed=state.state==='complete'&&Boolean(state.result)&&typeof grant.consumedAt==='string'&&Boolean(grant.consumedAt);
-    if(!available&&!completed)return;
     const archived=await read(join(directory,'RetryHistory',`${id}-${grant.replacesRevision}.json`));
     if(!archived||digest(archived)!==grant.replacesRevision)return;
     const prior=JSON.parse(archived),binding=prior?.singleReviewBinding;
@@ -69,7 +68,20 @@ async function readSelectionAuthorization(directory:string,id:string):Promise<
       if(typeof prior.raw!=='string')return;
       try{documentaryJson(prior.raw);return;}catch{/* Only an unresolved response is eligible. */}
     }
-    return {available,completed,grant:{id,revision:grant.replacesRevision,approvedAt:grant.approvedAt,priorState:prior.state,model:prior.model,
+    // A checksum shared with another scene is not a resolved unknown request.
+    // Only this archived request, consumed at this dispatch, may settle its
+    // quarantine. The request key, model, full task/revision and frame binding
+    // remain unchanged; grounded successors are deliberately not exact proof.
+    const completedBinding=state.singleReviewBinding;
+    const exactCompletedNarration=completed&&state.model===prior.model&&grant.consumedAt===state.createdAt
+      &&completedBinding?.groundedRetryOrigin===id
+      &&[...new Set([...Object.keys(binding),...Object.keys(completedBinding)])].filter(key=>key!=='groundedRetryOrigin')
+        .every(key=>JSON.stringify(binding[key])===JSON.stringify(completedBinding[key]))
+      &&typeof binding.quality?.narration==='string'&&binding.quality.narration.trim()
+      ?binding.quality.narration:undefined;
+    const unsettledExact=!exactCompletedNarration&&['pending','partial'].includes(prior.state)
+      ?{narration:typeof binding.quality?.narration==='string'?binding.quality.narration:undefined}:undefined;
+    return {available,completed,exactCompletedNarration,unsettledExact,grant:{id,revision:grant.replacesRevision,approvedAt:grant.approvedAt,priorState:prior.state,model:prior.model,
       binding:{checksum:binding.checksum,taskKey:binding.taskKey,start:binding.start,end:binding.end},
       ...(prior.state==='received'&&documentaryJsonFormatIssue(prior.raw)==='incomplete-json'
         &&typeof binding.quality?.narration==='string'&&binding.quality.narration.trim()
@@ -168,16 +180,20 @@ export async function readDocumentarySelectionRetryEvidence(root:string,model:st
   const files=await readdir(directory).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error;});
   const ids=files.flatMap(file=>/^([a-f0-9]{64})\.retry-authorization\.json$/.exec(file)?.[1]??[]);
   const grants:DocumentarySelectionRetryGrant[]=[];
+  const exactCompletions:Array<{grant:DocumentarySelectionRetryGrant;narration:string}>=[];
+  const unsettledExact:Array<{id:string;narration?:string}>=[];
   const cachedChecksums=new Set<string>();
   for(const authorization of await Promise.all(ids.map(id=>readSelectionAuthorization(directory,id)))){
     if(!authorization||authorization.grant.model!==model)continue;
     const {grant,available,completed}=authorization;
     if(available)grants.push(grant);
+    if(authorization.exactCompletedNarration)exactCompletions.push({grant,narration:authorization.exactCompletedNarration});
+    if(authorization.unsettledExact)unsettledExact.push({id:grant.id,...authorization.unsettledExact});
     // The completed narrative evaluation has a separate receipt, so its
     // former received grant is still available. Only a cache probe can admit it.
     if(completed||available&&grant.priorState==='received')cachedChecksums.add(grant.binding.checksum);
   }
-  return {grants,cachedChecksums};
+  return {grants,cachedChecksums,exactCompletions,unsettledExact};
 }
 
 /** Explicit, revision-bound permission. A stale dialog cannot release a newer

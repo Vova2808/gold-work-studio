@@ -880,8 +880,8 @@ export class DocumentaryIntelligence {
           description: description.slice(description.indexOf(marker) + marker.length) } }) });
       }
     }
-    const words=JSON.parse(input);
-    const singleReviewModel=purpose==='visual-illustration'&&words.singleReview&&typeof words.analysisModel==='string'?words.analysisModel:undefined;
+    let words=JSON.parse(input);
+    let singleReviewModel=purpose==='visual-illustration'&&words.singleReview&&typeof words.analysisModel==='string'?words.analysisModel:undefined;
     const originalScript=this.inspection.getStore()?.narrativeContext?.current.text;
     const scriptRequirements=this.inspection.getStore()?.scriptRequirements;
     const finalScriptReview=Boolean(originalScript)&&images.length>0&&(['visual-range','catalog-range-check','catalog-range-batch'].includes(purpose)
@@ -1087,11 +1087,30 @@ export class DocumentaryIntelligence {
       ?system.replace(documentaryEraProvenanceInstruction,documentaryPreArchiveEraProvenanceInstruction):undefined;
     for(const request of [{system,input},...previousRequests])if(request.system.includes(documentaryEraProvenanceInstruction))
       previousRequests.push({system:request.system.replace(documentaryEraProvenanceInstruction,documentaryPreArchiveEraProvenanceInstruction),input:request.input});
+    const retryOriginScope=documentarySelectionRetry.getStore();
+    let restoredExactPredecessor=false;
+    if(purpose==='visual-illustration'&&words.singleReview&&retryOriginScope&&'grant' in retryOriginScope
+      &&['pending','partial'].includes(retryOriginScope.grant.priorState)
+      &&retryOriginScope.grant.model===singleReviewModel
+      &&documentaryCheckpointKey(purpose,system,input,images)!==retryOriginScope.grant.id){
+      const grant=retryOriginScope.grant;
+      const previous=previousRequests.find(request=>documentaryCheckpointKey(purpose,request.system,request.input,images)===grant.id);
+      if(previous){
+        const prior=JSON.parse(previous.input);
+        if(prior.singleReview&&['checksum','startSeconds','endSeconds','visualTarget','narration']
+          .every(field=>JSON.stringify(prior[field])===JSON.stringify(words[field]))&&singleReviewTaskKey(prior)===grant.binding.taskKey){
+          // Recover the authorized canonical request, never a new question
+          // disguised as that retry. Existing receipt/model/one-shot checks
+          // below still apply, including a cache-only probe before dispatch.
+          previousRequests=[{system,input},...previousRequests];system=previous.system;input=previous.input;words=prior;
+          singleReviewModel=grant.model;restoredExactPredecessor=true;
+        }
+      }
+    }
     const key = documentaryCheckpointKey(purpose,system,input,images);
     await options.explanationFeedback?.onIdentity(key);
     const root = join(this.rootFor(projectId), "Documentary", "Analysis"); await mkdir(root, { recursive: true });
     const previewSourceKey=this.previewSource.getStore()?.sourceKey;
-    const retryOriginScope=documentarySelectionRetry.getStore();
     const previewMetadata={...(previewSourceKey?{previewSourceKey}:{}),...(words.singleReview?{singleReviewBinding:{
       checksum:String(words.checksum),revision:JSON.stringify(words.fileRevision),start:Number(words.startSeconds),end:Number(words.endSeconds),
       taskKey:singleReviewTaskKey(words),...(words.fallbackNarrativeContext?{fallbackNarrativeBinding:words.fallbackNarrativeContext.binding}:{}),...(words.imagePreparation?{imagePreparation:words.imagePreparation}:{}),
@@ -1135,6 +1154,7 @@ export class DocumentaryIntelligence {
     const resumingMotionRefusal=Boolean(motionRefusal&&options.resumeUnavailable);
     if(motionRefusal&&!resumingMotionRefusal)throw new DocumentaryAnalysisError('Motion-запрос получил отказ сервиса. Единственная отправка сохранена; повтор разрешён только явным возобновлением.','unavailable',purpose,false,true);
     const finishReview=async(value:Record<string,unknown>,raw=value,qualityVersion=words.illustrationQualityVersion):Promise<Record<string,unknown>>=>{
+      if(restoredExactPredecessor)return {reason:'Прежний точный запрос проверки завершён. Его ответ сохранён; текущие требования сцены им не подтверждены. Обновите поисковый план перед продолжением.',__illustrationQualityVersion:0};
       // Internal provenance comes from the request whose receipt was read,
       // never from model output. A cached malformed new answer stays strict.
       if(purpose==='visual-illustration')return {...value,__illustrationQualityVersion:qualityVersion===1?1:0};
@@ -2876,6 +2896,9 @@ export class DocumentaryIntelligence {
       ||used.some(range=>Math.min(fixed.end,range.end)-Math.max(fixed.start,range.start)>.25)))
       return {status:'rejected',confidence:0,reason:'Нет доступного отрезка нужной длины.',quality:'',sampleSeconds:[],checkedAt:new Date().toISOString()};
     const start=fixed?.start??0,end=fixed?.end??0,revision=await revisionOf(file);
+    const exactRecovery=documentarySelectionRetry.getStore();
+    if(exactRecovery&&'grant' in exactRecovery&&!await matchesFileChecksum(file,doc.checksum))
+      throw new DocumentaryAnalysisError('Файл не совпадает с разрешённой прежней проверкой. Повтор не отправлен.','pending','visual-illustration');
     const edgeIssue=video?await this.illustrationVideoEdgeIssue(project,{...scene,trimStartSeconds:start,trimEndSeconds:end}):undefined;
     if(edgeIssue)return {status:'rejected',confidence:1,reason:edgeIssue,quality:'',sampleSeconds:[],checkedAt:new Date().toISOString(),trimStartSeconds:start,trimEndSeconds:end};
     const sameRejectedRange=(range:{checksum:string;start:number;end:number})=>range.checksum===doc.checksum

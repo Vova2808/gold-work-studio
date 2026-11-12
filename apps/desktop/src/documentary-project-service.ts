@@ -1866,21 +1866,33 @@ export class DocumentaryProjectService {
         }
       }
       const analysis=join(root,'Documentary','Analysis');
+      const retryModel=(await this.intelligence?.selectionReviewIdentity?.())?.model;
+      const retryEvidence=retryModel?await readDocumentarySelectionRetryEvidence(root,retryModel):undefined;
       for(const name of await checkpoints(analysis)){
         signal?.throwIfAborted();
         if(!ids.size)return ids;
         const saved=JSON.parse(await readFile(join(analysis,name),'utf8'));
+        if(saved?.state==='failed'&&saved.purpose==='visual-illustration'&&saved.approvedRetryAt&&saved.previousRevision
+          &&!retryEvidence?.grants.some(grant=>grant.id===name.slice(0,-5)&&grant.groundedNarration)
+          &&!retryEvidence?.unsettledExact.some(item=>item.id===name.slice(0,-5)))
+          return holdAll('Обновление плана заблокировано: исходная история разрешённого точного повтора не подтверждена. Автоматического платного повтора нет.');
         if(saved?.state==='complete'&&saved.result||['failed','rejected','invalid'].includes(saved?.state))continue;
         const narration=saved?.singleReviewBinding?.quality?.narration;
         if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))return holdAll('Обновление плана заблокировано: неизвестна принадлежность прежней проверки материала. Автоматического платного повтора нет.');
         for(const scene of eligible)if(scene.narration===narration)block(scene.id,'Прежний план сохранён. Его обновление заблокировано: предыдущая визуальная проверка материала имеет неизвестный результат. Автоматического платного повтора нет.');
       }
-      const retryModel=(await this.intelligence?.selectionReviewIdentity?.())?.model;
-      const grants=retryModel?(await readDocumentarySelectionRetryEvidence(root,retryModel)).grants:[];
+      for(const pending of retryEvidence?.unsettledExact??[]){
+        if(!pending.narration||!project.scenes.some(scene=>scene.narration===pending.narration))
+          return holdAll('Обновление плана заблокировано: неизвестна принадлежность разрешённого точного повтора без завершённого результата.');
+        for(const scene of eligible)if(scene.narration===pending.narration)
+          block(scene.id,'Прежний точный запрос разрешён к одному повтору, но его завершённый результат ещё не подтверждён. Разрешение само по себе не обновляет план.');
+      }
       for(const scene of eligible){
         if(!ids.has(scene.id))continue;
         const authorizedKeys=new Set<string>();
-        for(const grant of grants.filter(item=>item.groundedNarration===scene.narration)){
+        const sourceEvidence=[...(retryEvidence?.grants.filter(item=>item.groundedNarration===scene.narration)??[]),
+          ...(retryEvidence?.exactCompletions.filter(item=>item.narration===scene.narration).map(item=>item.grant)??[])];
+        for(const grant of sourceEvidence){
           const checksum=grant.binding.checksum;
           const source=await readFile(join(root,'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),checksum+'.source.json'),'utf8')
             .then(text=>JSON.parse(text) as DocumentaryCandidate,()=>undefined);
