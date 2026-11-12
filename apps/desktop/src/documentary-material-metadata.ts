@@ -180,7 +180,7 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
   // prefix is explicit naming even without a colon, but not a camera platform.
   const headlineVehicle=/\b(?:[Ss]hip|[Vv]essel|[Ww]arship|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s*:\s*[‘'“"]([^’'”"]+)[’'”"](?=\s*(?:[|#.!?]|$))/u.exec(title);
   const vesselPrefix=/\b((?:HMS|HMAS|HMCS|USS|USNS|RMS|RRS|SS|MV)\s+[A-Z][\p{L}'’-]+(?:\s+(?:(?:of|the)\s+)?[A-Z][\p{L}\d'’-]+){0,3})\b/u.exec(title);
-  const incidentalPrefix=vesselPrefix&&/\b(?:from|near|beside|behind|next to|opposite|on board|deck of|aboard)\s+(?:the\s+)?$/iu.test(title.slice(0,vesselPrefix.index));
+  const incidentalPrefix=vesselPrefix&&/\b(?:from|near|beside|alongside|behind|next to|in front of|adjacent to|close to|opposite|on board|deck of|aboard)\s+(?:the\s+)?$/iu.test(title.slice(0,vesselPrefix.index));
   const place=names.some(name=>/\b(?:canal|bridge|palace|cathedral|ocean|sea|river|gulf|cape)\b/i.test(name))
     ?/\b([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,2}\s+(?:Canal|Bridge|Palace|Cathedral|Ocean|Sea|River|Stream)|(?:Cape|Gulf)\s+(?:of\s+)?[A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+)?)\b/u.exec(title):undefined;
   const declared=named?.[1]??named?.[2]??named?.[3]??sailing?.[1]??namedBeforeClass?.[1]??quotedVessel?.[1]??headlineVehicle?.[1]??(!incidentalPrefix?vesselPrefix?.[1]:undefined)??place?.[1];

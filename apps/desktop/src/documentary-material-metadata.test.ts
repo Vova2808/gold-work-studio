@@ -79,6 +79,14 @@ test('an incidental vessel prefix at a camera platform or neighbouring object do
   assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined,title);
 });
 
+for(const title of ['An unidentified clipper alongside HMS Victory','A sailing vessel in front of HMS Victory'])
+test('a prefixed spatial landmark remains undecided: '+title,()=>{
+ const current=groundedScene('Aurora','Aurora sailed.','Aurora','Aurora ship');
+ assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined);
+ for(const relation of ['adjacent to','close to'])
+  assert.equal(documentaryMaterialMetadataIssue(current,source('An unidentified clipper '+relation+' HMS Victory')),undefined,relation);
+});
+
 const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
 const museumDescription='When we took a Thames River Cruise from London to Greenwich to see the Royal Meridien, we discovered the National Maritime Museum, one of a quartet of the Royal Museums in Greenwich. The others are the Royal Observatory Greenwich, where the Meridien resides, and two others that will have to wait till next time: the historic ship Cutty Sark and the Queen\'s House.';
 
