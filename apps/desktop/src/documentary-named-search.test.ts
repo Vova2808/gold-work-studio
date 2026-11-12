@@ -173,6 +173,35 @@ test('repeated grounded identities retain one quoted canonical name with a renam
  }
 });
 
+test('parenthesized model discriminators survive grounded discovery and Commons projection',()=>{
+ for(const name of ['Canon EOS R5 (Mark II)','Airbus A320 (neo)','Nikon Z6 (II)']){
+  const requirement=plannedTarget(name,name+' technical view',[name+' photograph']);
+  const plan=requirement.aiSearchPlan!;plan.subject=name;
+  plan.grounding={version:1,mandatory:[{kind:'identity',required:name,scriptQuote:name+' was introduced.'}],illustrations:['The same model'],optionalDetails:[]};
+  const before=structuredClone(requirement);
+  assert.equal(documentaryGroundedDiscoveryName(plan),name);
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,plan,plan.imageQueries[0]!),[name]);
+  assert.deepEqual(requirement,before);
+  plan.subject=name.replace(/\s*\([^()]+\)$/u,'');
+  assert.equal(documentaryGroundedDiscoveryName(plan),undefined,'A shortened subject cannot remove the required model qualifier');
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,plan,plan.imageQueries[0]!),[name]);
+  plan.grounding.mandatory[0]!.required=name.replace('(', '(camera) (');
+  assert.equal(documentaryGroundedDiscoveryName(plan),undefined,'An object class before the model qualifier cannot hide it');
+ }
+});
+
+test('renamed decoration requires an explicit alias and a witnessed renaming relation',()=>{
+ for(const [aliases,quote] of [
+  [[], 'Aurora was renamed Vega.'],
+  [['Vega'], 'Aurora sailed alongside Vega.'],
+ ] as Array<[string[],string]>){
+  const requirement=plannedTarget('Aurora','Aurora ship',['Aurora ship']);
+  const plan=requirement.aiSearchPlan!;plan.subject='Aurora (renamed Vega) ship';
+  plan.grounding={version:1,mandatory:[{kind:'identity',required:'Aurora',aliases,scriptQuote:quote}],illustrations:['Same ship'],optionalDetails:[]};
+  assert.equal(documentaryGroundedDiscoveryName(plan),undefined,JSON.stringify({aliases,quote}));
+ }
+});
+
 test('several grounded checks cannot collapse different identities, owners or model discriminators',()=>{
  for(const [subject,required,second,quote] of [
   ['Aurora','Aurora','Orion','Aurora sailed alongside Orion.'],

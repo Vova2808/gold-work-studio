@@ -78,6 +78,8 @@ function plannedTitleName(name:string,queries:string[]):string|undefined {
   return prefix&&queries.some(query=>has(query,prefix))?prefix:undefined;
 }
 
+const discoveryObjectClass=/^(?:(?:sailing|steam|clipper|historic|preserved|passenger|military)\s+)*(?:ship|vessel|warship|aircraft|locomotive|automobile|motorcycle|camera|engine|building|bridge|canal|person|composer|scientist|inventor)$/iu;
+
 /** Legacy AI subjects can mix the proper name with an action, place or object
  * class. Extract only the leading name, independently of candidate captions;
  * an ambiguous/generic description must not become an impossible exact gate. */
@@ -87,7 +89,13 @@ function metadataIdentityNames(identity:NonNullable<DocumentaryRequirement['iden
   const extract=(value:string)=>{
     const text=value.trim(),leading=text.match(prefix)?.[0];
     if(!leading)return;
-    const name=leading.replace(/['’]s$/u,''),tail=text.slice(leading.length);
+    let name=leading.replace(/['’]s$/u,''),tail=text.slice(leading.length);
+    // Parentheses can distinguish models just as decisively as a hyphenated
+    // suffix. Only an explicit object class is disposable without grounding.
+    for(let group;(group=/^\s*\(([^()]+)\)/u.exec(tail));){
+      if(!discoveryObjectClass.test(group[1]!.trim()))name+=' '+group[0].trim();
+      tail=tail.slice(group[0].length);
+    }
     if(name.length<3||!/[\p{L}]/u.test(name))return;
     // A sentence-initial category ("Steamship, representative of ...") is
     // not a named object. Single-word brands with a descriptor need an
@@ -117,7 +125,13 @@ export function documentaryGroundedDiscoveryName(plan:DocumentaryRequirement['ai
   const checks=plan?.grounding?.mandatory.filter(check=>check.kind==='identity');
   if(!plan||!checks?.length)return;
   const queries=[...plan.imageQueries,...plan.videoQueries];
-  const [name]=metadataIdentityNames({name:plan.subject,aliases:[]},queries);
+  const withoutGroundedRename=(value:string)=>value.replace(/\s*\((?:renamed|also named)\s+([^()]+)\)/giu,(group,alias:string,index:number)=>{
+    const original=value.slice(0,index).trim(),escaped=alias.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const relation=new RegExp('\\b(?:renamed|also named)\\s+'+escaped+'(?=$|[^\\p{L}\\p{N}’\'-])','iu');
+    return checks.some(check=>(check.aliases??[]).some(known=>normalized(known)===normalized(alias))
+      &&has(check.scriptQuote,original)&&relation.test(check.scriptQuote))?'':group;
+  });
+  const [name]=metadataIdentityNames({name:withoutGroundedRename(plan.subject),aliases:[]},queries);
   if(!name)return;
   const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const quotedName=new RegExp('(^|[^\\p{L}\\p{N}’\'-])'+escaped+'(?=$|[^\\p{L}\\p{N}’\'-])','iu');
@@ -126,12 +140,17 @@ export function documentaryGroundedDiscoveryName(plan:DocumentaryRequirement['ai
   // anaphoric quote is safe only when every required identity directly binds
   // this same name and at least one original quote witnesses it in full.
   for(const check of checks){
-    const match=new RegExp('(^|[^\\p{L}\\p{N}])('+escaped+')(?=$|[^\\p{L}\\p{N}])','iu').exec(check.required);
+    const required=withoutGroundedRename(check.required);
+    const match=new RegExp('(^|[^\\p{L}\\p{N}])('+escaped+')(?=$|[^\\p{L}\\p{N}])','iu').exec(required);
     if(!match)return;
-    const prefix=check.required.slice(0,match.index+match[1]!.length).trim();
+    const prefix=required.slice(0,match.index+match[1]!.length).trim();
     // "owner of X" and "Captain Y, aboard X" do not make X the identity.
     if(prefix&&!/^(?:(?:the|a|an|named|depicted|is|ship|vessel|clipper|aircraft|locomotive|automobile|motorcycle|camera|engine|building|bridge|canal|person|captain|owner|scientist|inventor)\s*)+$/iu.test(prefix))return;
-    const tail=check.required.slice(match.index+match[0].length);
+    let tail=required.slice(match.index+match[0].length);
+    for(let qualifier;(qualifier=/^\s*\(([^()]+)\)/u.exec(tail));){
+      if(!discoveryObjectClass.test(qualifier[1]!.trim()))return;
+      tail=tail.slice(qualifier[0].length);
+    }
     if(/^(?:[-/]\d|\s+(?:\d|[A-Z][\p{L}\p{N}'’-]*)|['’]s\b)/u.test(tail)
       ||/^\s+(?:crew|owner|captain|pilot|designer|family|series|class)\b/iu.test(tail)
       ||/^\s+(?:and|or|versus|vs|alongside|aboard|with)\b|\b(?:and|or|versus|vs|alongside|aboard|with)\s+(?:the\s+)?\p{Lu}/u.test(tail))return;

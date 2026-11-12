@@ -33,14 +33,24 @@ test('the saved renamed-ship plan rejects its namesake brand and a different hea
 
 test('a class followed by a colon identifies a different vehicle without relying on a particular ship name',()=>{
  for(const [name,target,title] of [
-  ['Aurora','Aurora ship','The historic warship: Orion | Documentary'],
-  ['Spitfire','Spitfire aircraft','The pioneering aircraft: Concorde | Aviation'],
-  ['Rocket','Rocket locomotive','The remarkable locomotive: Mallard | Rail history'],
+  ['Aurora','Aurora ship','The historic warship: "Orion" | Documentary'],
+  ['Spitfire','Spitfire aircraft','The pioneering aircraft: "Concorde" | Aviation'],
+  ['Rocket','Rocket locomotive','The remarkable locomotive: "Mallard" | Rail history'],
  ]){
   const current=groundedScene(name!,name!+' was famous.',name!,target!);
   assert.match(documentaryMaterialMetadataIssue(current,source(title!))??'',/другой объект/iu,title);
+  assert.equal(documentaryMaterialMetadataIssue(current,source(title!.replaceAll('"',''))),undefined,'An unquoted subtitle alone does not prove a different identity');
   assert.equal(documentaryMaterialMetadataIssue(current,source(title!.replace(/: .*? \|/,': '+name+' |'))),undefined);
  }
+});
+
+test('Title Case episode subtitles do not declare the identity of a different vehicle',()=>{
+ for(const [name,target,title,description] of [
+  ['Aurora','Aurora ship','The Historic Ship: Life At Sea | Documentary','A tour of Aurora under sail'],
+  ['Spitfire','Spitfire aircraft','Aircraft: How It Works | Documentary','A tour of Spitfire'],
+  ['Aurora','Aurora ship','Warship: The Full Story | Documentary',''],
+ ])assert.equal(documentaryMaterialMetadataIssue(groundedScene(name!,name!+' was famous.',name!,target!),
+  {...source(title!),description:description!}),undefined,title);
 });
 
 const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
