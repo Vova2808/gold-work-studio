@@ -18,6 +18,12 @@ const groundedScene=(required:string,quote:string,subject:string,target=subject)
 const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
 const museumDescription='When we took a Thames River Cruise from London to Greenwich to see the Royal Meridien, we discovered the National Maritime Museum, one of a quartet of the Royal Museums in Greenwich. The others are the Royal Observatory Greenwich, where the Meridien resides, and two others that will have to wait till next time: the historic ship Cutty Sark and the Queen\'s House.';
 
+test('a deferred list cannot turn a nearby object or depiction into the excluded mandatory subject',()=>{
+ const current=groundedScene('Aurora','Aurora was a ship.','Aurora','Aurora ship');
+ for(const item of ['the museum next to Aurora','the museum near Aurora','the interior of Aurora','a painting of Aurora','the museum displaying paintings of Aurora'])
+  assert.equal(documentaryMaterialMetadataIssue(current,{...source('Harbour walking tour'),description:'We will have to wait till next time: '+item+'.'}),undefined,item);
+});
+
 test('the saved museum source explicitly defers the mandatory ship, including an active unrelated reserve',()=>{
  const current=groundedScene('Cutty Sark','Cutty Sark was an extreme clipper','Cutty Sark hull construction','Cutty Sark iron frames with wooden planking');
  const candidate={...source(museumTitle),description:museumDescription};

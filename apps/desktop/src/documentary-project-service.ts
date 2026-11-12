@@ -2699,6 +2699,7 @@ export class DocumentaryProjectService {
       if (this.stopRequested.has(projectId)) return;
       let project = (await this.projects.get(projectId,{omitCandidates:true}))!;
       scene=project.scenes.find(item=>item.id===scene.id)!;
+      const terminalEmptyKeys=settledEmptySourceKeys(emptySources.get(scene.id));
       if(scene.documentary?.pinned&&await documentarySelectedMaterialMissing(scene)){
         failures.push(documentarySelectionFailure(scene,{message:documentaryMissingSelectedMaterialMessage,fallbackCategory:'download'}));
         completed++;
@@ -2724,6 +2725,8 @@ export class DocumentaryProjectService {
       // Replay a completed actual-frame check first, with POSTs disabled.
       if(scene.documentary&&!scene.documentary.verified&&!scene.documentary.pinned&&(!scene.documentary.visualReview||scene.documentary.visualReview.status==='accepted')
         &&scene.documentary.selected&&this.intelligence?.inspectForSelection&&!options.force
+        &&!uncertainCandidateFingerprints(scene.documentary.selected).some(key=>terminalEmptyKeys.has(key))
+        &&!(scene.documentary.checksum&&terminalEmptyKeys.has(uncertainFileFingerprint(scene.documentary.checksum)))
         &&!await documentarySelectedMaterialMissing(scene)
         &&(this.intelligence.simpleSelection||!documentaryContradictoryModelYear(scene.documentary.selected,scene.documentary.requirement,documentarySceneContext(project,scene)))
         &&!documentarySavedIdentityIssue({...scene,documentary:{...scene.documentary,verified:true}})){
@@ -2955,7 +2958,6 @@ export class DocumentaryProjectService {
         // the same model remains protected across prompt revisions.
         const uncertaintyFor=(scope:string)=>reviewIdentity?createHash('sha256').update(JSON.stringify([scope,reviewIdentity.model])).digest('hex'):scope;
         let uncertainScope=uncertaintyFor(oldRejectionScope);
-        const terminalEmptyKeys=settledEmptySourceKeys(emptySources.get(scene.id));
         let uncertainCandidates=new Set([...terminalEmptyKeys,...await readDocumentaryRejections(uncertainPath,uncertainScope)]);
         const failedTransfers=session.failedTransfers;
         const metadataRefusals=new Set<string>();
@@ -3086,7 +3088,7 @@ export class DocumentaryProjectService {
             rejectionPath=join(sceneRoot,'primary-photo-rejected-candidates.json');
             uncertainPath=join(sceneRoot,'primary-photo-uncertain-candidates.json');
             rejectedCandidates=new Set([...primaryRejections,...await readDocumentaryRejections(rejectionPath,rejectionScope)]);
-            uncertainCandidates=new Set([...primaryUncertain,...await readDocumentaryRejections(uncertainPath,uncertainScope)]);
+            uncertainCandidates=new Set([...terminalEmptyKeys,...primaryUncertain,...await readDocumentaryRejections(uncertainPath,uncertainScope)]);
           }
           if(quick&&semanticRecovery)continue;
           // The metadata shortcut explicitly rejects named identities/dates.

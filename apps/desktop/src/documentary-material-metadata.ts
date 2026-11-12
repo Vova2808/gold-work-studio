@@ -29,7 +29,15 @@ function excludedIdentityIssue(scene:Scene,source:DocumentaryCandidate):string|u
       let remainder=clause;
       // The colon binds its list, not other attractions earlier in the sentence.
       const deferredList=/\b(?:will|must)\s+(?:have\s+to\s+)?wait\s+(?:till|until|for)\s+(?:the\s+)?next\s+(?:time|episode|video|visit)\s*:\s*([^:]+)$/iu.exec(remainder);
-      if(deferredList&&names.some(name=>hasName(deferredList[1]!,name))){
+      const deferredSubject=deferredList?.[1]!.split(/\s+(?:and|or)\s+|,/iu).some(item=>names.some(name=>{
+        const value=words(item),named=words(name);
+        if(!hasName(item,name)||!value.endsWith(named))return false;
+        // "the museum next to Aurora" / "a painting of Aurora" delays
+        // another object, not the ship itself. Keep dependent mentions open.
+        const prefix=value.slice(0,-named.length);
+        return !/\b(?:of|to|near|beside|opposite|around|about|at|in|for|with|depicting|showing|featuring)\b/u.test(prefix);
+      }));
+      if(deferredList&&deferredSubject){
         excluded=true;remainder=remainder.slice(0,deferredList.index);
       }
       remainder=words(remainder);

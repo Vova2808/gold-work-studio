@@ -11,15 +11,17 @@ import {DocumentaryProjectService} from './documentary-project-service.js';
 import {DocumentarySearch} from './documentary-search.js';
 import {LocalProjectStorage} from './local-project-storage.js';
 import {prepareDocumentaryScript} from './documentary-plan.js';
+import {DocumentaryCachedAnalysisMissing} from './documentary-intelligence.js';
+import {claimDocumentaryThematicRecovery,documentaryThematicDiscoveryRequirement} from './documentary-automatic-thematic-recovery.js';
 
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
-async function fixture(t:test.TestContext){
+async function fixture(t:test.TestContext,videoPercent=0){
   const root=await mkdtemp(join(tmpdir(),'gws-terminal-empty-'));t.after(()=>rm(root,{recursive:true,force:true}));
   t.mock.method(globalThis,'fetch',async()=>assert.fail('Offline fixture: no HTTP'));
   const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
   let project=await projects.create({title:'Aurora history',topic:'Aurora ship',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
   project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:'Aurora became a general cargo carrier.'};
-  project.scenes=[prepareDocumentaryScript(project)[0]!];project.settings.stockVideoPercent=0;
+  project.scenes=[prepareDocumentaryScript(project)[0]!];project.settings.stockVideoPercent=videoPercent;
   const scene=project.scenes[0]!,doc=scene.documentary!;
   doc.autoError='No suitable material';scene.audioPath='retained-paid-narration.wav';
   const inputHash=hash(JSON.stringify({version:1,model:'fixture',context:documentaryAiPlanContext(project)}));
@@ -46,7 +48,8 @@ async function fixture(t:test.TestContext){
   const service=new DocumentaryProjectService(projects,storage,search,join(root,'Materials'),{download:async()=>{downloads++;assert.fail('No download');}},()=>{},
     {simpleSelection:true,available:async()=>true,selectionReviewIdentity:async()=>({model:'fixture',contract:'fixture'}),
       plan:async()=>assert.fail('No heuristic planning'),inspect:async()=>assert.fail('No direct inspection'),
-      inspectForSelection:async()=>{inspections++;assert.fail('Settled empty source must not be repaid');}},undefined,undefined,
+      inspectForSelection:async(_project,_scene,_progress,_stop,cacheOnly)=>{
+        if(cacheOnly)throw new DocumentaryCachedAnalysisMissing();inspections++;assert.fail('Settled empty source must not be repaid');}},undefined,undefined,
     {plan:async(_current,scenes)=>new Map(scenes.map(s=>[s.id,s.documentary!.requirement]))});
   Reflect.set(service,'selectionResources',async()=>({workers:1}));service.localCandidates=async()=>[];
   const scope=()=>Reflect.get(service,'queryRefreshScope').call(service,project,project.scenes) as Promise<Set<string>>;
@@ -78,19 +81,33 @@ test('incomplete proof, other narration/model, altered bytes and unrelated pendi
   assert.equal(await readFile(f.receiptPath,'utf8'),before);assert.equal(await readFile(f.quarantinePath,'utf8'),f.quarantine);
 });
 
-test('after target refresh public selection searches alternatives without paying for the same source or local alias', {timeout:15_000},async t=>{
-  const f=await fixture(t),receipt=await readFile(f.receiptPath,'utf8');
+for(const route of ['primary','reserve-to-photo','prepared'])test(`after target refresh public ${route} selection searches alternatives without repaying held bytes`, {timeout:15_000},async t=>{
+  const reserve=route==='reserve-to-photo';
+  const f=await fixture(t,reserve?60:0),receipt=await readFile(f.receiptPath,'utf8');
   assert.deepEqual([...await f.scope()],[f.scene.id]);
   await f.projects.mutate(f.project.id,current=>({scenes:current.scenes.map(s=>({...s,documentary:{...s.documentary!,
     requirement:{...s.documentary!.requirement,detail:'Aurora preserved hull',aiSearchPlan:{...s.documentary!.requirement.aiSearchPlan!,
       visualTarget:'Aurora preserved hull',imageQueries:['Aurora preserved hull'],grounding:{version:1,
         mandatory:[{kind:'identity',required:'Aurora',scriptQuote:s.narration}],illustrations:['A view of the same vessel'],optionalDetails:[]}}}}}))}));
+  if(reserve){
+    const current=(await f.projects.get(f.project.id))!,s=current.scenes[0]!;
+    Object.assign(s.documentary!.requirement.aiSearchPlan!,{reservePolicy:'thematic',videoQueries:['Aurora ship'],fallbackVisualTarget:'Aurora ship',fallbackVideoQueries:['Aurora ship']});
+    s.documentary!.selectionPlan={kind:'video',videoPercent:60};
+    current.scenes=[claimDocumentaryThematicRecovery(current,s)];
+    assert.ok(documentaryThematicDiscoveryRequirement(current,current.scenes[0]!));
+    await f.projects.mutate(f.project.id,()=>current);
+  }
+  let preparations=0;
+  Reflect.set(f.service,'apply',async()=>{preparations++;throw Error('Protected source must not be prepared for another analysis');});
+  if(route==='prepared')await f.projects.mutate(f.project.id,current=>({scenes:current.scenes.map(s=>({...s,imagePath:f.file,
+    documentary:{...s.documentary!,selected:f.source,checksum:f.checksum,visualReview:undefined}}))}));
   for(const alias of [false,true]){
     if(alias)Object.assign(f.source,{provider:'local',id:'local:'+f.checksum});
     const result=await f.service.autoSelect(f.project.id,{sceneIds:[f.scene.id]});
     assert.equal(result.selected,0);assert.equal(result.project.scenes[0]!.audioPath,f.scene.audioPath);
   }
   assert.ok(f.counts().searches>0,'Other sources remain searchable');
+  assert.equal(preparations,0,'Changed reserve scope must keep terminal-empty sources held before preparation');
   assert.equal(f.counts().inspections,0);assert.equal(f.counts().downloads,0);
   const otherChecksum=hash('A different source'),otherFile=join(f.root,otherChecksum+'.jpg');
   await writeFile(otherFile,'A different source');
