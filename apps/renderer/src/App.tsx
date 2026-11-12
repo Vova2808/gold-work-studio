@@ -4267,6 +4267,7 @@ function AiStoryPreparation({ project, busy, stage, startedAt, expectedScenes, e
   }, [api, inspectPlans, busy, project.id, project.updatedAt, revision]);
   const retryScene = async (issue: DocumentaryQueryPlanIssue) => {
     if (!issue.retryToken || retryLock.current || busy) return;
+    if(issue.retryKind==='unknown'&&!window.confirm(`Подготовить один новый поисковой план только для сцены №${issue.sceneNumber}? Ответ предыдущего запроса не получен, но сервис мог списать оплату. Новая попытка тоже может быть платной. Предыдущий запрос и готовые материалы сохранятся.`))return;
     retryLock.current = true;
     setRetrying(true);
     setRetryError('');
@@ -4309,7 +4310,7 @@ function AiStoryPreparation({ project, busy, stage, startedAt, expectedScenes, e
       {issues.map(issue => <div key={issue.sceneId}>
         <p>Сцена №{issue.sceneNumber} — {issue.reason}</p>
         {issue.retryToken && <button type="button" className="outline-button" disabled={retrying || activeProduction}
-          onClick={() => void retryScene(issue)}>Повторить только эту сцену</button>}
+          onClick={() => void retryScene(issue)}>{issue.retryKind==='unknown'?'Разрешить одну новую попытку':'Повторить только эту сцену'}</button>}
       </div>)}
     </section>}
     {retryError && <p role="alert">{retryError}</p>}

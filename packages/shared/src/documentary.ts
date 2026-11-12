@@ -455,8 +455,10 @@ export interface DocumentaryQueryPlanIssue {
   reason: string;
   cached?: true;
   canContinue?: true;
-  /** Identifies the completed attempts for this scene in its current planning context. */
+  /** Identifies the saved attempts for one explicit retry in the current context. */
   retryToken?: string;
+  /** An unknown prior charge requires explicit confirmation before a new request. */
+  retryKind?: 'unknown';
 }
 
 export interface DocumentaryApi {

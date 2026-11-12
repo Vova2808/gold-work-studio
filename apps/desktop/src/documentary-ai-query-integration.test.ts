@@ -38,6 +38,7 @@ test('scoped planning refreshes a settled search failure and keeps plans after p
   sent.push(requested);
   if(sent.length===2){markStarted();await resume;}
   return JSON.stringify({scenes:requested.map(sceneId=>({sceneId,subject:'historic ship',
+   grounding:{version:1,mandatory:[{kind:'identity',required:'historic ship',scriptQuote:narrations[0]}],illustrations:['Attributed view of the same ship'],optionalDetails:[]},
    visualTarget:sent.length===1?'entire historic ship with rudder':'attributed close-up of the historic ship rudder',
    years:[],visualScope:'illustrative',preferredKind:'image',reservePolicy:'thematic',imageQueries:['historic ship rudder'],
    videoQueries:[],fallbackVisualTarget:'',fallbackVideoQueries:[]}))});
@@ -83,20 +84,21 @@ test('scoped planning refreshes a settled search failure and keeps plans after p
  assert.equal(await readFile(receipt,'utf8'),receiptBytes);
 });
 
-for(const initial of ['accepted','rejected','pending'] as const)test(`simple selection sends an AI target's object alternative to pixel review (${initial})`,async t=>{
+for(const initial of ['accepted','rejected','pending'] as const)test(`simple selection sends a grounded object illustration for owner narration to pixel review (${initial})`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-ai-target-alternative-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const file=join(root,'source.jpg');
  await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x720','-frames:v','1',file]);
  const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
  let project=await projects.create({title:'Ship owner',topic:'Cutty Sark',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
- project.videoBrief={creationMode:'script',readyScript:'Her owner, John Willis, was betting on speed.'} as Project['videoBrief'];
+ project.videoBrief={creationMode:'script',readyScript:"Cutty Sark's owner, John Willis, was betting on speed."} as Project['videoBrief'];
  project.scenes=[prepareDocumentaryScript(project)[0]!];project.settings.stockVideoPercent=0;project.settings.voice.enabled=false;
  project.settings.assembly.documentary!.autoMotionGraphics=false;
  project=await projects.mutate(project.id,()=>project);
- const target="A portrait of shipowner John Willis; alternatively, the preserved Cutty Sark's masts and rigging";
+ const target="The preserved Cutty Sark's masts and rigging, illustrating the ship owned by John Willis";
  const client={documentaryQueryModel:async()=>'fixture',documentaryCompletion:async(_system:string,input:string)=>JSON.stringify({scenes:JSON.parse(input).requestedScenes.map(({sceneId}:{sceneId:string})=>({
-  sceneId,subject:'John Willis',visualTarget:target,years:[],visualScope:'exact',preferredKind:'image',reservePolicy:'thematic',
-  imageQueries:['John Willis portrait','Cutty Sark masts rigging'],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
+  sceneId,subject:'Cutty Sark',visualTarget:target,years:[],visualScope:'illustrative',preferredKind:'image',reservePolicy:'thematic',
+  grounding:{version:1,mandatory:[{kind:'identity',required:'Cutty Sark',scriptQuote:project.videoBrief!.readyScript}],illustrations:['An attributed view of the ship whose owner is discussed'],optionalDetails:['The owner need not be visible']},
+  imageQueries:['Cutty Sark masts rigging'],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
  }))})} as unknown as AnyModelClient;
  const searcher=new DocumentarySearch();searcher.search=async()=>({candidates:[{
   id:'pexels:rigging',provider:'pexels',kind:'image',title:'Cutty Sark masts and rigging',description:'The preserved ship at Greenwich',
@@ -153,12 +155,14 @@ test('real orchestration preserves AI media lanes, context binding, recovery and
     assert.equal(payload.originalScript,lines.join(''));
     assert.equal(payload.contextScenes.length,2);
     if(payload.purpose==='search-topic-broll-plan'||payload.purpose==='search-fallback-plan-v2')return JSON.stringify({scenes:payload.requestedScenes.map((scene:{sceneId:string})=>({
-      sceneId:scene.sceneId,fallbackVisualTarget:'aircraft in flight',fallbackVideoQueries:['aircraft flying','airplane in flight']}))});
+      sceneId:scene.sceneId,fallbackVisualTarget:'Hawker Hurricane 1935 aircraft in flight',fallbackVideoQueries:['Hawker Hurricane 1935 aircraft flying','Hawker Hurricane 1935 airplane in flight']}))});
     assert.equal(payload.purpose,undefined);
     return JSON.stringify({scenes:payload.requestedScenes.map((scene:{sceneId:string})=>({sceneId:scene.sceneId,
       subject:'Hawker Hurricane',visualTarget:'Hawker Hurricane fabric wing repair in garage',years:['1935'],visualScope:'exact',preferredKind:'video',reservePolicy:'thematic',
+      grounding:{version:1,mandatory:[{kind:'identity',required:'Hawker Hurricane',scriptQuote:lines[0]},
+        {kind:'era',required:'1935',scriptQuote:lines[0]}],illustrations:['Hawker Hurricane wing view from the stated era'],optionalDetails:[]},
       imageQueries:['Hawker Hurricane fabric wing photograph'],videoQueries:['Hawker Hurricane wing repair film'],
-      fallbackVisualTarget:'aircraft fabric wing repair',fallbackVideoQueries:['aircraft fabric wing repair']}))});
+      fallbackVisualTarget:'Hawker Hurricane 1935 aircraft fabric wing repair',fallbackVideoQueries:['Hawker Hurricane 1935 aircraft fabric wing repair']}))});
   }} as unknown as AnyModelClient;
   const planner=new DocumentaryAiQueryPlanner(client,id=>join(root,id));
   const searches:DocumentarySearchInput[]=[];
@@ -176,17 +180,18 @@ test('real orchestration preserves AI media lanes, context binding, recovery and
     const grounded=groundDocumentaryScenes(planned.scenes).find(item=>item.id===scene.id)!;
     assert.deepEqual(grounded.documentary!.requirement,scene.documentary!.requirement);
     const fallback=prepareDocumentaryFootageRecovery(planned,scene);
-    assert.deepEqual(fallback.documentary!.requirement.footageFallback!.queries,['aircraft fabric wing repair']);
-    assert.equal(planFastDocumentaryScene(planned,fallback,'video').visualTarget,'aircraft fabric wing repair');
+    assert.deepEqual(fallback.documentary!.requirement.footageFallback!.queries,['Hawker Hurricane 1935 aircraft fabric wing repair']);
+    assert.equal(planFastDocumentaryScene(planned,fallback,'video').visualTarget,'Hawker Hurricane 1935 aircraft fabric wing repair',
+      'The reserve retains the required named aircraft and era');
     assert.deepEqual(planFastDocumentaryScene(planned,fallback,'image').queries,[]);
     assert.equal(fallback.audioPath,scene.audioPath);
   }
   const result=await service.autoSelect(project.id);
   assert.ok(searches.length>0);
   for(const search of searches)assert.ok((search.kind==='image'?['Hawker Hurricane fabric wing photograph']:
-    ['Hawker Hurricane wing repair film','aircraft fabric wing repair','aircraft flying','airplane in flight']).includes(search.query),`Unexpected ${search.kind} query: ${search.query}`);
+    ['Hawker Hurricane wing repair film','Hawker Hurricane 1935 aircraft fabric wing repair','Hawker Hurricane 1935 aircraft flying','Hawker Hurricane 1935 airplane in flight']).includes(search.query),`Unexpected ${search.kind} query: ${search.query}`);
   assert.deepEqual(paidPurposes,['primary','search-fallback-plan-v2'],'One feedback revision follows unsuccessful primary discovery');
-  assert.ok(searches.some(search=>search.query==='aircraft flying'),'The feedback reserve is searched after primary discovery fails');
+  assert.ok(searches.some(search=>search.query==='Hawker Hurricane 1935 aircraft flying'),'The feedback reserve is searched after primary discovery fails');
   for(const scene of result.project.scenes)assert.equal(scene.documentary!.requirement.detail,scene.documentary!.requirement.aiSearchPlan!.visualTarget,
     'autoSelect must not run legacy grounding that removes or substitutes the AI visual goal');
   assert.deepEqual(result.project.scenes.map(scene=>scene.audioPath),planned.scenes.map(scene=>scene.audioPath));
@@ -205,7 +210,7 @@ test('restart with 67 of 68 applied plans offers local completion from the saved
   t.after(()=>rm(root,{recursive:true,force:true}));
   const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
   let project=await projects.create({title:'Tea clippers',topic:'Ships',mediaMode:'stock',mode:'standard',language:'English',aspectRatio:'16:9'});
-  const lines=Array.from({length:68},(_,i)=>`Ship ${i+1} sails. `);
+  const lines=Array.from({length:68},(_,i)=>`Cutty Sark sails. Passage ${i+1}. `);
   project.videoBrief={creationMode:'script',readyScript:lines.join('')} as Project['videoBrief'];
   const base=prepareDocumentaryScript(project)[0]!;
   project=await projects.mutate(project.id,()=>({...project,scenes:lines.map((narration,order)=>({
@@ -217,6 +222,7 @@ test('restart with 67 of 68 applied plans offers local completion from the saved
     completions++;
     return JSON.stringify({scenes:JSON.parse(input).requestedScenes.map(({sceneId}:{sceneId:string})=>({
       sceneId,subject:'Cutty Sark',visualTarget:'Cutty Sark at sea',years:[],visualScope:'exact',preferredKind:'image',reservePolicy:'thematic',
+      grounding:{version:1,mandatory:[{kind:'identity',required:'Cutty Sark',scriptQuote:'Cutty Sark sails.'}],illustrations:['Attributed view of Cutty Sark'],optionalDetails:[]},
       imageQueries:['Cutty Sark'],videoQueries:[],fallbackVideoQueries:[],fallbackVisualTarget:'',
     }))});
   }} as unknown as AnyModelClient;
@@ -279,6 +285,7 @@ test('primary planning drains independent batches, then retries only a displayed
     calls.push(ids);
     if(disconnect){entered();await gate;throw new Error('Fixture connection closed');}
     return JSON.stringify({scenes:ids.filter(id=>!bad.has(id)).map(sceneId=>({sceneId,subject:'steam locomotive',
+      grounding:{version:1,mandatory:[{kind:'identity',required:'steam locomotive',scriptQuote:lines[Number(sceneId.slice(6))]}],illustrations:['A steam locomotive pulling a train'],optionalDetails:[]},
       visualTarget:'steam locomotive pulling a train',years:[],visualScope:'illustrative',preferredKind:'video',reservePolicy:'thematic',
       imageQueries:['steam locomotive photograph'],videoQueries:['steam locomotive pulling train'],
       fallbackVisualTarget:'',fallbackVideoQueries:[]}))});
@@ -335,10 +342,16 @@ test('primary planning drains independent batches, then retries only a displayed
   assert.deepEqual(disconnected.map(item=>item.status),['rejected','rejected']);
   service=restart();
   const protectedIssues=await service.getDocumentaryQueryPlanIssues(project.id);
-  assert.equal(protectedIssues.length,1);assert.equal(protectedIssues[0]?.retryToken,undefined);
+  assert.equal(protectedIssues.length,1);assert.ok(protectedIssues[0]?.retryToken);
+  assert.equal(protectedIssues[0]?.retryKind,'unknown');
   assert.match(protectedIssues[0]!.reason,/не подтверждён/);
   await assert.rejects(service.retryDocumentaryQueryPlan(project.id,second.sceneId,second.retryToken),/Состояние попыток изменилось/);
   assert.deepEqual(calls.slice(5),[[second.sceneId]]);
+  disconnect=false;bad.delete(second.sceneId);
+  const recovered=await service.retryDocumentaryQueryPlan(project.id,second.sceneId,protectedIssues[0]!.retryToken!);
+  assert.ok(currentDocumentaryAiSearchPlan(recovered,recovered.scenes[1]!));
+  assert.deepEqual(recovered.scenes.filter(s=>s.id!==second.sceneId),repaired.scenes.filter(s=>s.id!==second.sceneId));
+  assert.deepEqual(calls.slice(6),[[second.sceneId]]);
 });
 
 test('partial 1/3 AI planning saves valid work and stops without heuristic substitution or paid resubmission',async t=>{
@@ -361,6 +374,7 @@ test('partial 1/3 AI planning saves valid work and stops without heuristic subst
     }
     assert.equal(payload.purpose,undefined);
     onPartial(JSON.stringify({scenes:[{sceneId:first.sceneId,subject:'steam locomotive',visualTarget:'steam locomotive pulling a passenger train',years:[],visualScope:'illustrative',preferredKind:'video',reservePolicy:'thematic',
+      grounding:{version:1,mandatory:[{kind:'identity',required:'steam locomotive',scriptQuote:lines[0]}],illustrations:['A steam locomotive pulling a train'],optionalDetails:[]},
       imageQueries:['steam locomotive passenger train photo'],videoQueries:['steam locomotive pulling passenger train'],fallbackVisualTarget:'steam train moving',fallbackVideoQueries:['steam train moving']}]}));
     throw Error('Unknown paid response');
   }} as unknown as AnyModelClient;

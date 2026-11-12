@@ -13,7 +13,7 @@ import {documentaryDatedSearchQueries} from './documentary-dated-search.js';
 import {documentarySavedContextIssue,revalidateDocumentaryContext,documentaryMapActionIssue,documentaryRouteApprovalCandidate} from './documentary-context-approval.js';
 import {documentaryFallbackNarrativeFit,documentaryFallbackNarrativeIssue,documentaryLegacyFallbackNarrativeApproval} from './documentary-fallback-narrative.js';
 import {currentDocumentaryFootageFallback,fastDocumentaryCandidateScore,planFastDocumentaryScene,resetStaleDocumentaryFootageFallback,fastDocumentaryProviders} from './documentary-fast-plan.js';
-import {QueryPlanIssuesError} from './documentary-ai-query-planner.js';
+import {QueryPlanIssuesError,DocumentaryQueryRetryScopeError} from './documentary-ai-query-planner.js';
 import {currentDocumentaryAiSearchPlan,documentaryAiPlanContext} from './documentary-ai-plan-state.js';
 import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
 import {fastDocumentaryGraphicReady} from './documentary-fast-graphics.js';
@@ -1986,6 +1986,7 @@ export class DocumentaryProjectService {
       catch(error){
         signal?.throwIfAborted();
         if(cachedOnly)throw error;
+        if(error instanceof DocumentaryQueryRetryScopeError)throw error;
         plan=await this.queryPlanner.readCached?.(project,pending)??new Map<string,DocumentaryRequirement>();
         if(error instanceof QueryPlanIssuesError)issues.push(...error.issues);
         planningError=String(error).replace(/https?:\/\/\S+/g,'[URL]').slice(0,1200);

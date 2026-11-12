@@ -43,6 +43,8 @@ type Attempt = {
   errorName?: string;
   /** Server closed an entirely empty response. A single new attempt is allowed. */
   emptyResponse?:boolean;
+  /** A user-confirmed new request; the earlier uncertain attempt stays intact. */
+  explicitRetry?: {sceneId:string;token:string;previousOutcome:'unknown'};
 };
 const notSentReason = 'Запрос AI-планировщику не отправлен: не удалось установить соединение с прокси. Восстановите сеть и продолжите подготовку. Повтор этой попытки не дублирует оплаченный запрос.';
 function confirmedNotSent(attempt: Attempt): boolean {
@@ -60,13 +62,28 @@ export class QueryPlanIssuesError extends Error {
     super(issues.map(issue => `№${issue.sceneNumber} — ${issue.reason}`).join('\n'));
   }
 }
+export class DocumentaryQueryRetryScopeError extends Error {}
 
 function queryIssue(cache: Cache, scene: Scene): DocumentaryQueryPlanIssue | undefined {
   const related = cache.attempts.filter(attempt => attempt.ids.includes(scene.id));
   const attempts = related.filter(attempt => !confirmedNotSent(attempt));
   const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
   if (attempts.some(a => !closedEmptyResponse(a)&&(a.status === 'pending' || a.status === 'uncertain' || a.responseState !== 'complete'))) {
-    return { ...row, reason: 'Результат отправленного запроса AI-планировщику не подтверждён, автоматического платного повтора нет.' };
+    const unsettled=attempts.filter(a=>!closedEmptyResponse(a)&&(a.status==='pending'||a.status==='uncertain'||a.responseState!=='complete'));
+    // Do not invent a retry scope for legacy/corrupt receipts without the
+    // actual request. The token changes with every saved part or new attempt,
+    // so a stale click cannot authorize a different unknown submission.
+    const scoped=unsettled.every(attempt=>{
+      if(typeof attempt.request?.system!=='string'||!attempt.request.system.trim()
+        ||typeof attempt.request.payload!=='string'||!attempt.request.payload)return false;
+      try{
+        const request=JSON.parse(attempt.request.payload);
+        return Array.isArray(request.requestedScenes)&&request.requestedScenes.some((item:unknown)=>
+          record(item)&&item.sceneId===scene.id&&item.narration===scene.narration);
+      }catch{return false;}
+    });
+    return { ...row, reason: 'Результат отправленного запроса AI-планировщику не подтверждён, автоматического платного повтора нет.',
+      ...(scoped?{retryKind:'unknown' as const,retryToken:hash(['unknown-plan-retry',cache.inputHash,scene.id,related])}:{}) };
   }
   if (attempts.some(a => a.status === 'complete')) return { ...row,
     reason: 'В кеше отмечен готовый ответ, но его план недоступен. Повторная отправка заблокирована.' };
@@ -81,6 +98,22 @@ function queryIssue(cache: Cache, scene: Scene): DocumentaryQueryPlanIssue | und
 function closedEmptyResponse(attempt:Attempt):boolean {
   return attempt.status==='uncertain'&&attempt.emptyResponse===true&&attempt.errorName==='AnyModelCompletionUncertainError'
     &&attempt.rawResponse===undefined&&attempt.responseState===undefined;
+}
+
+/** A confirmed new answer can supply the plan explicitly requested by the
+ * user. It does not relabel the earlier batch or resolve its other scenes. */
+function replacedUnknownPlanAttempts(cache:Cache,scene:Scene,active:DocumentaryAiSearchPlan):Set<Attempt>{
+  for(let index=cache.attempts.length-1;index>=0;index--){
+    const attempt=cache.attempts[index]!,permission=attempt.explicitRetry;
+    if(permission?.previousOutcome!=='unknown'||permission.sceneId!==scene.id
+      ||attempt.status!=='complete'||attempt.responseState!=='complete'
+      ||attempt.ids.length!==1||attempt.ids[0]!==scene.id)continue;
+    const previous=cache.attempts.slice(0,index),issue=queryIssue({...cache,attempts:previous},scene);
+    if(issue?.retryKind!=='unknown'||issue.retryToken!==permission.token)continue;
+    const recovered=completedRawPlans({...cache,attempts:[attempt]},cache.inputHash,cache.model).get(scene.id);
+    if(recovered&&hash(primaryOnly(recovered))===hash(primaryOnly(active)))return new Set(previous);
+  }
+  return new Set();
 }
 
 // A feedback plan is a distinct task: the primary reserve may itself be too
@@ -613,8 +646,13 @@ export class DocumentaryAiQueryPlanner {
   async readIssues(project: Project, scenes: Scene[]): Promise<DocumentaryQueryPlanIssue[]> {
     if (!scenes.length) return [];
     let issues: DocumentaryQueryPlanIssue[] = [];
-    await this.run(project, scenes, path.resolve(this.rootFor(project.id)), {}, false, false, rows => { issues = rows; });
-    return issues;
+    const root=path.resolve(this.rootFor(project.id)),active=locks.has(root);
+    await this.run(project, scenes, root, {}, false, false, rows => { issues = rows; });
+    // A live provider call is not a stopped request awaiting user recovery.
+    return active||locks.has(root)?issues.map(issue=>{
+      if(issue.retryKind!=='unknown')return issue;
+      const {retryToken:_token,retryKind:_kind,...held}=issue;return held;
+    }):issues;
   }
 
   async plan(project: Project, scenes: Scene[], options: Options = {}): Promise<Map<string, DocumentaryRequirement>> {
@@ -914,7 +952,9 @@ export class DocumentaryAiQueryPlanner {
         const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
         if (Object.hasOwn(cache.plans, scene.id)) {
           const active = adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cache.plans[scene.id]!;
+          const explicitlyReplaced=replacedUnknownPlanAttempts(cache,scene,active);
           const unsettled = attemptsFor(scene.id).some(attempt => {
+            if(explicitlyReplaced.has(attempt))return false;
             if(closedEmptyResponse(attempt)||!unsettledReserveAttempt(attempt))return false;
             // Ordinary streaming can save a complete scene before the next
             // scene is interrupted. Reuse only that same validated entry; the
@@ -968,7 +1008,7 @@ export class DocumentaryAiQueryPlanner {
       && (attempt.status === 'pending' || attempt.status === 'uncertain'&&!closedEmptyResponse(attempt))));
     let retryToken = options.retryToken;
     if (retryToken !== undefined && (fallbackOnly || scenes.length !== 1 || !retryToken)) {
-      throw new Error('Для адресного повтора выберите одну сцену с завершёнными попытками.');
+      throw new DocumentaryQueryRetryScopeError('Для адресного повтора выберите одну сцену и её актуальное разрешение.');
     }
     const inFlight=new Set<string>();
     let failed:unknown;
@@ -977,6 +1017,7 @@ export class DocumentaryAiQueryPlanner {
     while ((missing().length||refreshIds.size)&&!failed) {
       options.signal?.throwIfAborted();
       const issues = fallbackOnly ? [] : primaryIssues();
+      let explicitRetry:Attempt['explicitRetry'];
       const skipped = new Set(issues.filter(issue => !issue.canContinue).map(issue => issue.sceneId));
       if(fallbackOnly)for(const scene of blocked())skipped.add(scene.id);
       if (fallbackOnly) for (const scene of missing()) {
@@ -984,7 +1025,8 @@ export class DocumentaryAiQueryPlanner {
           && (!reviseLegacy || isCorrectedReserveRevision(a.request?.promptRevision))).length >= (reviseLegacy ? 1 : MAX_ATTEMPTS)) skipped.add(scene.id);
       }
       if (retryToken !== undefined) {
-        if (issues[0]?.retryToken !== retryToken) throw new Error('Состояние попыток изменилось. Обновите список сцен перед повтором.');
+        if (issues[0]?.retryToken !== retryToken) throw new DocumentaryQueryRetryScopeError('Состояние попыток изменилось. Обновите список сцен перед повтором.');
+        if(issues[0].retryKind==='unknown')explicitRetry={sceneId:issues[0].sceneId,token:retryToken,previousOutcome:'unknown'};
         skipped.delete(issues[0].sceneId);
         retryToken = undefined; // One explicit click authorizes one additional completion.
       }
@@ -1018,6 +1060,7 @@ export class DocumentaryAiQueryPlanner {
       });
       const system = topicOnly ? TOPIC_BROLL_SYSTEM : fallbackOnly ? FALLBACK_SYSTEM+(reviseLegacy?CORRECT_LEGACY_RESERVE:'') : SYSTEM;
       const attempt: Attempt = { ids: [...allowed], ...(refreshing.length ? { refreshIds: refreshing } : {}),
+        ...(explicitRetry?{explicitRetry}:{}),
         status: 'pending', request: { system, payload, promptRevision: fallbackOnly ? RESERVE_PROMPT_REVISION : PROMPT_REVISION } };
       cache.attempts.push(attempt);
       await save(); // Durable marker BEFORE any paid submission.

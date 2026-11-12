@@ -33,6 +33,102 @@ const entry = (id: string, extra = {}) => ({ sceneId: id, subject: 'RMS Titanic'
   fallbackVideoQueries: ['ocean liner propellers archival footage'], ...extra });
 const response = (ids: string[]) => JSON.stringify({ scenes: ids.map(id => entry(id)) });
 
+test('an explicit unknown-plan retry submits one scene once and retains the original uncertain batch',async t=>{
+  let answer=false;
+  const f=await fixture(t,async call=>{
+    if(!answer)throw Error('Connection lost after submission');
+    return response(call.data.requestedScenes.map(scene=>scene.sceneId));
+  });
+  const scenes=scenesOf('First ship scene.','Second ship scene.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,scenes),/не подтверждён/);
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const original=JSON.parse(await readFile(file,'utf8'));
+  const [first,second]=await f.planner().readIssues(project,scenes);
+  assert.equal(first?.retryKind,'unknown');assert.ok(first?.retryToken&&second?.retryToken);
+  await assert.rejects(f.planner().plan(project,scenes),/автоматического платного повтора нет/);
+  await assert.rejects(f.planner().plan(project,[scenes[1]!],{retryToken:first.retryToken}),/Состояние попыток изменилось/);
+  assert.equal(f.calls.length,1);
+  answer=true;
+  const restored=await f.planner().plan(project,[scenes[0]!],{retryToken:first.retryToken});
+  assert.equal(restored.size,1);assert.equal(f.calls.length,2);
+  assert.deepEqual(f.calls[1]!.data.requestedScenes.map(scene=>scene.sceneId),[scenes[0]!.id]);
+  const saved=JSON.parse(await readFile(file,'utf8'));
+  assert.deepEqual(saved.attempts[0],original.attempts[0]);
+  assert.deepEqual(saved.attempts[1].explicitRetry,{sceneId:scenes[0]!.id,token:first.retryToken,previousOutcome:'unknown'});
+  assert.equal((await f.planner().readIssues(project,[scenes[0]!]))[0]?.cached,true,
+    'The newly completed explicit answer is applicable despite its preserved predecessor');
+  await assert.rejects(f.planner().plan(project,[scenes[1]!]),/автоматического платного повтора нет/);
+  assert.equal(f.calls.length,2);
+  for(const damage of ['token','result','state','context','scene']){
+    const changed=structuredClone(saved),retry=changed.attempts[1];
+    if(damage==='token')retry.explicitRetry.token='forged';
+    if(damage==='result')retry.rawResponse='{"scenes":[]}';
+    if(damage==='state')retry.status='uncertain';
+    if(damage==='context'){const input=JSON.parse(retry.request.payload);input.originalScript+=' changed';retry.request.payload=JSON.stringify(input);}
+    if(damage==='scene')retry.explicitRetry.sceneId=scenes[1]!.id;
+    await writeFile(file,JSON.stringify(changed));
+    const [held]=await f.planner().readIssues(project,[scenes[0]!]);
+    assert.equal(held?.cached,undefined,damage);assert.match(held?.reason??'',/не подтверждён/,damage);
+  }
+});
+
+for(const outcome of ['disconnect','invalid','partial'])test(`an explicit unknown-plan retry remains one-shot after ${outcome}`,async t=>{
+  let calls=0;
+  const f=await fixture(t,async(_call,partial)=>{
+    calls++;
+    if(calls===1||outcome==='disconnect')throw Error('Connection lost after submission');
+    if(outcome==='partial'){partial?.('{"scenes":[');throw Error('Disconnected mid-response');}
+    return '{"scenes":[]}';
+  });
+  const scenes=scenesOf('One ship scene.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,scenes));
+  const first=(await f.planner().readIssues(project,scenes))[0]!;
+  assert.ok(first.retryToken);
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:first.retryToken}));
+  assert.equal(calls,2);
+  await assert.rejects(f.planner().plan(project,scenes));
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:first.retryToken}),/Состояние попыток изменилось/);
+  assert.equal(calls,2);
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const cache=JSON.parse(await readFile(file,'utf8'));
+  assert.equal(cache.attempts.length,2);assert.equal(cache.attempts[0].status,'uncertain');
+});
+
+test('unknown-plan permission cannot survive changed context, evidence or a malformed request',async t=>{
+  const f=await fixture(t,async()=>{throw Error('Unknown submitted request');});
+  const scenes=scenesOf('A ship departed.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,scenes));
+  const token=(await f.planner().readIssues(project,scenes))[0]!.retryToken!;assert.ok(token);
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const original=JSON.parse(await readFile(file,'utf8'));
+  const changedScript={...project,videoBrief:{...project.videoBrief!,readyScript:project.videoBrief!.readyScript+' A changed fact.'}};
+  await assert.rejects(f.planner().plan(changedScript,scenes,{retryToken:token}),/Состояние попыток изменилось/);
+  f.state.model='fixture/other-model';
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:token}),/Состояние попыток изменилось/);
+  f.state.model=MODEL;
+  const changed=structuredClone(original);changed.attempts[0].rawResponse='A later saved fragment';changed.attempts[0].responseState='partial';
+  await writeFile(file,JSON.stringify(changed));
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:token}),/Состояние попыток изменилось/);
+  for(const request of [undefined,{system:23,payload:'{}'},{system:'saved',payload:'broken'},
+    {system:'saved',payload:JSON.stringify({requestedScenes:[{sceneId:scenes[0]!.id,narration:'Changed narration'}]})}]){
+    const damaged=structuredClone(original);damaged.attempts[0].request=request;
+    await writeFile(file,JSON.stringify(damaged));
+    assert.equal((await f.planner().readIssues(project,scenes))[0]!.retryToken,undefined);
+  }
+  assert.equal(f.calls.length,1);
+});
+
+test('two clicks on one unknown-plan token make only one new submission',async t=>{
+  let calls=0;
+  const f=await fixture(t,async()=>{calls++;throw Error('Unknown submitted request');});
+  const scenes=scenesOf('A ship departed.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,scenes));
+  const token=(await f.planner().readIssues(project,scenes))[0]!.retryToken!;assert.ok(token);
+  const results=await Promise.allSettled([f.planner().plan(project,scenes,{retryToken:token}),f.planner().plan(project,scenes,{retryToken:token})]);
+  assert.ok(results.every(result=>result.status==='rejected'));
+  assert.equal(calls,2);
+});
+
 const groundedEntry=(id:string,subject:string,quote:string,extra={})=>entry(id,{subject,visualTarget:subject,years:[],
   visualScope:'illustrative',preferredKind:'image',imageQueries:[subject+' historical portrait drawing photograph'],videoQueries:[subject+' preserved view'],
   grounding:{version:1,mandatory:[{kind:'identity',required:subject,scriptQuote:quote}],
@@ -624,7 +720,7 @@ test('an accepted HTTP response disconnect with zero generated characters remain
   await assert.rejects(planner().plan(project, scenes), /автоматического платного повтора нет/);
   assert.equal(calls, 1);
   const [issue] = await planner().readIssues(project, scenes);
-  assert.equal(issue?.canContinue, undefined); assert.equal(issue?.retryToken, undefined);
+  assert.equal(issue?.canContinue, undefined); assert.equal(issue?.retryKind,'unknown');assert.ok(issue?.retryToken);
 });
 
 test('wrapped redirect failures and a spoofed proxy error name never authorize query resubmission', async t => {
