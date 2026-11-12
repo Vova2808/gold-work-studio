@@ -94,6 +94,65 @@ test('one grounded sentence identity lends its existing canonical name to image 
  }
 });
 
+test('duplicate grounded descriptions of the same object retain their primary weights and detailed image tie',async()=>{
+ for(const [name,alias] of [['Cutty Sark','Ferreira'],['Aurora','Horizon']] as const){
+  const narration=`${name} was sold and renamed ${alias}; the famous clipper became a general cargo carrier.`;
+  const {project,scene}=await fixture(name,false,narration),plan=scene.documentary!.requirement.aiSearchPlan!;
+  plan.subject=`${name} (renamed ${alias}) clipper ship`;
+  plan.grounding!.mandatory=[
+   {kind:'identity',required:`${name}, also named ${alias}`,aliases:[alias],scriptQuote:`${name} was sold and renamed ${alias}`},
+   {kind:'identity',required:`${name} as the famous tea clipper`,scriptQuote:'the famous clipper became a general cargo carrier.'}
+  ];
+  const before=JSON.stringify(scene),priority=documentarySimpleCandidatePriority(project,scene,'image');
+  const pool=[source('web',name,'',{provider:'web'}),source('archive',`${name} (ship).jpg`,'',{width:1920,height:1280})];
+  assert.deepEqual(priority.subjects,[plan.subject],'Do not reweight primary physical/query conditions');
+  assert.equal(priority.imageTieBreak?.(pool[1]!),true,'The existing canonical helper proves these checks describe one object');
+  assert.equal(selectSimpleDocumentaryCandidates(pool,priority)[0]!.id,'archive');
+  assert.equal(JSON.stringify(scene),before);
+  assert.equal(pool[1]!.match,'unverified','Ordering is not visual acceptance');
+  scene.documentary!.requirement.footageFallback={version:1,target:plan.fallbackVisualTarget,queries:[...plan.fallbackVideoQueries],
+   reason:'Primary sources exhausted',narration:scene.narration,originalTarget:plan.visualTarget,kind:'image'};
+  const reserve=documentarySimpleCandidatePriority(project,scene,'image');
+  assert.deepEqual(reserve.subjects,[name]);
+  assert.deepEqual(reserve.queries,plan.fallbackVideoQueries);
+  assert.equal(reserve.imageTieBreak?.(pool[1]!),true);
+ }
+});
+
+test('grounded reserve keeps the mandatory name weighted without importing primary queries or dropping physical conditions',async()=>{
+ const {project,scene}=await fixture('Aurora',false,'Aurora showed iron frames and wooden planking.'),plan=scene.documentary!.requirement.aiSearchPlan!;
+ plan.grounding!.mandatory[1]!.required='iron frames and wooden planking visible together';
+ plan.fallbackVisualTarget='Aurora hull interior with iron frames and wooden planking';
+ plan.fallbackVideoQueries=['Aurora hull iron frames wooden planking','Aurora composite hull interior'];
+ scene.documentary!.requirement.footageFallback={version:1,target:plan.fallbackVisualTarget,queries:[...plan.fallbackVideoQueries],
+  reason:'Primary sources exhausted',narration:scene.narration,originalTarget:plan.visualTarget};
+ const before=JSON.stringify(scene),task=documentarySimpleCandidatePriority(project,scene,'video');
+ assert.deepEqual(task.subjects,['Aurora']);
+ assert.deepEqual(task.queries,plan.fallbackVideoQueries);
+ assert.equal(task.visualTarget,plan.fallbackVisualTarget);
+ const named=source('named','Aurora','',{kind:'video'}),generic=source('generic','Hull interior','',{kind:'video'});
+ assert.ok(documentaryCandidatePriorityScore(named,task)>documentaryCandidatePriorityScore(generic,task),'Generic category words must not outweigh the grounded identity');
+ const physical=source('physical','Aurora iron frames wooden planking','',{kind:'video'});
+ assert.equal(selectSimpleDocumentaryCandidates([named,physical],task)[0]!.id,'physical');
+ assert.equal(JSON.stringify(scene),before);
+});
+
+test('reserve priority never coalesces different identities, an owner, or a shortened model',async()=>{
+ for(const [subject,checks,quote] of [
+  ['Aurora',[{required:'Aurora'},{required:'Horizon'}],'Aurora met Horizon.'],
+  ['Aurora',[{required:'the owner of Aurora'}],'The owner of Aurora commissioned the voyage.'],
+  ['Airbus A320',[{required:'Airbus A320 (neo)'}],'Airbus A320 (neo) entered service.'],
+  ['Canon EOS R5',[{required:'Canon EOS R5 (Mark II)'}],'Canon EOS R5 (Mark II) was used.']
+ ] as const){
+  const {project,scene}=await fixture(subject,false,quote),plan=scene.documentary!.requirement.aiSearchPlan!;
+  plan.grounding!.mandatory=checks.map(check=>({kind:'identity' as const,required:check.required,scriptQuote:quote}));
+  scene.documentary!.requirement.footageFallback={version:1,target:plan.fallbackVisualTarget,queries:[...plan.fallbackVideoQueries],
+   reason:'Primary sources exhausted',narration:scene.narration,originalTarget:plan.visualTarget};
+  assert.deepEqual(documentarySimpleCandidatePriority(project,scene,'video').subjects,[],subject);
+  assert.equal(documentarySimpleCandidatePriority(project,scene,'image').imageTieBreak,undefined,subject);
+ }
+});
+
 test('sentence tie evidence never substitutes the owner, model family or a name absent from the original quote',async()=>{
  for(const [subject,required,quote] of [
   ['Cutty Sark','John Willis, owner of Cutty Sark','John Willis owned Cutty Sark.'],
@@ -135,12 +194,22 @@ test('stronger active conditions win; unknown geometry, low resolution, wrong ti
  assert.equal(selectSimpleDocumentaryCandidates([unknown,landscape],verticalPriority)[0]!.id,unknown.id,'Use the actual output aspect, not a copied size threshold');
 });
 
-for(const outcome of ['accepted','rejected','pending'] as const)test(`one-photo reserve inspects the detailed titled source first; strict mock outcome=${outcome}`,async t=>{
+for(const outcome of ['accepted','rejected','pending','duplicate-grounded'] as const)test(`one-photo reserve inspects the detailed titled source first; strict mock outcome=${outcome}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-image-tie-'));
  t.after(async()=>{assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep)&&root.includes('gws-image-tie-'));await rm(root,{recursive:true,force:true});});
  t.mock.method(globalThis,'fetch',async()=>assert.fail('Live API is forbidden'));
  const picture=join(root,'fixture.png');await effectFfmpeg(['-y','-f','lavfi','-i','testsrc2=size=1280x1462','-frames:v','1',picture]);
- const {projects,project,scene}=await fixture(),pool=actualPool();pool[2]!.localPath=picture;
+ const {projects,project,scene}=await fixture('Cutty Sark',false,outcome==='duplicate-grounded'?'Cutty Sark sailed with all sails set.':undefined),pool=actualPool();pool[2]!.localPath=picture;
+ // Origin cooldown is process-wide: one fixture's mocked 429 must not block
+ // another scenario. Every address is TEST-NET and every transfer is mocked.
+ const host=`203.0.113.${['accepted','rejected','pending','duplicate-grounded'].indexOf(outcome)+1}`;
+ for(const candidate of pool)candidate.downloadUrl=candidate.downloadUrl.replace('203.0.113.1',host);
+ if(outcome==='duplicate-grounded'){
+  const plan=scene.documentary!.requirement.aiSearchPlan!;
+  plan.subject='Cutty Sark (clipper ship)';
+  plan.grounding!.mandatory[0]!.required='the ship Cutty Sark';
+  plan.grounding!.mandatory.push({kind:'identity',required:'Cutty Sark as the famous tea clipper',scriptQuote:scene.narration});
+ }
  scene.documentary!.candidates=[];await projects.mutate(project.id,()=>project);
  const downloads:string[]=[],inspections:string[]=[];
  const search=new DocumentarySearch();search.search=async input=>({candidates:input.kind==='image'?pool:[],sources:[]});
@@ -155,7 +224,7 @@ for(const outcome of ['accepted','rejected','pending'] as const)test(`one-photo 
     if(outcome==='pending')throw new DocumentaryAnalysisError('Unknown paid image response','pending');
     // Strict orchestration mock: wrong sources fail even if the ranking picked
     // them. No synthetic pattern is claimed to prove real sails or identity.
-    const accepted=id==='commons:15663715'&&outcome==='accepted';
+    const accepted=id==='commons:15663715'&&(outcome==='accepted'||outcome==='duplicate-grounded');
     const review={status:accepted?'accepted' as const:'rejected' as const,confidence:1,reason:accepted?'Mock visible required sails':'Mock missing required sails',
      quality:'',sampleSeconds:[0],checkedAt:'fixture',fastRelevance:{version:1 as const,target:selected.documentary!.requirement.aiSearchPlan!.visualTarget,relevant:accepted,evidence:'Mock content verdict'}};
     return {usedNewAnalysis:true,review:{...review,...(accepted?{illustrationApproval:documentaryIllustrationApproval(current,{...selected,documentary:{...selected.documentary!,visualReview:review}})}:{})}};
@@ -173,7 +242,7 @@ for(const outcome of ['accepted','rejected','pending'] as const)test(`one-photo 
  assert.deepEqual(inspections,['commons:15663715'],JSON.stringify({downloads,failures:result.failures,reason:result.project.scenes[0]!.documentary!.autoError}));
  assert.deepEqual(downloads,[pool[3]!.downloadUrl],'Unknown web originals must not consume the reserve first');
  const saved=result.project.scenes[0]!;
- assert.equal(saved.documentary!.verified,outcome==='accepted');assert.equal(saved.audioPath,'preserved-paid-voice.wav');
+ assert.equal(saved.documentary!.verified,outcome==='accepted'||outcome==='duplicate-grounded');assert.equal(saved.audioPath,'preserved-paid-voice.wav');
  assert.equal(result.project.settings.stockVideoPercent,60);assert.deepEqual(saved.documentary!.selectionPlan,{kind:'video',videoPercent:60});
  if(outcome==='pending'){
   await service.autoSelect(project.id,{sceneIds:[scene.id]});

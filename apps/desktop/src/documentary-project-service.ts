@@ -697,11 +697,14 @@ export function documentarySimpleCandidatePriority(project:Project,scene:Scene,k
   const fallback=currentDocumentaryFootageFallback(scene);
   const thematic=fallback&&(!ai||fallback.target===ai.fallbackVisualTarget&&JSON.stringify(fallback.queries)===JSON.stringify(ai.fallbackVideoQueries));
   const identities=ai?.grounding?.mandatory.filter(check=>check.kind==='identity');
-  const canonicalIdentity=identities?.length===1?documentaryGroundedDiscoveryName(ai):undefined;
+  // The grounded helper also proves when several identity clauses describe
+  // the same object. A reserve changes the query, not that required identity.
+  // Keep primary-task weights unchanged; restore only the lost reserve name.
+  const canonicalIdentity=documentaryGroundedDiscoveryName(ai);
   const normalized=(text:string)=>' '+text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()+' ';
   return {queries:plan.queries,visualTarget:plan.visualTarget,
-    subjects:thematic?[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement),
-    ...(kind==='image'&&!thematic&&identities?.length?{imageTieBreak:(candidate:DocumentaryCandidate)=>{
+    subjects:thematic?canonicalIdentity?[canonicalIdentity]:[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement),
+    ...(kind==='image'&&(!thematic||canonicalIdentity)&&identities?.length?{imageTieBreak:(candidate:DocumentaryCandidate)=>{
       if(candidate.kind!=='image'||!Number.isFinite(candidate.width)||!Number.isFinite(candidate.height)
         ||!(candidate.width!>0&&candidate.height!>0)
         ||!(['commons','pexels','pixabay'].includes(candidate.provider)||candidate.localPath))return false;
