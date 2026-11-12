@@ -2758,20 +2758,35 @@ export class DocumentaryProjectService {
           &&thematicRequirement&&!previousReady);
         const projectPrimaryPhoto=(source:Scene):Scene=>({...source,documentary:{...source.documentary!,
           requirement:{...source.documentary!.requirement,footageFallback:undefined},searchRecovery:undefined}});
+        const sceneRoot=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'));
+        const preparedSources:Array<DocumentaryCandidate&{checksum:string;selectionBinding?:string}>=[];
+        if(!options.force)for(const name of await readdir(sceneRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
+          if(!/^[a-f0-9]{64}\.source\.json$/.test(name))continue;
+          const source=await readFile(join(sceneRoot,name),'utf8').then(text=>{
+            try{return JSON.parse(text) as DocumentaryCandidate&{checksum:string;selectionBinding?:string};}catch{return undefined;}
+          });
+          if(source&&source.checksum===name.slice(0,64)&&source.localPath&&typeof source.id==='string'
+            &&(source.kind==='video'||source.kind==='image')&&Array.isArray(source.concerns)
+            &&await stat(source.localPath).then(info=>info.isFile()&&info.size>0,()=>false))preparedSources.push(source);
+        }
         const simpleStages=[stockStage(simpleKind),...(primaryPhotoFallback&&(!currentDocumentaryFootageFallback(scene)||primaryPhotoAfterReserve)?[stockStage('image')]:[])];
         const savedPhotoPool=savedCandidatePools.get(scene.id);
         const activeResumeFallback=currentDocumentaryFootageFallback(scene);
+        const primaryPhotoBinding=this.selectionResumeBinding(project,primaryPhotoAfterReserve?projectPrimaryPhoto(scene):scene);
+        const preparedPrimaryPhoto=preparedSources.some(source=>source.kind==='image'&&source.selectionBinding===primaryPhotoBinding);
         // A failed image-preferred task with saved photos already has a primary
         // photo lane. Resume it even if old videos remain in the shortlist, while
         // retaining the original slot and the separate final video quota. A
         // still-bound automatic reserve can resume this same primary lane;
-        // a manual reserve or changed authored input cannot opt into it.
+        // a manual reserve or changed authored input cannot opt into it. The
+        // last UI shortlist can be video-only even though a bound primary photo
+        // was already downloaded; its nonempty source file is also resumable.
         const resumePrimaryPhotos=Boolean(this.intelligence?.simpleSelection&&!options.force&&!videoOnly&&!previousReady
           &&project.settings.stockVideoPercent<100&&!pendingVideoReview&&!scene.documentary?.pinned&&!scene.documentary?.manualReview
           &&scene.documentary?.autoError&&(!activeResumeFallback||primaryPhotoAfterReserve&&activeResumeFallback.automaticRecovery)
           &&currentDocumentaryAiSearchPlan(project,scene)?.preferredKind==='image'
-          &&savedPhotoPool?.binding===this.selectionResumeBinding(project,scene)&&savedPhotoPool.candidates.length
-          &&savedPhotoPool.candidates.some(candidate=>candidate.kind==='image'));
+          &&(preparedPrimaryPhoto||savedPhotoPool?.binding===this.selectionResumeBinding(project,scene)
+            &&savedPhotoPool.candidates.some(candidate=>candidate.kind==='image')));
         const stages = this.intelligence?.simpleSelection
           ?resumePrimaryPhotos?[...simpleStages.filter(stage=>stage.kind==='image'),...simpleStages.filter(stage=>stage.kind==='video')]:simpleStages
           :videoOnly ? videos : scene.documentary?.selectionPlan?.kind==='image' ? [...photos,...videos] : [...videos,...photos];
@@ -2800,17 +2815,6 @@ export class DocumentaryProjectService {
           rejectionScope=createHash('sha256').update(JSON.stringify(['visual-illustration-v1',...visualScopeParts,...(reviewIdentity?[reviewIdentity]:[])])).digest('hex');
         if((await documentaryLegacyMotionRefusals(this.storage.projectDirectory(projectId),scene)).size)
           rejectionScope=createHash('sha256').update(JSON.stringify([rejectionScope,'physical-subject-motion-v2'])).digest('hex');
-        const sceneRoot=join(this.storage.projectDirectory(projectId),'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'));
-        const preparedSources:Array<DocumentaryCandidate&{checksum:string;selectionBinding?:string}>=[];
-        if(!options.force)for(const name of await readdir(sceneRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
-          if(!/^[a-f0-9]{64}\.source\.json$/.test(name))continue;
-          const source=await readFile(join(sceneRoot,name),'utf8').then(text=>{
-            try{return JSON.parse(text) as DocumentaryCandidate&{checksum:string;selectionBinding?:string};}catch{return undefined;}
-          });
-          if(source&&source.checksum===name.slice(0,64)&&source.localPath&&typeof source.id==='string'
-            &&(source.kind==='video'||source.kind==='image')&&Array.isArray(source.concerns)
-            &&await stat(source.localPath).then(info=>info.isFile()&&info.size>0,()=>false))preparedSources.push(source);
-        }
         let rejectionPath=join(sceneRoot,'rejected-candidates.json');
         let rejectedCandidates=await readDocumentaryRejections(rejectionPath,rejectionScope);
         // A Creative Commons video's HD hint does not guarantee an MP4 format
@@ -2856,9 +2860,13 @@ export class DocumentaryProjectService {
           &&Boolean(retryEvidence?.grants.some(grant=>grant.groundedNarration===scene.narration&&candidate.id==='local:'+grant.binding.checksum));
         const isUncertain=(candidate:DocumentaryCandidate)=>!retryFor(candidate)&&(hasGroundedGrant(candidate)
           ||uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key)));
-        const probeRetry=(candidate:DocumentaryCandidate,taskScene:Scene):Promise<void>|undefined=>{
-          const checksum=/^local:([a-f0-9]{64})$/.exec(candidate.id)?.[1],file=candidate.localPath;
-          if(candidate.provider!=='local'||!checksum||!file||!hasGroundedGrant(candidate)&&!uncertainCandidates.has(uncertainFileFingerprint(checksum)))return;
+        const probeRetry=(candidate:DocumentaryCandidate,taskScene:Scene,savedSource?:typeof preparedSources[number]):Promise<void>|undefined=>{
+          // A prepared Commons/provider source keeps its original identity. Only
+          // a validated manifest for this task supplies its checksum; arbitrary
+          // remote-card checksum fields cannot open the paid retry gate.
+          const checksum=candidate.provider==='local'?/^local:([a-f0-9]{64})$/.exec(candidate.id)?.[1]
+            :savedSource?.checksum,file=candidate.localPath;
+          if(!checksum||!file||!hasGroundedGrant(candidate)&&!uncertainCandidates.has(uncertainFileFingerprint(checksum)))return;
           const grants=retryEvidence?.grants.filter(grant=>grant.binding.checksum===checksum)??[];
           const canReadCache=retryEvidence?.cachedChecksums.has(checksum);
           if(!grants.length&&!canReadCache)return;
@@ -3169,7 +3177,9 @@ export class DocumentaryProjectService {
           pool.push(...batch.value);
           // Saved source-manifest batches bypass provider discovery. They need
           // the same explicit retry probe before entering a new grounded task.
-          if(retryEvidence)for(const candidate of batch.value)if(isUncertain(candidate))await probeRetry(candidate,taskScene);
+          if(retryEvidence)for(const candidate of batch.value)if(isUncertain(candidate))await probeRetry(candidate,taskScene,
+            savedSources.find(source=>source.kind===candidate.kind&&source.localPath===candidate.localPath
+              &&rejectedCandidateFingerprint(source)===rejectedCandidateFingerprint(candidate)));
           if (batch.value.length) foundThisRun = true;
           const latestProject = (await this.projects.get(projectId,{omitCandidates:true}))!;
           const used = new Set(latestProject.scenes.filter(item => item.id !== scene.id&&item.documentary?.verified).flatMap(item => item.documentary?.selected?.kind === "image" ? [item.documentary.selected.id] : []));
