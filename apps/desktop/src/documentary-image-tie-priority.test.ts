@@ -17,10 +17,10 @@ import {claimDocumentaryThematicRecovery,documentaryThematicDiscoveryRequirement
 import {effectFfmpeg} from './effect-media.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-async function fixture(subject='Cutty Sark',biography=false){
+async function fixture(subject='Cutty Sark',biography=false,narrationOverride?:string){
  const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
  const project=await projects.create({title:'Image priority',topic:'Documentary',mediaMode:'stock',mode:'standard',language:'en',aspectRatio:'16:9'});
- const narration=biography?`${subject} wore round spectacles.`:'With all her sails set, she carried around 32,000 square feet of canvas.';
+ const narration=narrationOverride??(biography?`${subject} wore round spectacles.`:'With all her sails set, she carried around 32,000 square feet of canvas.');
  project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:narration};
  project.settings.stockVideoPercent=60;project.settings.voice.enabled=false;
  project.settings.assembly.documentary!.autoMotionGraphics=false;project.settings.assembly.documentary!.autoEffects=false;
@@ -75,6 +75,38 @@ test('the tie rule is name-independent and applies to a mandatory biographical s
    source('native',subject,'',{width:1280,height:1462})];
   assert.equal(new Set(pool.map(c=>documentaryCandidatePriorityScore(c,priority))).size,1);
   assert.equal(selectSimpleDocumentaryCandidates(pool,priority)[0]!.id,'native');
+ }
+});
+
+test('one grounded sentence identity lends its existing canonical name to image ties without rewriting the plan',async()=>{
+ for(const [subject,required,quote,name] of [
+  ['Cutty Sark','the ship Cutty Sark','Cutty Sark left the tea trade.','Cutty Sark'],
+  ['Cutty Sark (clipper ship)','the ship is Cutty Sark, later renamed Ferreira under Portuguese ownership','Cutty Sark was sold and renamed Ferreira.','Cutty Sark'],
+  ['Marie Curie','the scientist Marie Curie','Marie Curie continued her research.','Marie Curie']
+ ] as const){
+  const {project,scene}=await fixture(name,false,quote),plan=scene.documentary!.requirement.aiSearchPlan!;
+  plan.subject=subject;plan.grounding!.mandatory[0]!.required=required;
+  const before=JSON.stringify(plan),priority=documentarySimpleCandidatePriority(project,scene,'image');
+  const pool=[source('unknown',name,'',{provider:'web'}),source('detailed',name,'',{width:1280,height:1462})];
+  assert.equal(documentaryCandidatePriorityScore(pool[0]!,priority),documentaryCandidatePriorityScore(pool[1]!,priority));
+  assert.equal(selectSimpleDocumentaryCandidates(pool,priority)[0]!.id,'detailed',required);
+  assert.equal(JSON.stringify(plan),before,'Canonical discovery only supplements tie evidence, never the saved required text or quote');
+ }
+});
+
+test('sentence tie evidence never substitutes the owner, model family or a name absent from the original quote',async()=>{
+ for(const [subject,required,quote] of [
+  ['Cutty Sark','John Willis, owner of Cutty Sark','John Willis owned Cutty Sark.'],
+  ['Airbus','the aircraft Airbus A320','The Airbus A320 entered service.'],
+  ['Airbus A320','the aircraft Airbus A320-200','The Airbus A320-200 entered service.'],
+  ['Nikon D850','the camera Nikon D850','An unidentified camera was used.']
+ ] as const){
+  const {project,scene}=await fixture(subject,false,quote),plan=scene.documentary!.requirement.aiSearchPlan!;
+  plan.grounding!.mandatory[0]!.required=required;
+  const priority=documentarySimpleCandidatePriority(project,scene,'image');
+  const pool=[source('unknown',subject,'',{provider:'web'}),source('detailed',subject,'',{width:1280,height:1462})];
+  assert.equal(documentaryCandidatePriorityScore(pool[0]!,priority),documentaryCandidatePriorityScore(pool[1]!,priority));
+  assert.equal(selectSimpleDocumentaryCandidates(pool,priority)[0]!.id,'unknown',required);
  }
 });
 

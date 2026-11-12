@@ -36,7 +36,7 @@ import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
 import {documentaryExactNamedShortVideoProbe} from './documentary-exact-short-video.js';
 import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue} from './documentary-illustration-fallback.js';
-import {documentaryNamedDiscoveryQueries,documentaryNamedMetadataShortlist,documentaryExactRequirementForRetry,documentaryNamedMetadataIssue,documentaryYouTubeNameFallback,documentaryNamedVideo,documentaryCandidateSubjectIssue,documentaryPlannedDiscoveryRequirement,documentaryCommonsDiscoverySubjects} from './documentary-named-search.js';
+import {documentaryNamedDiscoveryQueries,documentaryNamedMetadataShortlist,documentaryExactRequirementForRetry,documentaryNamedMetadataIssue,documentaryYouTubeNameFallback,documentaryNamedVideo,documentaryCandidateSubjectIssue,documentaryPlannedDiscoveryRequirement,documentaryCommonsDiscoverySubjects,documentaryGroundedDiscoveryName} from './documentary-named-search.js';
 import {documentaryContinuityModelYear,documentaryContradictoryModelYear} from './documentary-model-year.js';
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryNamedListPortrait,type DocumentarySceneContext} from './documentary-scene-context.js';
@@ -693,6 +693,7 @@ export function documentarySimpleCandidatePriority(project:Project,scene:Scene,k
   const fallback=currentDocumentaryFootageFallback(scene);
   const thematic=fallback&&(!ai||fallback.target===ai.fallbackVisualTarget&&JSON.stringify(fallback.queries)===JSON.stringify(ai.fallbackVideoQueries));
   const identities=ai?.grounding?.mandatory.filter(check=>check.kind==='identity');
+  const canonicalIdentity=identities?.length===1?documentaryGroundedDiscoveryName(ai):undefined;
   const normalized=(text:string)=>' '+text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()+' ';
   return {queries:plan.queries,visualTarget:plan.visualTarget,
     subjects:thematic?[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement),
@@ -704,7 +705,7 @@ export function documentarySimpleCandidatePriority(project:Project,scene:Scene,k
       // pictured subject. Prefer title-bound, usable geometry only on a tie;
       // actual pixels still decide identity and every required physical detail.
       const title=normalized(candidate.title.split(/[,;\r\n]|\s+[—–]\s+/u)[0]??'');
-      return identities.every(identity=>[identity.required,...(identity.aliases??[])].some(name=>name.trim()&&title.includes(normalized(name))))
+      return identities.every(identity=>[identity.required,...(identity.aliases??[]),...(canonicalIdentity?[canonicalIdentity]:[])].some(name=>name.trim()&&title.includes(normalized(name))))
         &&!documentaryMaterialMetadataIssue(scene,candidate)&&!documentaryKnownQualityIssue(candidate,project,scene);
     }}:{})};
 }
