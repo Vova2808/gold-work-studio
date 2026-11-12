@@ -15,6 +15,65 @@ const groundedScene=(required:string,quote:string,subject:string,target=subject)
  return result;
 };
 
+const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
+const museumDescription='When we took a Thames River Cruise from London to Greenwich to see the Royal Meridien, we discovered the National Maritime Museum, one of a quartet of the Royal Museums in Greenwich. The others are the Royal Observatory Greenwich, where the Meridien resides, and two others that will have to wait till next time: the historic ship Cutty Sark and the Queen\'s House.';
+
+test('the saved museum source explicitly defers the mandatory ship, including an active unrelated reserve',()=>{
+ const current=groundedScene('Cutty Sark','Cutty Sark was an extreme clipper','Cutty Sark hull construction','Cutty Sark iron frames with wooden planking');
+ const candidate={...source(museumTitle),description:museumDescription};
+ assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/отложен|не показан/iu);
+ current.documentary!.requirement.footageFallback={version:1,target:'museum ship figureheads',queries:['Greenwich museum'],kind:'video',
+  originalTarget:'Cutty Sark iron frames with wooden planking',narration:current.narration,reason:'Earlier search exhausted'};
+ assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/отложен|не показан/iu);
+});
+
+test('explicit exclusions bind to grounded identities and aliases, not a particular subject name',()=>{
+ for(const name of ['Aurora','Spitfire','Marie Curie']){
+  const current=groundedScene('the '+(name==='Marie Curie'?'scientist':'ship')+' '+name,name+' was famous.',name);
+  for(const description of [
+   'Two others will have to wait till next time: '+name+' and the Royal Palace.',
+   name+' is not shown in this video.',name+' does not appear in this film.',
+   'We did not film '+name+'.','There is no footage of '+name+'.',
+   'We will visit '+name+' in the next episode.',name+' will have to wait till next time.',
+  ])assert.match(documentaryMaterialMetadataIssue(current,{...source('A museum tour'),description})??'',/отложен|не показан/iu,description);
+ }
+ const alias=groundedScene('Marie Curie','Marie Curie was a scientist.','Marie Curie');
+ alias.documentary!.requirement.aiSearchPlan!.grounding!.mandatory[0]!.aliases=['Maria Skłodowska'];
+ assert.match(documentaryMaterialMetadataIssue(alias,{...source('A museum tour'),description:'Maria Skłodowska is not shown in this video.'})??'',/не показан/iu);
+});
+
+test('future mentions cannot exclude visible exteriors, mixed tours, other objects or ambiguous references',()=>{
+ const current=groundedScene('Aurora','Aurora was an historic ship.','Aurora','Aurora ship exterior');
+ for(const description of [
+  'We did not visit the interior of Aurora.','We did not visit Aurora interior.',
+  'We did not visit Aurora\'s interior.',
+  'Aurora stands next to the museum.','The next stop is Aurora.',
+  'We will visit Aurora next time. This video shows Aurora from outside.',
+  'Aurora will have to wait till next time, but its exterior is visible here.',
+  'We will visit Aurora in the next episode. It is briefly shown in the introduction.',
+  'We will visit Aurora in the next episode, but we show it outside.',
+  'Two others will have to wait till next time: Aurora and Orion, but this video shows Aurora outside.',
+  'We show Aurora outside and then explore the museum. Two others will have to wait till next time: Orion and the Royal Palace.',
+  'Aurora is visible beside the museum. We will visit Orion in the next episode.',
+  'We did not film Orion. Aurora is mentioned in the museum guide.',
+  'In the next episode we explore the museum. Aurora sailed around the world.',
+  'The museum mentions Aurora, which we will visit someday.',
+ ])assert.equal(documentaryMaterialMetadataIssue(current,{...source('A museum tour'),description}),undefined,description);
+ assert.equal(documentaryMaterialMetadataIssue(current,{...source('Aurora exterior and museum tour'),description:'We will visit Aurora in the next episode.'}),undefined);
+ assert.equal(documentaryMaterialMetadataIssue(namedScene('Aurora','A museum tour.'),{...source('A museum tour'),description:'Aurora is not shown.'}),undefined,'An ungrounded name is not authority for the new exclusion');
+ for(const current of [groundedScene('owner of Aurora','Captain Morgan owned Aurora.','Aurora'),
+  groundedScene('Airbus A320','Airbus A320 was introduced.','Airbus')])
+  assert.equal(documentaryMaterialMetadataIssue(current,{...source('A museum tour'),description:current.documentary!.requirement.aiSearchPlan!.subject+' is not shown.'}),undefined,
+   'A related vessel or shortened model family cannot become the mandatory identity');
+});
+
+test('the saved tunnel description does not identify its deferred boat museum by name',()=>{
+ const current=groundedScene('Cutty Sark','Cutty Sark was an extreme clipper','Cutty Sark','Cutty Sark at sea');
+ const description='Mas aí fica a questão... o que encontramos no sul? Um barco museu e um mercado de rua espetacular! 😲 Mas não se preocupe, esses tesouros esperam por você no próximo episódio.\nThames Clippers, Cutty Sark King William Walk, Street Food Market, Greenwich Pier, Cutty Sark Clipper Ship, Greenwich River Path';
+ assert.equal(documentaryMaterialMetadataIssue(current,{...source('A Incrível Aventura pelo Túnel Subaquático de Greenwich'),description}),undefined,
+  'A generic boat museum and a separate keyword list do not prove exclusion of the mandatory named ship');
+});
+
 test('namesake drinks fail before pixels even when a nautical target omits the word ship',()=>{
  for(const name of ['Cutty Sark','Aurora']){
   const current=groundedScene(name,name+' lost her rudder in heavy weather.',name,name+' at sea under sail');

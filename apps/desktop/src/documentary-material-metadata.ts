@@ -6,6 +6,55 @@ const hasName=(text:string,name:string)=>(' '+words(text)+' ').includes(' '+word
 const cleanIdentity=(value:string)=>value.replace(/^(?:the\s+)?(?:ship|vessel|clipper|aircraft|locomotive|shipowner|captain|scientist|inventor)\s+/i,'')
   .replace(/\s+(?:(?:clipper|sailing|steam|preserved|historic)\s+)*(?:ship|vessel|sails|rigging|hull|portrait|aircraft|locomotive)$/i,'').trim();
 
+/** Only explicit source exclusions, never evidence of visual acceptance.
+ * Keep ambiguous/mixed appearances for pixels; do not infer a named object
+ * from a generic "boat museum", unrelated keywords or a reserve query. */
+function excludedIdentityIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
+  const plan=scene.documentary?.requirement.aiSearchPlan;
+  const identities=plan?.grounding?.mandatory.filter(check=>check.kind==='identity')??[];
+  if(!identities.length)return;
+  const canonical=documentaryGroundedDiscoveryName(plan);
+  const metadata=source.title+'\n'+(source.description??'');
+  // A deferred visit can still include an exterior/preview in this episode.
+  // Pronouns cannot be safely assigned to a different named object here.
+  const normalized=words(metadata);
+  if(/\b(?:its|her|his|their) (?:exterior|outside|hull|profile|outline) (?:is|are|was|were) (?:visible|shown|seen)\b/u.test(normalized)
+    ||/\b(?:it|she|he|they) (?:is|are|was|were|s) (?:(?:also|already|briefly|clearly) )?(?:visible|shown|seen|featured)\b/u.test(normalized)
+    ||/\b(?:we|i) (?:show|see|film) (?:it|her|him|them) (?:here|outside|in this (?:video|episode))\b/u.test(normalized))return;
+  const future='(?:the )?next (?:time|episode|video|visit)';
+  for(const identity of identities){
+    const names=[...new Set([identity.required,...(identity.aliases??[]),...(canonical?[canonical]:[])].map(cleanIdentity).filter(Boolean))];
+    let excluded=false,ambiguous=false;
+    for(const clause of metadata.split(/[.!?\n;]+|\b(?:but|although|however|though|while|whereas)\b/iu)){
+      let remainder=clause;
+      // The colon binds its list, not other attractions earlier in the sentence.
+      const deferredList=/\b(?:will|must)\s+(?:have\s+to\s+)?wait\s+(?:till|until|for)\s+(?:the\s+)?next\s+(?:time|episode|video|visit)\s*:\s*([^:]+)$/iu.exec(remainder);
+      if(deferredList&&names.some(name=>hasName(deferredList[1]!,name))){
+        excluded=true;remainder=remainder.slice(0,deferredList.index);
+      }
+      remainder=words(remainder);
+      for(const name of names){
+        const escaped=words(name).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        if(!escaped)continue;
+        const ending='(?: (?:in (?:this|the) (?:video|film|episode)|here|today|this time))?$';
+        const patterns=[
+          escaped+' (?:is|was) (?:not|never) (?:shown|visible|featured|included|seen)'+ending,
+          escaped+' (?:does|did|will) not (?:appear|feature)'+ending,
+          '(?:did not|didn t|do not|don t|will not|won t) (?:show|film|feature|include|see|visit) (?:the )?'+escaped+ending,
+          '(?:no (?:footage|images|photos|video|views) of|without showing) (?:the )?'+escaped+ending,
+          escaped+' (?:will|must) (?:have to )?wait (?:till|until|for) '+future+'$',
+          '(?:we will|we ll|i will|i ll) (?:visit|show|film|explore) (?:the )?'+escaped+' (?:in |on )?'+future+'$',
+        ];
+        for(const pattern of patterns)remainder=remainder.replace(new RegExp('(?:^| )'+pattern,'u'),()=>{excluded=true;return ' ';});
+      }
+      // Any other mention, including a title or a present exterior view,
+      // leaves this identity undecided rather than guessing sentence scope.
+      if(names.some(name=>hasName(remainder,name)))ambiguous=true;
+    }
+    if(excluded&&!ambiguous)return 'Описание источника прямо указывает: обязательный объект не показан или его показ отложен до следующего выпуска.';
+  }
+}
+
 /** Original source titles can disprove identity; neither a matching name nor
  * an unknown title proves what is actually visible in the media. */
 function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
@@ -150,6 +199,8 @@ function workpieceMaterials(value:string):Set<Material>{
 /** An explicitly contradictory original title is a discovery refusal, never
  * proof that a generic metal image has the required composition or use. */
 export function documentaryMaterialMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|undefined{
+  const exclusion=excludedIdentityIssue(scene,source);
+  if(exclusion)return exclusion;
   const requirement=scene.documentary?.requirement;
   if(requirement){
     const grounded=requirement.aiSearchPlan?.grounding?.mandatory.some(check=>check.kind==='identity');
