@@ -129,6 +129,33 @@ test('two clicks on one unknown-plan token make only one new submission',async t
   assert.equal(calls,2);
 });
 
+test('unknown-plan retry refreshes an existing plan once without replacing it before application',async t=>{
+  const scenes=scenesOf('The clipper Aurora sailed.'),project=projectOf(scenes);
+  let revised=false;
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>groundedEntry(scene.sceneId,'Aurora',scenes[0]!.narration,
+    {visualTarget:revised?'A stern view of Aurora':'An overall view of Aurora'}))}));
+  const initial=await f.planner().plan(project,scenes);
+  scenes[0]!.documentary={requirement:initial.get(scenes[0]!.id)!,verified:false} as Scene['documentary'];
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!);
+  const cache=JSON.parse(await readFile(file,'utf8'));
+  cache.attempts.push({ids:[scenes[0]!.id],refreshIds:[scenes[0]!.id],status:'uncertain',request:structuredClone(cache.attempts[0].request)});
+  await writeFile(file,JSON.stringify(cache));
+  const issue=(await f.planner().readIssues(project,scenes))[0]!;
+  assert.equal(issue.retryKind,'unknown');assert.ok(issue.retryToken);
+  await f.planner().plan(project,scenes);assert.equal(f.calls.length,1,'Ordinary resume cannot repay the unknown correction');
+  revised=true;
+  const result=await f.planner().plan(project,scenes,{retryToken:issue.retryToken});
+  assert.equal(f.calls.length,2);assert.equal(result.get(scenes[0]!.id)!.aiSearchPlan!.visualTarget,'A stern view of Aurora');
+  const after=JSON.parse(await readFile(file,'utf8'));
+  assert.deepEqual(after.plans,cache.plans);assert.deepEqual(after.attempts.slice(0,2),cache.attempts);
+  assert.deepEqual(after.attempts[2].refreshIds,[scenes[0]!.id]);
+  scenes[0]!.documentary!.requirement=result.get(scenes[0]!.id)!;
+  assert.deepEqual(await f.planner().readIssues(project,scenes),[]);
+  await f.planner().plan(project,scenes);assert.equal(f.calls.length,2);
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:issue.retryToken}),/Состояние попыток изменилось/);
+  assert.equal(f.calls.length,2);
+});
+
 const groundedEntry=(id:string,subject:string,quote:string,extra={})=>entry(id,{subject,visualTarget:subject,years:[],
   visualScope:'illustrative',preferredKind:'image',imageQueries:[subject+' historical portrait drawing photograph'],videoQueries:[subject+' preserved view'],
   grounding:{version:1,mandatory:[{kind:'identity',required:subject,scriptQuote:quote}],

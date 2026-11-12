@@ -110,7 +110,8 @@ function replacedUnknownPlanAttempts(cache:Cache,scene:Scene,active:DocumentaryA
       ||attempt.ids.length!==1||attempt.ids[0]!==scene.id)continue;
     const previous=cache.attempts.slice(0,index),issue=queryIssue({...cache,attempts:previous},scene);
     if(issue?.retryKind!=='unknown'||issue.retryToken!==permission.token)continue;
-    const recovered=completedRawPlans({...cache,attempts:[attempt]},cache.inputHash,cache.model).get(scene.id);
+    const recovered=completedRawPlans({...cache,attempts:[attempt]},cache.inputHash,cache.model,
+      attempt.refreshIds?.includes(scene.id)?'refresh':'ordinary').get(scene.id);
     if(recovered&&hash(primaryOnly(recovered))===hash(primaryOnly(active)))return new Set(previous);
   }
   return new Set();
@@ -946,24 +947,25 @@ export class DocumentaryAiQueryPlanner {
         throw new QueryPlanIssuesError(rows);
       }
     }
+    const activePlanUnsettled=(scene:Scene,active:DocumentaryAiSearchPlan)=>{
+      const explicitlyReplaced=replacedUnknownPlanAttempts(cache,scene,active);
+      return attemptsFor(scene.id).some(attempt=>{
+        if(explicitlyReplaced.has(attempt)||closedEmptyResponse(attempt)||!unsettledReserveAttempt(attempt))return false;
+        // A complete streamed entry is reusable even when later entries in
+        // that batch were lost. An unfinished correction cannot replace it.
+        if(attempt.refreshIds?.includes(scene.id)||!active.grounding||typeof attempt.rawResponse!=='string')return true;
+        const entries=sceneObjects(attempt.rawResponse).filter(value=>record(value)&&value.sceneId===scene.id);
+        const received=entries.length===1?acceptPlan(entries[0],scene.id):undefined;
+        return !received||hash(primaryOnly(received))!==hash(primaryOnly(active));
+      });
+    };
     if (inspect) {
       const rows: DocumentaryQueryPlanIssue[] = [];
       for (const scene of scenes) {
         const row = { sceneId: scene.id, sceneNumber: scene.order + 1 };
         if (Object.hasOwn(cache.plans, scene.id)) {
           const active = adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cache.plans[scene.id]!;
-          const explicitlyReplaced=replacedUnknownPlanAttempts(cache,scene,active);
-          const unsettled = attemptsFor(scene.id).some(attempt => {
-            if(explicitlyReplaced.has(attempt))return false;
-            if(closedEmptyResponse(attempt)||!unsettledReserveAttempt(attempt))return false;
-            // Ordinary streaming can save a complete scene before the next
-            // scene is interrupted. Reuse only that same validated entry; the
-            // batch's unknown receipt and all unfinished refreshes stay held.
-            if(attempt.refreshIds?.includes(scene.id)||!active.grounding||typeof attempt.rawResponse!=='string')return true;
-            const entries=sceneObjects(attempt.rawResponse).filter(value=>record(value)&&value.sceneId===scene.id);
-            const received=entries.length===1?acceptPlan(entries[0],scene.id):undefined;
-            return !received||hash(primaryOnly(received))!==hash(primaryOnly(active));
-          });
+          const unsettled = activePlanUnsettled(scene,active);
           if (unsettled) { rows.push(queryIssue(cache, scene)!); continue; }
           const latestRefresh = [...attemptsFor(scene.id)].reverse().find(attempt => attempt.refreshIds?.includes(scene.id));
           if (latestRefresh?.status === 'invalid' && latestRefresh.responseState === 'complete') {
@@ -1010,6 +1012,18 @@ export class DocumentaryAiQueryPlanner {
     if (retryToken !== undefined && (fallbackOnly || scenes.length !== 1 || !retryToken)) {
       throw new DocumentaryQueryRetryScopeError('Для адресного повтора выберите одну сцену и её актуальное разрешение.');
     }
+    let explicitCachedIssue:DocumentaryQueryPlanIssue|undefined;
+    if(retryToken!==undefined){
+      const scene=scenes[0]!,active=adoptedPrimaryRefresh(scene,refreshed.get(scene.id))??workPlans[scene.id];
+      const issue=!active||activePlanUnsettled(scene,active)?queryIssue(cache,scene):undefined;
+      if(issue?.retryToken!==retryToken)throw new DocumentaryQueryRetryScopeError('Состояние попыток изменилось. Обновите список сцен перед повтором.');
+      if(active){
+        explicitCachedIssue=issue;
+        // Stage this one confirmed correction. The paid old plan remains in
+        // cache until a complete new response is applied to the current scene.
+        refreshIds.add(scene.id);
+      }
+    }
     const inFlight=new Set<string>();
     let failed:unknown;
     let incomplete:unknown;
@@ -1017,6 +1031,7 @@ export class DocumentaryAiQueryPlanner {
     while ((missing().length||refreshIds.size)&&!failed) {
       options.signal?.throwIfAborted();
       const issues = fallbackOnly ? [] : primaryIssues();
+      if(retryToken!==undefined&&explicitCachedIssue)issues.push(explicitCachedIssue);
       let explicitRetry:Attempt['explicitRetry'];
       const skipped = new Set(issues.filter(issue => !issue.canContinue).map(issue => issue.sceneId));
       if(fallbackOnly)for(const scene of blocked())skipped.add(scene.id);

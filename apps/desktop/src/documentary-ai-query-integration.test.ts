@@ -352,6 +352,19 @@ test('primary planning drains independent batches, then retries only a displayed
   assert.ok(currentDocumentaryAiSearchPlan(recovered,recovered.scenes[1]!));
   assert.deepEqual(recovered.scenes.filter(s=>s.id!==second.sceneId),repaired.scenes.filter(s=>s.id!==second.sceneId));
   assert.deepEqual(calls.slice(6),[[second.sceneId]]);
+  // A subsequent interrupted correction has an old plan already in cache.
+  // The public recovery method must still dispatch just its confirmed scene.
+  const beforeCorrection=JSON.parse(await readFile(receipt,'utf8'));
+  beforeCorrection.attempts.push({ids:[second.sceneId],refreshIds:[second.sceneId],status:'uncertain',
+    request:structuredClone(beforeCorrection.attempts.at(-1).request)});
+  await writeFile(receipt,JSON.stringify(beforeCorrection));
+  const correction=(await service.getDocumentaryQueryPlanIssues(project.id)).find(issue=>issue.sceneId===second.sceneId)!;
+  assert.equal(correction.retryKind,'unknown');assert.ok(correction.retryToken);
+  const corrected=await service.retryDocumentaryQueryPlan(project.id,second.sceneId,correction.retryToken);
+  assert.deepEqual(calls.slice(7),[[second.sceneId]]);
+  assert.deepEqual(corrected.scenes,recovered.scenes);
+  assert.deepEqual(await service.getDocumentaryQueryPlanIssues(project.id),[]);
+  assert.deepEqual(JSON.parse(await readFile(receipt,'utf8')).attempts.slice(0,-1),beforeCorrection.attempts);
 });
 
 test('partial 1/3 AI planning saves valid work and stops without heuristic substitution or paid resubmission',async t=>{
