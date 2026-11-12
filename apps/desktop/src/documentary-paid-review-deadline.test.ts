@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, {type TestContext} from 'node:test';
 import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve,sep} from 'node:path';
 import {setImmediate as nextTurn} from 'node:timers/promises';
 import {AnyModelClient} from './anymodel-client.js';
 import {DocumentaryIntelligence} from './documentary-intelligence.js';
@@ -18,7 +18,10 @@ const terminal=()=>encode(`data: ${JSON.stringify({choices:[{delta:{content:JSON
 
 async function fixture(t:TestContext,immediate=false,delayedHeaders=false){
   const root=await mkdtemp(join(tmpdir(),'gws-paid-review-deadline-'));
-  t.after(()=>rm(root,{recursive:true,force:true}));
+  t.after(async()=>{
+    assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep)&&root.includes('gws-paid-review-deadline-'));
+    await rm(root,{recursive:true,force:true});
+  });
   t.mock.timers.enable({apis:['setTimeout','Date'],now:1_000});
   // Native AbortSignal.timeout uses an internal clock; exercise the actual
   // deadline policy against the same deterministic clock as the real client.
