@@ -170,16 +170,20 @@ function identityMetadataIssue(scene:Scene,source:DocumentaryCandidate):string|u
     }
     return;
   }
-  const named=/(?:\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive|[Cc]anal|[Bb]ridge|[Pp]ortrait\s+of|[Cc]aptain)\s+)[‘'“"]([^’'”"]+)[’'”"]|[‘'“"]([^’'”"]+)[’'”"]\s*\((?:ship|aircraft|locomotive|canal|bridge)\)|\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s+(?:named\s+)?([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,3})/u.exec(title);
+  // A capitalized category after "ship" is not a declared name. Require
+  // quotation or the explicit naming relation for this class-first form.
+  const named=/(?:\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive|[Cc]anal|[Bb]ridge|[Pp]ortrait\s+of|[Cc]aptain)\s+)[‘'“"]([^’'”"]+)[’'”"]|[‘'“"]([^’'”"]+)[’'”"]\s*\((?:ship|aircraft|locomotive|canal|bridge)\)|\b(?:[Ss]hip|[Vv]essel|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s+named\s+([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,3})/u.exec(title);
   const sailing=/^(?:The\s+)?([A-Z][\p{L}’'-]+(?:\s+[A-Z][\p{L}’'-]+){0,3})\s+\([^)]*\)\s+(?:Sets?\s+Sail|Under\s+Sail)/u.exec(title);
   const namedBeforeClass=/^(?:The\s+)?([A-Z][\p{L}’'-]+(?:\s+(?:[A-Z][\p{L}’'-]+|\d+)){0,3})\s+(?:ferry|steamship|ocean liner|clipper|warship|locomotive|aircraft)\b/u.exec(title);
   const quotedVessel=/\b(?:sailboat|yacht|velero|voilier|segelschiff|яхта|парусник)\s+[‘'“"]([^’'”"]+)[’'”"]/iu.exec(title);
-  // Title Case alone may be an episode subtitle ("Life At Sea"). Require
-  // quoted identity or a vessel naming prefix before treating it as a name.
-  const headlineVehicle=/\b(?:[Ss]hip|[Vv]essel|[Ww]arship|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s*:\s*(?:[‘'“"]([^’'”"]+)[’'”"]|((?:HMS|HMAS|HMCS|USS|USNS|RMS|RRS|SS|MV)\s+[A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}\d'’-]+){0,3}))(?=\s*(?:[|#.!?]|$))/u.exec(title);
+  // Title Case alone may be an episode subtitle ("Life At Sea"). A vessel
+  // prefix is explicit naming even without a colon, but not a camera platform.
+  const headlineVehicle=/\b(?:[Ss]hip|[Vv]essel|[Ww]arship|[Cc]lipper|[Aa]ircraft|[Ll]ocomotive)\s*:\s*[‘'“"]([^’'”"]+)[’'”"](?=\s*(?:[|#.!?]|$))/u.exec(title);
+  const vesselPrefix=/\b((?:HMS|HMAS|HMCS|USS|USNS|RMS|RRS|SS|MV)\s+[A-Z][\p{L}'’-]+(?:\s+(?:(?:of|the)\s+)?[A-Z][\p{L}\d'’-]+){0,3})\b/u.exec(title);
+  const incidentalPrefix=vesselPrefix&&/\b(?:from|near|beside|behind|next to|opposite|on board|deck of|aboard)\s+(?:the\s+)?$/iu.test(title.slice(0,vesselPrefix.index));
   const place=names.some(name=>/\b(?:canal|bridge|palace|cathedral|ocean|sea|river|gulf|cape)\b/i.test(name))
     ?/\b([A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+){0,2}\s+(?:Canal|Bridge|Palace|Cathedral|Ocean|Sea|River|Stream)|(?:Cape|Gulf)\s+(?:of\s+)?[A-Z][\p{L}-]+(?:\s+[A-Z][\p{L}-]+)?)\b/u.exec(title):undefined;
-  const declared=named?.[1]??named?.[2]??named?.[3]??sailing?.[1]??namedBeforeClass?.[1]??quotedVessel?.[1]??headlineVehicle?.[1]??headlineVehicle?.[2]??place?.[1];
+  const declared=named?.[1]??named?.[2]??named?.[3]??sailing?.[1]??namedBeforeClass?.[1]??quotedVessel?.[1]??headlineVehicle?.[1]??(!incidentalPrefix?vesselPrefix?.[1]:undefined)??place?.[1];
   const genericSubject=/^(?:(?:at|in|on|the|a|an|sea|ocean|harbour|harbor|port|sailing|sail|under|steam|full|four|masted|deck|view|historic|historical|archival|museum|unknown|unidentified)\s*)+$/i;
   if(declared&&!genericSubject.test(declared)&&!names.some(name=>hasName(declared, name)||hasName(name,declared)))return refusal('источник явно называет другой объект: '+declared+'.');
   if(personTarget){

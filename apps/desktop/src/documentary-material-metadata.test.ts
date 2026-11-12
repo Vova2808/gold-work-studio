@@ -53,6 +53,32 @@ test('Title Case episode subtitles do not declare the identity of a different ve
   {...source(title!),description:description!}),undefined,title);
 });
 
+test('a prefixed different vessel in the original title is refused even when related-video metadata names the target',()=>{
+ const current=groundedScene('Cutty Sark','Cutty Sark was an extreme clipper','Cutty Sark','Cutty Sark sailing cargo vessel');
+ const candidate={...source('World oldest naval ship!… revealing NEW Rwanda 2025 HMS Victory silver coin'),kind:'video' as const,
+  description:'Famous Ships! ⚓️ The flagship of Admiral Nelson and the hero of Battle of Trafalgar.\n\nCheckout this video to see the Cutty Sark [link]\n\nThe ship depicted in this coin is very well known to history.'};
+ assert.match(documentaryMaterialMetadataIssue(current,candidate)??'',/другой объект: HMS Victory/iu);
+ for(const title of ['Visiting USS Orion today','Restoring HMAS Southern Star','The new RMS Orion silver coin'])
+  assert.match(documentaryMaterialMetadataIssue(groundedScene('Aurora','Aurora sailed.','Aurora','Aurora ship'),source(title))??'',/другой объект/iu,title);
+ assert.equal(documentaryMaterialMetadataIssue(current,source('HMS Victory and Cutty Sark at Greenwich')),undefined,'A mixed title remains subject to actual-frame review');
+});
+
+test('capitalized categories after a vehicle class are not explicit object names',()=>{
+ const current=groundedScene('Aurora','Aurora sailed.','Aurora','Aurora ship');
+ for(const title of ['Ship Scale Models Navigational Sailing','SHIP PLANS','Ship PLANS','Locomotive Maintenance And Repairs',
+  'Aircraft Wing Design','Locomotive Flying Scotsman','Ship Life At Sea'])
+  assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined,title);
+ for(const title of ['Ship named Orion at sea','Vessel named Southern Star in harbour','Aircraft named Concorde in flight',
+  'Locomotive named Flying Scotsman at the station','Ship "Orion" at sea'])
+  assert.match(documentaryMaterialMetadataIssue(current,source(title))??'',/другой объект/iu,title);
+});
+
+test('an incidental vessel prefix at a camera platform or neighbouring object does not identify the pictured subject',()=>{
+ const current=groundedScene('Aurora','Aurora sailed.','Aurora','Aurora ship');
+ for(const title of ['An unidentified clipper photographed from HMS Victory','A sailing vessel beside USS Orion','View from the deck of HMS Victory'])
+  assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined,title);
+});
+
 const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
 const museumDescription='When we took a Thames River Cruise from London to Greenwich to see the Royal Meridien, we discovered the National Maritime Museum, one of a quartet of the Royal Museums in Greenwich. The others are the Royal Observatory Greenwich, where the Meridien resides, and two others that will have to wait till next time: the historic ship Cutty Sark and the Queen\'s House.';
 
@@ -278,7 +304,7 @@ test('explicit different named vessels, aircraft, locomotives and canals are rej
     ['Cutty Sark','The Cuauhtémoc (Mexico) Sets Sail From Dublin - Sunday 26th. August (7864835002).jpg'],
     ['RMS Titanic','Ship \'Olympic\' leaving harbour'],
     ['Hawker Hurricane','Aircraft \'Supermarine Spitfire\' in flight'],
-    ['Mallard','Locomotive Flying Scotsman at the station'],
+    ['Mallard','Locomotive named Flying Scotsman at the station'],
     ['Suez Canal','Panama Canal archival view'],
     ['Southern Ocean','Crossing the Gulf Stream (Sailing voyage)'],
     ['Cape Horn','Cape Town coastline'],
