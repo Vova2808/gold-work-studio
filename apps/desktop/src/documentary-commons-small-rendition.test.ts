@@ -26,6 +26,18 @@ test('small unscaled JPEG uses the closest standard same-file rendition without 
   assert.equal(candidate.match,'unverified');
 });
 
+test('real imageinfo unscaled URL may report requested display dimensions rather than original pixels',()=>{
+  // The saved live 1920px imageinfo response points at the same 1000px original
+  // while advertising 1920x1357 for presentation. Neither dimension is a file upscale.
+  for(const [thumbwidth,thumbheight] of [[1920,1357],[999,706]]){
+    const candidate=parse({thumbwidth,thumbheight});
+    assert.equal(candidate.downloadUrl,thumb);
+    assert.equal(candidate.width,960);assert.equal(candidate.height,679);
+  }
+  for(const change of [{thumbwidth:1920,thumbheight:800},{thumbwidth:0},{thumbheight:NaN}])
+    assert.equal(parse(change).downloadUrl,original,'Inconsistent presentation geometry remains unmodified');
+});
+
 test('API-confirmed standard rendition is preferred verbatim and manual parsing retains the original',()=>{
   const confirmed=thumb+'?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail';
   const changes={thumburl:confirmed,thumbwidth:960,thumbheight:679,thumbmime:'image/jpeg'};
@@ -100,10 +112,10 @@ test('one automatic metadata GET supplies the small rendition and coalesces a di
 test('previous original-only automatic cache cannot hide the small rendition and remains untouched',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-commons-small-raster-'));
   t.after(async()=>{assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));assert.ok(root.includes('gws-commons-small-raster-'));await rm(root,{recursive:true,force:true});});
-  const query='Cutty Sark sails',key=createHash('sha256').update(JSON.stringify(['commons-native-rendition-3','commons','"cutty sark" sails','image','licensed-only','intitle:"cutty sark"'])).digest('hex');
+  const query='Cutty Sark sails',key=createHash('sha256').update(JSON.stringify(['commons-native-rendition-4','commons','"cutty sark" sails','image','licensed-only','intitle:"cutty sark"'])).digest('hex');
   const oldFile=join(root,key+'.json'),old=JSON.stringify({expiresAt:Date.now()+86400000,candidates:commonsCandidates(payload(),query)});
   await writeFile(oldFile,old);let calls=0;
-  const make=()=>new DocumentarySearch(undefined,async()=>{calls++;return Response.json(payload());},root);
+  const make=()=>new DocumentarySearch(undefined,async()=>{calls++;return Response.json(payload({thumbwidth:1920,thumbheight:1357}));},root);
   for(let attempt=0;attempt<2;attempt++)assert.equal((await make().search({query,entities:['Cutty Sark'],kind:'image',providers:['commons']},true,undefined,true)).candidates[0]!.downloadUrl,thumb);
   assert.equal(calls,1);assert.equal(await readFile(oldFile,'utf8'),old);
 });

@@ -179,8 +179,13 @@ function commonsSmallRaster(page:RecordValue,info:RecordValue):{url:string;width
   // Only the API's unscaled same-file response permits constructing a URL.
   // Preserve the encoded basename twice; do not guess page/frame/lossy names
   // or the separate shortened-thumb convention for long UTF-8 filenames.
+  // For thumbnail_unscaled the API can report requested display dimensions
+  // (e.g. 1920x1357) while the URL still serves the 1000x707 original. Use the
+  // original's real dimensions for the working copy, never the presentation size.
+  const displayWidth=Number(info.thumbwidth),displayHeight=Number(info.thumbheight);
   if(rendered.hostname!==original.hostname||rendered.pathname!==original.pathname
-    ||Number(info.thumbwidth)!==width||Number(info.thumbheight)!==height||Buffer.byteLength(name,'utf8')>150)return;
+    ||!Number.isInteger(displayWidth)||displayWidth<=0||!Number.isInteger(displayHeight)||displayHeight<=0
+    ||Math.abs(displayHeight-Math.round(height*displayWidth/width))>1||Buffer.byteLength(name,'utf8')>150)return;
   return {url:`https://thumb.wikimedia.org${pathname}`,width:size,height:scaledHeight};
 }
 
@@ -299,7 +304,7 @@ export class DocumentarySearch {
     const isolatedPublic=independentPublicSources&&['web','commons','internet-archive','loc','youtube'].includes(provider);
     const warningKey=this.webWarningKey(query,kind)+(independentPublicSources?':'+provider:'');
     // Earlier public-only YouTube results must not hide the configured API.
-    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-4':'commons-native-subject-2')
+    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-5':'commons-native-subject-2')
       :provider==='youtube'&&kind==='video'?'youtube-api-public-cc-2':'public-source-2';
     // subjectQuery includes the title-first mode and feature terms, so old
     // broad metadata batches cannot mask a newly focused image search.
