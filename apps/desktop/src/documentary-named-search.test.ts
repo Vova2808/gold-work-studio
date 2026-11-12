@@ -151,6 +151,51 @@ test('grounded discovery never substitutes an incidental object or shortens a re
   }
 });
 
+test('repeated grounded identities retain one quoted canonical name with a renamed subject decoration',()=>{
+ for(const [name,alias] of [['Cutty Sark','Ferreira'],['Aurora','Vega'],['Marie Curie','Maria Skłodowska']]){
+  const requirement=plannedTarget(name!+', also named '+alias,name!+' preserved view',[name!+' historical photograph']);
+  const plan=requirement.aiSearchPlan!;
+  plan.subject=name+' (renamed '+alias+') '+(name==='Marie Curie'?'scientist':'clipper ship');
+  plan.grounding={version:1,mandatory:[
+   {kind:'identity',required:name+', also named '+alias,aliases:[alias!],scriptQuote:name+' was renamed '+alias+'.'},
+   {kind:'identity',required:name+' as the famous historic subject',scriptQuote:'The famous historic subject changed its role.'},
+  ],illustrations:['An attributed view of the same subject.'],optionalDetails:[]};
+  requirement.identities=plan.grounding.mandatory.map(check=>({name:check.required,aliases:check.aliases??[]}));
+  const before=structuredClone(requirement);
+  assert.equal(documentaryGroundedDiscoveryName(plan),name);
+  assert.deepEqual(documentaryPlannedDiscoveryRequirement(requirement,plan).identities,[{name,aliases:[]}]);
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,plan,plan.imageQueries[0]!),[name]);
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,plan,'A different subject photograph'),[]);
+  assert.deepEqual(requirement,before,'Discovery cannot change saved aliases, quotations or required identities');
+  const foreign={...requirement,identities:[...requirement.identities,{name:'Another Object',aliases:[]}]};
+  assert.equal(documentaryPlannedDiscoveryRequirement(foreign,plan),foreign,'A separate requirement identity cannot disappear behind a grounded plan');
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(foreign,plan,plan.imageQueries[0]!),[]);
+ }
+});
+
+test('several grounded checks cannot collapse different identities, owners or model discriminators',()=>{
+ for(const [subject,required,second,quote] of [
+  ['Aurora','Aurora','Orion','Aurora sailed alongside Orion.'],
+  ['Aurora','Aurora and Orion','Aurora as a historic ship','Aurora sailed alongside Orion.'],
+  ['Aurora','Aurora','Captain Morgan, owner of Aurora','Captain Morgan owned Aurora.'],
+  ['Aurora','Aurora','Aurora\'s captain','Aurora sailed with her captain.'],
+  ['Aurora','Aurora','Aurora crew','Aurora sailed with her crew.'],
+  ['Aurora','Aurora','Aurora compared with Orion','Aurora sailed alongside Orion.'],
+  ['Airbus','Airbus A320','Airbus A380','Airbus A320 and Airbus A380 entered service.'],
+  ['Airbus A320','Airbus A320-200','Airbus A320 as a passenger aircraft','Airbus A320-200 entered service.'],
+  ['Marie Curie','Marie Curie','Marie Curie as a scientist','Marie Curie-Sklodowska was the required full identity.'],
+ ]){
+  const requirement=plannedTarget(required!,subject!,[subject!+' photograph']);
+  const plan=requirement.aiSearchPlan!;plan.subject=subject!;
+  plan.grounding={version:1,mandatory:[{kind:'identity',required:required!,scriptQuote:quote!},
+   {kind:'identity',required:second!,scriptQuote:'The historic subject changed its role.'}],illustrations:['same subject'],optionalDetails:[]};
+  requirement.identities=plan.grounding.mandatory.map(check=>({name:check.required,aliases:check.aliases??[]}));
+  assert.equal(documentaryGroundedDiscoveryName(plan),undefined,JSON.stringify({subject,required,second}));
+  assert.equal(documentaryPlannedDiscoveryRequirement(requirement,plan),requirement);
+  assert.deepEqual(documentaryCommonsDiscoverySubjects(requirement,plan,plan.imageQueries[0]!),[]);
+ }
+});
+
 test('discovery projection retains model discriminators in delimited aliases and canonical segments',()=>{
   for(const [name,alias,target,query,wrong] of [
     ['Airbus A320','Airbus, passenger aircraft','Preserved Airbus aircraft at a museum','Airbus A320 aircraft','Airbus A380 aircraft'],

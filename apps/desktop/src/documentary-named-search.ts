@@ -115,34 +115,48 @@ function metadataIdentityNames(identity:NonNullable<DocumentaryRequirement['iden
  * Neither a related owner/vehicle nor a shortened model family is an alias. */
 export function documentaryGroundedDiscoveryName(plan:DocumentaryRequirement['aiSearchPlan']):string|undefined {
   const checks=plan?.grounding?.mandatory.filter(check=>check.kind==='identity');
-  if(!plan||checks?.length!==1)return;
-  const check=checks[0]!;
-  const name=plan.subject.trim().replace(/\s+\((?:(?:sailing|steam|clipper|historic|preserved|passenger|military)\s+)*(?:ship|vessel|aircraft|locomotive|automobile|motorcycle|building|bridge|canal|person)\)$/iu,'');
-  if(name.length<3||!has(check.required,name)||!has(check.scriptQuote,name))return;
+  if(!plan||!checks?.length)return;
+  const queries=[...plan.imageQueries,...plan.videoQueries];
+  const [name]=metadataIdentityNames({name:plan.subject,aliases:[]},queries);
+  if(!name)return;
   const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  if(!new RegExp('(^|[^\\p{L}\\p{N}’\'-])'+escaped+'(?=$|[^\\p{L}\\p{N}’\'-])','iu').test(check.scriptQuote))return;
-  const match=new RegExp('(^|[^\\p{L}\\p{N}])('+escaped+')(?=$|[^\\p{L}\\p{N}])','iu').exec(check.required);
-  if(!match)return;
-  const prefix=check.required.slice(0,match.index+match[1]!.length).trim();
-  // "owner of X" and "Captain Y, aboard X" do not make X the identity.
-  if(prefix&&!/^(?:(?:the|a|an|named|depicted|is|ship|vessel|clipper|aircraft|locomotive|automobile|motorcycle|camera|engine|building|bridge|canal|person|captain|owner|scientist|inventor)\s*)+$/iu.test(prefix))return;
-  const tail=check.required.slice(match.index+match[0].length);
-  if(/^(?:[-/]\d|\s+(?:\d|[A-Z][\p{L}\p{N}'’-]*))/u.test(tail))return;
-  const parsed=metadataIdentityNames({name,aliases:[]},[...plan.imageQueries,...plan.videoQueries]);
-  return parsed.includes(name)?name:undefined;
+  const quotedName=new RegExp('(^|[^\\p{L}\\p{N}’\'-])'+escaped+'(?=$|[^\\p{L}\\p{N}’\'-])','iu');
+  if(!checks.some(check=>quotedName.test(check.scriptQuote)))return;
+  // Several checks may describe the same subject at different times. An
+  // anaphoric quote is safe only when every required identity directly binds
+  // this same name and at least one original quote witnesses it in full.
+  for(const check of checks){
+    const match=new RegExp('(^|[^\\p{L}\\p{N}])('+escaped+')(?=$|[^\\p{L}\\p{N}])','iu').exec(check.required);
+    if(!match)return;
+    const prefix=check.required.slice(0,match.index+match[1]!.length).trim();
+    // "owner of X" and "Captain Y, aboard X" do not make X the identity.
+    if(prefix&&!/^(?:(?:the|a|an|named|depicted|is|ship|vessel|clipper|aircraft|locomotive|automobile|motorcycle|camera|engine|building|bridge|canal|person|captain|owner|scientist|inventor)\s*)+$/iu.test(prefix))return;
+    const tail=check.required.slice(match.index+match[0].length);
+    if(/^(?:[-/]\d|\s+(?:\d|[A-Z][\p{L}\p{N}'’-]*)|['’]s\b)/u.test(tail)
+      ||/^\s+(?:crew|owner|captain|pilot|designer|family|series|class)\b/iu.test(tail)
+      ||/^\s+(?:and|or|versus|vs|alongside|aboard|with)\b|\b(?:and|or|versus|vs|alongside|aboard|with)\s+(?:the\s+)?\p{Lu}/u.test(tail))return;
+  }
+  return name;
 }
 
 /** The caller supplies only a current validated plan. This changes discovery
  * hints, never the stored requirement or the subject used by visual approval. */
 export function documentaryPlannedDiscoveryRequirement(requirement:DocumentaryRequirement,currentPlan:DocumentaryRequirement['aiSearchPlan']):DocumentaryRequirement {
-  if(!currentPlan||currentPlan!==requirement.aiSearchPlan||currentPlan.visualScope!=='illustrative'||requirement.identities?.length!==1)return requirement;
+  if(!currentPlan||currentPlan!==requirement.aiSearchPlan||currentPlan.visualScope!=='illustrative'||!requirement.identities?.length)return requirement;
   const target=currentPlan.visualTarget.split(/[,;]|\s+[—–]\s+/u)[0]??currentPlan.visualTarget;
   const queries=[...currentPlan.imageQueries,...currentPlan.videoQueries];
   const identity=requirement.identities[0]!;
   const supported=(name:string)=>has(target,name)&&queries.some(query=>has(query,name));
   const grounded=documentaryGroundedDiscoveryName(currentPlan);
-  if(grounded&&supported(grounded)&&identity.name!==grounded)
+  const checks=currentPlan.grounding?.mandatory.filter(check=>check.kind==='identity');
+  const sameGrounding=checks?.length===requirement.identities.length&&requirement.identities.every((item,index)=>
+    item.name===checks[index]!.required&&JSON.stringify(item.aliases)===JSON.stringify(checks[index]!.aliases??[]));
+  // Only the discovery view coalesces duplicate descriptions of one grounded
+  // identity. Preserve any separate/stale requirement and every saved field.
+  if(grounded&&supported(grounded)&&(requirement.identities.length===1||sameGrounding)
+    &&(requirement.identities.length!==1||identity.name!==grounded))
     return {...requirement,identities:[{name:grounded,aliases:[]}]};
+  if(requirement.identities.length!==1)return requirement;
   if(metadataIdentityNames(identity,requirement.queries).some(supported))return requirement;
   // Aliases already passed the canonical discriminator guard above. Splitting
   // them again as new identities would turn "Airbus, passenger aircraft" into
@@ -161,7 +175,7 @@ export function documentaryPlannedDiscoveryRequirement(requirement:DocumentaryRe
  * Descriptive suffixes use the existing parser; aliases cannot replace the
  * primary name with a brand or generic category for this extra native query. */
 export function documentaryCommonsDiscoverySubjects(requirement:DocumentaryRequirement,currentPlan:DocumentaryRequirement['aiSearchPlan'],query:string):string[]{
-  if(!currentPlan||currentPlan!==requirement.aiSearchPlan||requirement.identities?.length!==1)return [];
+  if(!currentPlan||currentPlan!==requirement.aiSearchPlan||!requirement.identities?.length)return [];
   const discovery=documentaryPlannedDiscoveryRequirement(requirement,currentPlan);
   if(discovery.identities?.length!==1)return [];
   const identity=discovery.identities[0]!;

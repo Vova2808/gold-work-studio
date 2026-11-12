@@ -15,6 +15,34 @@ const groundedScene=(required:string,quote:string,subject:string,target=subject)
  return result;
 };
 
+test('the saved renamed-ship plan rejects its namesake brand and a different headline vessel',()=>{
+ const current=groundedScene('Cutty Sark, also named Ferreira','Cutty Sark was sold to Portuguese owners and renamed Ferreira',
+  'Cutty Sark (renamed Ferreira) clipper ship','The clipper ship Cutty Sark, in her Ferreira period under Portuguese ownership, shown as a sailing cargo vessel');
+ current.documentary!.requirement.aiSearchPlan!.grounding!.mandatory[0]!.aliases=['Ferreira'];
+ current.documentary!.requirement.aiSearchPlan!.grounding!.mandatory.push({kind:'identity',required:'Cutty Sark as the famous tea clipper',
+  scriptQuote:'The famous tea clipper became a general cargo carrier.'});
+ const drink={...source('台湾のオレンジジュースが美味しい。光泉果汁時刻 100%柳橙綜合果汁 加 Cutty Sark カティサーク 人生好難'),kind:'video' as const,
+  description:'Cutty Sark is a range of blended Scotch whisky produced by La Martiniquaise. The name comes from the River Clyde-built clipper ship Cutty Sark.'};
+ assert.match(documentaryMaterialMetadataIssue(current,drink)??'',/напит/iu);
+ const other={...source('The Math Error That Flipped Britain’s Deadliest Warship: HMS Captain | #HMSCaptain #NavalHistory'),kind:'video' as const,
+  description:'HMS Captain, an experimental ironclad warship, capsized off Cape Finisterre.'};
+ assert.match(documentaryMaterialMetadataIssue(current,other)??'',/другой объект/iu);
+ for(const title of ['Cutty Sark under sail','Ferreira under sail','Unidentified historical ship',''])
+  assert.equal(documentaryMaterialMetadataIssue(current,source(title)),undefined,title+' remains undecided for pixels');
+});
+
+test('a class followed by a colon identifies a different vehicle without relying on a particular ship name',()=>{
+ for(const [name,target,title] of [
+  ['Aurora','Aurora ship','The historic warship: Orion | Documentary'],
+  ['Spitfire','Spitfire aircraft','The pioneering aircraft: Concorde | Aviation'],
+  ['Rocket','Rocket locomotive','The remarkable locomotive: Mallard | Rail history'],
+ ]){
+  const current=groundedScene(name!,name!+' was famous.',name!,target!);
+  assert.match(documentaryMaterialMetadataIssue(current,source(title!))??'',/другой объект/iu,title);
+  assert.equal(documentaryMaterialMetadataIssue(current,source(title!.replace(/: .*? \|/,': '+name+' |'))),undefined);
+ }
+});
+
 const museumTitle='Exploring the National Maritime Museum in Greenwich, England';
 const museumDescription='When we took a Thames River Cruise from London to Greenwich to see the Royal Meridien, we discovered the National Maritime Museum, one of a quartet of the Royal Museums in Greenwich. The others are the Royal Observatory Greenwich, where the Meridien resides, and two others that will have to wait till next time: the historic ship Cutty Sark and the Queen\'s House.';
 
