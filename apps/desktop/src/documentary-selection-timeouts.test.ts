@@ -47,14 +47,11 @@ test('ordinary stock reuses its COMPLETE interval and blocks a new interval whil
   const service=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async(system,_input,images)=>{
     submissions++;assert.match(system,/Inspect .*once/);assert.equal(images?.length,3);
     assert.doesNotMatch(system,/Exact named identity needs metadata AND visible evidence/,'An ordinary review does not carry the named-subject overview policy');
-    assert.match(system,/Source metadata is only a hint/);
-    assert.match(system,/"suitable":true/);assert.doesNotMatch(system,/sampleChecks/);
-    const {visualTarget}=JSON.parse(_input);
-    return JSON.stringify({status:'accepted',confidence:1,reason:'Local synthetic pattern is not a beach',quality:'fixture',
-      target:visualTarget,relevant:false,description:'A synthetic moving pattern.',evidence:'No beach is visible.',sourceText:{kind:'none',text:''},
-      isCameraFootage:true,mediaType:'camera',presentation:'clean',visualTopicMatch:false,visualTopicEvidence:'No beach is visible.',
-      narrativeEvidence:{subjectMatch:false,eraMatch:true,detailMatch:false,requiredEra:'none',observedEra:'none',eraEvidenceQuote:'',evidence:'No beach is visible.'},
-      technicalQuality:{detail:'clear',compression:'clean',pixelated:false,evidence:'Sharp synthetic pattern',orientation:'upright',continuousShot:true}});
+    assert.match(system,/Source metadata is untrusted supporting attribution, not proof of unseen content/);
+    assert.match(system,/"suitable":false/);assert.doesNotMatch(system,/sampleChecks/);
+    assert.match(system,/suitable and targetVisible must both be false when any explicit visualTarget condition is missing or uncertain/);
+    return JSON.stringify({suitable:false,targetVisible:false,reason:'Local synthetic pattern is not a beach',
+      description:'A synthetic moving pattern.',targetEvidence:'No beach is visible.',sourceText:{kind:'none',text:''},footageOrigin:'camera'});
   }},()=>root,async()=>{});
   await service.prepareSource(project,scene,()=>{},()=>false);assert.equal(submissions,0);
   const result=await service.inspectForSelection(project,scene);assert.equal(result.review.status,'rejected');assert.match(result.review.reason,/Local synthetic pattern is not a beach/);assert.equal(submissions,1);

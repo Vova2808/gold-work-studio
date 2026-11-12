@@ -1346,6 +1346,8 @@ export class DocumentaryIntelligence {
       :artwork?await this.client.documentaryMotionModel?.()??await this.client.documentaryQueryModel?.()
       :purpose==='semantic-montage'?await this.client.documentaryMontageModel?.()??await this.client.documentaryQueryModel?.():singleReviewModel??await this.client.documentaryAnalysisModel?.(tier);
     const remaining=this.workBudget.getStore()?.remaining();
+    const visualReviewBudget=images.length>0&&(purpose.startsWith('visual-')||['video-catalog','catalog-range-check','catalog-range-batch'].includes(purpose))
+      ?this.workBudget.getStore():undefined;
     const minimum=tier==='careful'?documentaryWorkLimits.analysisReserveMs:documentaryWorkLimits.minimumAnalysisMs;
     if(remaining!==undefined&&remaining<minimum)throw new DocumentaryBudgetExhausted(
       'Не осталось достаточно времени для проверки содержимого. Новый платный анализ не отправлен; готовые материалы сохранены.');
@@ -1368,6 +1370,14 @@ export class DocumentaryIntelligence {
     // on refusal retain the receipt and its existing no-replay protection.
     await this.workBudget.getStore()?.beforeSubmit?.();
     await options.beforeArtworkFeedbackDispatch?.();
+    if(visualReviewBudget){
+      // Persistence may yield to Stop or spend the last admission time. Do not
+      // dispatch in that case; keep the pending checkpoint's no-replay guard.
+      options.signal?.throwIfAborted();
+      if(this.inspection.getStore()?.shouldStop())throw new DOMException('Подбор остановлен пользователем','AbortError');
+      if(visualReviewBudget.remaining()<=0)throw new DocumentaryBudgetExhausted(
+        'Бюджет сцены исчерпан до отправки проверки. Новый платный анализ не отправлен; готовые материалы сохранены.');
+    }
     let partial = "", lastWrite = 0, received = false;
     let completionMetadata:AnyModelCompletionMetadata|undefined;
     let writing: Promise<void> | undefined;
@@ -1397,7 +1407,10 @@ export class DocumentaryIntelligence {
       const requestRemaining=this.workBudget.getStore()?.remaining();
       // Let the client's 300s total deadline classify a slow design response;
       // the former outer 240s cap could cut a valid slow stream off prematurely.
-      requestSignal=requestRemaining===undefined?(artwork?AbortSignal.timeout(310_000):undefined):AbortSignal.timeout(Math.max(1,Math.floor(requestRemaining)));
+      // The scene budget admits new pixel reviews; it must not cut off an
+      // already-paid stream. The client still owns its bounded total/idle
+      // deadlines. Explicit cancellation, batch and artwork limits stay intact.
+      requestSignal=visualReviewBudget?undefined:requestRemaining===undefined?(artwork?AbortSignal.timeout(310_000):undefined):AbortSignal.timeout(Math.max(1,Math.floor(requestRemaining)));
       if(options.signal)requestSignal=requestSignal?AbortSignal.any([requestSignal,options.signal]):options.signal;
       const ordinaryVisual=tier==='fast'&&Boolean(this.inspection.getStore()?.generalIllustration)
         &&['visual-overview','visual-range'].includes(purpose)&&images.length<=3&&!words.singleReview
