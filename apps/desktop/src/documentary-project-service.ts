@@ -30,7 +30,7 @@ import {completeDocumentaryVideoQuota,documentaryVideoQuotaCurrent,documentaryVi
 import {discoverDocumentaryQueryLanes} from './documentary-query-lanes.js';
 import {documentaryDiscoveryCompleted} from './documentary-discovery-completion.js';
 import {documentaryScriptEvidence,documentaryScriptEvidenceIssue,documentaryRecoveryQueries,documentaryScriptRequirements,documentaryRequirementQueries} from './documentary-script-evidence.js';
-import {documentaryWorkLimits,DocumentaryCandidateRejected} from './documentary-work-budget.js';
+import {documentaryWorkLimits,DocumentaryCandidateRejected,DocumentaryBudgetExhausted} from './documentary-work-budget.js';
 import {documentaryPreviewKey,documentaryPreviewRanges,documentaryPreviewDownloadRange,readDocumentaryPreview,downloadDirectDocumentaryPreview,downloadDirectDocumentaryRange,type DocumentaryPreview} from './documentary-preview.js';
 import {documentaryGeneralDiagramScope} from './documentary-general-diagram.js';
 import {documentaryRequiredVisiblePart,documentaryVisiblePartInMetadata} from './documentary-detail-evidence.js';
@@ -2409,9 +2409,76 @@ export class DocumentaryProjectService {
     }
   }
 
+  private async recoverAuthorizedLegacyReviews(projectId:string,sceneIds:string[]|undefined,session:DocumentarySelectionSession):Promise<void>{
+    if(!this.queryPlanner||!this.intelligence?.simpleSelection||!this.intelligence.inspectForSelection||!this.intelligence.withSelectionBudget)return;
+    const project=await this.projects.get(projectId,{omitCandidates:true});
+    if(!project||['generating','paused'].includes(project.status))return;
+    const model=(await this.intelligence.selectionReviewIdentity?.())?.model;if(!model)return;
+    const root=this.storage.projectDirectory(projectId),evidence=await readDocumentarySelectionRetryEvidence(root,model);
+    if(!evidence.grants.some(grant=>grant.priorState==='pending'||grant.priorState==='partial'))return;
+    const originalScript=documentaryAiPlanContext(project).originalScript;
+    for(const scene of project.scenes){
+      const doc=scene.documentary;
+      if(sceneIds&&!sceneIds.includes(scene.id)||scene.includeInAssembly===false||!doc||doc.verified||doc.pinned||doc.manualReview
+        ||doc.visualReview?.status==='accepted'||!currentDocumentaryAiSearchPlan(project,scene)
+        ||!documentaryAiPlanGroundingIssue(doc.requirement.aiSearchPlan,originalScript))continue;
+      const grants=evidence.grants.filter(grant=>['pending','partial'].includes(grant.priorState)
+        &&evidence.unsettledExact.some(item=>item.id===grant.id&&item.narration===scene.narration));
+      for(const grant of grants){
+        const checksum=grant.binding.checksum,manifest=join(root,'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),checksum+'.source.json');
+        const source=await readFile(manifest,'utf8').then(text=>JSON.parse(text) as DocumentaryCandidate&{checksum?:string},()=>undefined);
+        if(!source?.localPath||source.checksum!==checksum||!source.id||!source.provider||!['image','video'].includes(source.kind)
+          ||!await stat(source.localPath).then(info=>info.isFile()&&info.size>0,()=>false)
+          ||await checksumFile(source.localPath).catch(()=>undefined)!==checksum)
+          throw new Error(`Сцена №${scene.order+1}: исходный файл разрешённой точной проверки отсутствует или изменился. Повтор не отправлен; прежняя история сохранена.`);
+        const unchanged=JSON.stringify([documentaryAiPlanContext(project),this.manualRevision(scene),doc.requirement,doc.layout]);
+        const assertCurrent=async()=>{
+          if(this.stopRequested.has(projectId))throw new DOMException('Подбор остановлен пользователем','AbortError');
+          const current=await this.projects.get(projectId,{omitCandidates:true}),latest=current?.scenes.find(item=>item.id===scene.id);
+          if(!current||!latest||['generating','paused'].includes(current.status)||latest.includeInAssembly===false
+            ||latest.documentary?.verified||latest.documentary?.pinned||latest.documentary?.manualReview
+            ||JSON.stringify([documentaryAiPlanContext(current),this.manualRevision(latest),latest.documentary?.requirement,latest.documentary?.layout])!==unchanged
+            ||(await this.intelligence!.selectionReviewIdentity?.())?.model!==model
+            ||await checksumFile(source.localPath!).catch(()=>undefined)!==checksum)
+            throw new Error(`Сцена №${scene.order+1}: данные точной проверки изменились. Новый запрос не отправлен.`);
+        };
+        const prepared={...scene,trimStartSeconds:grant.binding.start,trimEndSeconds:source.kind==='video'?grant.binding.end:undefined,
+          imagePath:source.kind==='image'?source.localPath:undefined,videoPath:source.kind==='video'?source.localPath:undefined,
+          documentary:{...doc,selected:source,checksum,verified:false,visualReview:undefined}};
+        let changed:unknown;
+        const inspect=(cacheOnly:boolean)=>this.intelligence!.inspectForSelection!(project,prepared,
+          message=>this.publish({projectId,phase:'preparing',completed:0,total:grants.length,selected:0,skipped:0,failed:0,currentSceneId:scene.id,message}),
+          ()=>this.stopRequested.has(projectId)||Boolean(changed),cacheOnly);
+        await assertCurrent();
+        let exact=false;
+        try{await documentarySelectionRetry.run({grant,probe:true},()=>inspect(true));}
+        catch(error){if(error instanceof DocumentarySelectionRetryProbePassed)exact=true;else throw error;}
+        if(!exact)throw new Error(`Сцена №${scene.order+1}: исходный точный запрос не восстановлен. Разрешение не использовано, платный повтор не отправлен.`);
+        session.resume(scene.id);
+        try{
+          if(!session.takeAttempt(scene.id,source.kind))throw new DocumentaryBudgetExhausted();
+          await this.intelligence.withSelectionBudget({remaining:()=>session.remaining(scene.id,source.kind),
+            submit:()=>session.takeAnalysis(scene.id,source.kind),beforeSubmit:async()=>{
+              // Signal the existing pre-dispatch settlement guard. Throwing
+              // out of a pending-write hook would strand its one-time grant.
+              try{await assertCurrent();}catch(error){changed=error;}
+            }},
+            ()=>documentarySelectionRetry.run({grant,probe:false},()=>inspect(false)));
+        }catch(error){throw changed??error;}finally{session.pause(scene.id);}
+        // Recovery settles only the former payment. Do not apply its verdict
+        // to the scene. Normal planning below verifies the complete proof and
+        // refreshes the old task before any ordinary material selection.
+        const completed=await readDocumentarySelectionRetryEvidence(root,model);
+        if(!completed.exactCompletions.some(item=>item.grant.id===grant.id&&item.narration===scene.narration))
+          throw new Error(`Сцена №${scene.order+1}: точная проверка не имеет подтверждённого завершённого результата. Автоповтор отключён.`);
+      }
+    }
+  }
+
   private async selectPrepared(projectId:string,options:AutoStockSelectionOptions,videoOnly:boolean,attempts:Map<string,{scope:string;keys:Set<string>;found:boolean}>,session:DocumentarySelectionSession,reserveFallback:boolean,deferredLegacy?:Set<string>):Promise<AutoStockSelectionResult>{
     this.publish({ projectId, phase: "preparing", completed: 0, total: 0, selected: 0, skipped: 0, failed: 0, message: "Подготавливаю поиск и проверку материалов…" });
     const waitForNarration=this.narrationWaits.get(projectId);
+    if(!waitForNarration&&!videoOnly&&reserveFallback)await this.recoverAuthorizedLegacyReviews(projectId,options.sceneIds,session);
     let project=waitForNarration?(await this.projects.get(projectId,{omitCandidates:true}))!:await this.planSearch(projectId,options.sceneIds,undefined,{beforeSelection:reserveFallback&&!videoOnly});
     if(waitForNarration&&project)project=await this.markMissingAutomaticMaterials(project,options.sceneIds,this.downloadControllers.get(projectId)?.signal);
     // Production with parallel narration needs the same current local targets.
