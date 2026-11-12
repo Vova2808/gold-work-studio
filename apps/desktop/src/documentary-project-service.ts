@@ -3116,12 +3116,16 @@ export class DocumentaryProjectService {
               // A library card keeps its original provider, so candidate.provider
               // cannot tell whether the fresh Commons lane has finished.
               if(!commonsDiscovered)await fastBatches.waitFor('commons');
-              // Keep saved files first, but refresh an undownloaded source's
+              // Keep nonempty saved files first, but refresh an undownloaded source's
               // URL/metadata by stable identity (including its excerpt). Old
               // unmatched cards remain available; paid/rejection fingerprints
               // still bind the same source independently of its download URL.
-              const refreshed=[...resumeBatch.filter(source=>source.localPath),...(first.value??[]),
-                ...fastBatches.takeReady(),...resumeBatch.filter(source=>!source.localPath)];
+              const availableLocalSources=new Set<DocumentaryCandidate>();
+              await Promise.all(resumeBatch.filter(source=>source.localPath).map(async source=>{
+                if(await stat(source.localPath!).then(info=>info.isFile()&&info.size>0,()=>false))availableLocalSources.add(source);
+              }));
+              const refreshed=[...resumeBatch.filter(source=>availableLocalSources.has(source)),...(first.value??[]),
+                ...fastBatches.takeReady(),...resumeBatch.filter(source=>!availableLocalSources.has(source))];
               const seenSources=new Set<string>();
               resumeBatch=refreshed.filter(source=>{
                 const key=source.id?`${source.kind}:${rejectedCandidateFingerprint(source)}`:documentaryCandidateKey(source);

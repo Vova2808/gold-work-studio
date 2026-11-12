@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createHash} from 'node:crypto';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {MemoryProjectRepository,MockDirectorProvider,ProjectService} from '@gold-work/core';
@@ -17,7 +17,7 @@ import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-re
 import {effectFfmpeg} from './effect-media.js';
 import {claimDocumentaryThematicRecovery,documentaryAutomaticThematicIssue,documentaryThematicDiscoveryRequirement} from './documentary-automatic-thematic-recovery.js';
 
-for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','mixed-photo-rejected','automatic-reserve','automatic-reserve-rejected','automatic-reserve-pending','refresh-remote','refresh-local','refresh-unmatched','refresh-excerpts','refresh-pending','manual-reserve','100-percent','force','pending-photo','manual-photo'] as const)
+for(const mode of ['resume','photo-rejected','no-error','mixed-shortlist','mixed-photo-rejected','automatic-reserve','automatic-reserve-rejected','automatic-reserve-pending','refresh-remote','refresh-local','refresh-missing-local','refresh-empty-local','refresh-directory-local','refresh-unmatched','refresh-excerpts','refresh-pending','manual-reserve','100-percent','force','pending-photo','manual-photo'] as const)
 test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-photo-resume-order-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('No live requests in this fixture'));
@@ -50,6 +50,9 @@ test(`saved primary photo lane resumes conservatively: ${mode}`,async t=>{
  const originalUrl='https://upload.wikimedia.org/wikipedia/commons/a/ab/Aurora.jpg';
  const freshUrl='https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Aurora.jpg/1280px-Aurora.jpg';
  const oldSource:DocumentaryCandidate={...candidate('image'),id:'commons:14491633',localPath:mode==='refresh-local'?photo:undefined,downloadUrl:originalUrl};
+ if(mode==='refresh-missing-local')oldSource.localPath=join(root,'missing-photo.png');
+ if(mode==='refresh-empty-local'){oldSource.localPath=join(root,'empty-photo.png');await writeFile(oldSource.localPath,'');}
+ if(mode==='refresh-directory-local')oldSource.localPath=root;
  const freshSource:DocumentaryCandidate={...oldSource,localPath:undefined,downloadUrl:freshUrl};
  if(mode==='refresh-excerpts'){
   oldSource.excerpt={sourceChecksum:'a'.repeat(64),startSeconds:4,endSeconds:8,sourceDurationSeconds:12};
