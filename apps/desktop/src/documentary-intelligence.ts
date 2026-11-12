@@ -16,7 +16,7 @@ import {documentaryActiveListItem,documentaryContextApproval,documentaryIllustra
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
 import {documentaryContradictoryModelYear,documentaryExplicitModelYear} from './documentary-model-year.js';
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
-import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched} from './documentary-retry.js';
+import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched,documentaryAdmissionNotDispatched} from './documentary-retry.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
 import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
 import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedIllustrationQualityInstructionV3,documentaryGroundedFallbackIllustrationQualityInstructionV3,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
@@ -338,7 +338,7 @@ function confirmedGatewayUnavailable(saved:{state:string;rejection?:string;raw?:
   return saved?.state==='rejected'&&saved.rejection==='provider-unavailable'&&saved.completedGatewayError!==false
     &&typeof saved.completedAt==='string'&&saved.raw?.trim()===completedGatewaySignature;
 }
-export async function readAnalysisCheckpoint(path: string): Promise<{ state: string; purpose?: string; model?:string; singleReviewBinding?:{checksum:string;revision:string;start:number;end:number;taskKey?:string;imagePreparation?:string;quality?:{version:1;target:string;narration:string}}; previewSourceKey?:string; batchSceneCount?: number; plannerFailure?:string; error?: string; rejection?: string; requestKey?:string;inputSha256?:string;preDispatchProof?:AnyModelPreDispatchProof; raw?: string; completedAt?:string; completedGatewayError?:boolean; result?: Record<string, unknown> } | undefined> {
+export async function readAnalysisCheckpoint(path: string): Promise<{ state: string; purpose?: string; model?:string; singleReviewBinding?:{checksum:string;revision:string;start:number;end:number;taskKey?:string;imagePreparation?:string;groundedRetryOrigin?:string;quality?:{version:1;target:string;narration:string}}; previewSourceKey?:string; batchSceneCount?: number; plannerFailure?:string; error?: string; rejection?: string; requestKey?:string;inputSha256?:string;preDispatchProof?:AnyModelPreDispatchProof; approvedRetryAt?:string;previousRevision?:string; raw?: string; completedAt?:string; completedGatewayError?:boolean; result?: Record<string, unknown> } | undefined> {
   let content: string;
   try { content = await readFile(path, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw new Error("Не удалось прочитать контрольную точку анализа; платный повтор отключён"); }
@@ -1101,6 +1101,8 @@ export class DocumentaryIntelligence {
     if(legacyImages)for(const previous of [{system,input},...previousRequests]){
       const oldKey=documentaryCheckpointKey(purpose,previous.system,previous.input,legacyImages);
       const old=await readAnalysisCheckpoint(join(root,`${oldKey}.json`));
+      if(old?.rejection==='local-admission-not-dispatched'&&!await documentaryAdmissionNotDispatched(root,oldKey,old))
+        throw new DocumentaryAnalysisError('Доказательство остановки прежнего изображения до отправки не подтверждено; повтор отключён.','pending',purpose);
       if(singleReviewModel&&old?.model!==singleReviewModel)continue;
       if(old?.rejection==='model-refusal')throw new DocumentaryAnalysisError(old.error??'Модель отказалась анализировать материал.','pending',purpose);
       if(old&&old.state!=='failed'&&!(old.state==='rejected'&&old.rejection==='model-unavailable')&&(old.state!=='complete'||!old.result))
@@ -1110,6 +1112,12 @@ export class DocumentaryIntelligence {
     const saved = await readAnalysisCheckpoint(path);
     if(saved?.rejection==='empty-response')throw new DocumentaryAnalysisError(saved.error??emptyVisualResponseMessage,'pending',purpose);
     const retryScope=documentarySelectionRetry.getStore();
+    const admissionRefusal=saved?.state==='failed'&&saved.rejection==='local-admission-not-dispatched';
+    const resumingAdmission=admissionRefusal&&await documentaryAdmissionNotDispatched(root,key,saved);
+    if(admissionRefusal&&!resumingAdmission)throw new DocumentaryAnalysisError('Доказательство остановки до отправки не подтверждено; платный повтор отключён.','pending',purpose);
+    const admissionRetryOrigin=resumingAdmission?saved?.singleReviewBinding?.groundedRetryOrigin:undefined;
+    if(admissionRetryOrigin&&(!retryScope||!('grant' in retryScope)||retryScope.grant.id!==admissionRetryOrigin))
+      throw new DocumentaryAnalysisError('Неотправленная разрешённая проверка требует того же сохранённого разрешения. Новый платный запрос не отправлен.','pending',purpose);
     const cachedSelection=retryScope&&'cached' in retryScope?retryScope.cached:undefined;
     const matchesSelectionCache=(receipt:typeof saved,revision:string|undefined)=>{
       const expected=previewMetadata.singleReviewBinding,binding=receipt?.singleReviewBinding;
@@ -1193,6 +1201,8 @@ export class DocumentaryIntelligence {
     for (const previous of previousRequests) {
       const previousKey = documentaryCheckpointKey(purpose,previous.system,previous.input,images);
       const previousState = await readAnalysisCheckpoint(join(root, `${previousKey}.json`));
+      if(previousState?.rejection==='local-admission-not-dispatched'&&!await documentaryAdmissionNotDispatched(root,previousKey,previousState))
+        throw new DocumentaryAnalysisError('Доказательство остановки прежней проверки до отправки не подтверждено; повтор отключён.','pending',purpose);
       if(singleReviewModel&&previousState?.model!==singleReviewModel)continue;
       if(previousState?.rejection==='empty-response')throw new DocumentaryAnalysisError(previousState.error??emptyVisualResponseMessage,'pending',purpose);
       if(previousState?.rejection==='model-refusal')throw new DocumentaryAnalysisError(previousState.error??'Модель отказалась анализировать материал.','pending',purpose);
@@ -1301,7 +1311,7 @@ export class DocumentaryIntelligence {
     const artworkRows=words.scenes as Array<{sceneId:string;editable?:boolean}>|undefined;
     if(artworkCovered?.size&&Array.isArray(artworkRows)&&artworkRows.every(row=>!row.editable||artworkCovered.has(row.sceneId)))return {scenes:[]};
     const selectionRetryRequest=documentarySelectionRetry.getStore()?{
-      id:key,purpose,model:singleReviewModel,binding:previewMetadata.singleReviewBinding,existing:Boolean(saved),
+      id:key,purpose,model:singleReviewModel,binding:previewMetadata.singleReviewBinding,existing:Boolean(saved)&&!resumingAdmission,
       legacyTaskKey:words.fallbackNarrativeContext?singleReviewTaskKey({...words,fallbackNarrativeContext:undefined}):undefined,
       ...(words.scriptGrounding?{groundedTask:{sceneId:words.sceneId,narration:words.narration,...words.scriptGrounding}}:{}),
     }:undefined;
@@ -1314,9 +1324,10 @@ export class DocumentaryIntelligence {
     // unknown response remains protected by the checkpoint checks above; a
     // definite failure must not permanently forbid a later production run.
     const approvalPath=join(root,`${key}.retry-authorization.json`);
-    const approval=await readFile(approvalPath,'utf8').then(text=>JSON.parse(text) as {approvedAt?:string;maxAttempts?:number;consumedAt?:string},error=>{
+    const approvalText=await readFile(approvalPath,'utf8').catch(error=>{
       if(error.code==='ENOENT')return undefined;throw error;
     });
+    const approval=approvalText?JSON.parse(approvalText) as {approvedAt?:string;maxAttempts?:number;consumedAt?:string}:undefined;
     if(approval&&(!approval.approvedAt||approval.maxAttempts!==1||approval.consumedAt&&(purpose==='semantic-montage'||saved?.state!=='failed')))throw new DocumentaryAnalysisError('Единственная разрешённая повторная отправка уже использована или не подтверждена. Новая оплата не выполнена.','pending',purpose);
     if(approval&&purpose==='visual-illustration'&&await documentarySelectionRetryWasDispatched(root,key))
       throw new DocumentaryAnalysisError('Единственная разрешённая повторная отправка уже использована для уточнённой проверки. Новая оплата не выполнена.','pending',purpose);
@@ -1355,7 +1366,11 @@ export class DocumentaryIntelligence {
     recordDiagnosticEvent('info','documentary.analysis.route',{projectId,purpose,tier,model});
     if(selectionRetryRequest)await checkDocumentarySelectionRetry(root,{...selectionRetryRequest,model});
     this.workBudget.getStore()?.submit();
-    if(approval&&!approval.consumedAt)await atomicWrite(approvalPath,JSON.stringify({...approval,consumedAt:createdAt}));
+    const consumedApprovalText=approval&&!approval.consumedAt?JSON.stringify({...approval,consumedAt:createdAt}):undefined;
+    if(consumedApprovalText){
+      if(await readFile(approvalPath,'utf8')!==approvalText)throw Error('Разрешение повтора изменилось до отправки; платный запрос заблокирован.');
+      await atomicWrite(approvalPath,consumedApprovalText);
+    }
     if(resumingGateway||resumingMotionRefusal||localRejection){
       const original=await readFile(path,'utf8'),archive=join(root,localRejection?'LocalPreDispatch':'ProviderUnavailable');
       await mkdir(archive,{recursive:true});
@@ -1365,18 +1380,36 @@ export class DocumentaryIntelligence {
     await this.workBudget.getStore()?.beforeSubmit?.();
     await options.beforeArtworkFeedbackDispatch?.();
     await options.explanationFeedback?.assertCurrent();
-    await atomicWrite(path, JSON.stringify({ state: "pending", purpose, ...previewMetadata, model, overviewSamplingVersion, createdAt }));
-    // Pending persistence yields to manual edits. Revalidate before dispatch;
-    // on refusal retain the receipt and its existing no-replay protection.
+    const pendingText=JSON.stringify({ state: "pending", purpose, ...previewMetadata, model, overviewSamplingVersion, createdAt });
+    await atomicWrite(path,pendingText);
+    // Pending persistence yields to manual edits. Revalidate before dispatch.
     await this.workBudget.getStore()?.beforeSubmit?.();
     await options.beforeArtworkFeedbackDispatch?.();
     if(visualReviewBudget){
-      // Persistence may yield to Stop or spend the last admission time. Do not
-      // dispatch in that case; keep the pending checkpoint's no-replay guard.
-      options.signal?.throwIfAborted();
-      if(this.inspection.getStore()?.shouldStop())throw new DOMException('Подбор остановлен пользователем','AbortError');
-      if(visualReviewBudget.remaining()<=0)throw new DocumentaryBudgetExhausted(
-        'Бюджет сцены исчерпан до отправки проверки. Новый платный анализ не отправлен; готовые материалы сохранены.');
+      try{
+        options.signal?.throwIfAborted();
+        if(this.inspection.getStore()?.shouldStop())throw new DOMException('Подбор остановлен пользователем','AbortError');
+        if(visualReviewBudget.remaining()<=0)throw new DocumentaryBudgetExhausted(
+          'Бюджет сцены исчерпан до отправки проверки. Новый платный анализ не отправлен; готовые материалы сохранены.');
+      }catch(error){
+        // This guard runs before the client is called. Settle only the pending
+        // bytes created here, never an older unknown submission or a racing edit.
+        const assertOwned=async()=>{if(await readFile(path,'utf8')!==pendingText)throw Error('Запись проверки изменилась до отправки; автоматическое продолжение заблокировано.');};
+        await assertOwned();
+        const revision=createHash('sha256').update(pendingText).digest('hex');
+        await atomicWrite(join(root,'LocalPreDispatch',`${key}-${revision}.json`),pendingText);
+        if(consumedApprovalText){
+          if(await readFile(approvalPath,'utf8')!==consumedApprovalText)throw Error('Разрешение повтора изменилось; автоматическое восстановление заблокировано.');
+          await assertOwned();
+          await atomicWrite(approvalPath,approvalText!);
+        }
+        await assertOwned();
+        await atomicWrite(path,JSON.stringify({...JSON.parse(pendingText),state:'failed',rejection:'local-admission-not-dispatched',
+          requestKey:key,preDispatchPendingRevision:revision,
+          ...(saved?.approvedRetryAt?{approvedRetryAt:saved.approvedRetryAt,previousRevision:saved.previousRevision}:{}),
+          error:error instanceof Error?error.message:String(error),failedAt:new Date().toISOString()}));
+        throw error;
+      }
     }
     let partial = "", lastWrite = 0, received = false;
     let completionMetadata:AnyModelCompletionMetadata|undefined;

@@ -90,13 +90,33 @@ export const documentarySelectionRetry = new AsyncLocalStorage<
 >();
 export class DocumentarySelectionRetryProbePassed extends Error {}
 
+/** Only a locally settled admission refusal, with its exact pending snapshot,
+ * proves that the client boundary was never entered. A marker alone is inert. */
+export async function documentaryAdmissionNotDispatched(directory:string,id:string,receipt:Record<string,unknown>|undefined):Promise<boolean>{
+  if(!receipt||receipt.state!=='failed'||receipt.rejection!=='local-admission-not-dispatched'||receipt.requestKey!==id
+    ||!/^[a-f0-9]{64}$/.test(id)||typeof receipt.preDispatchPendingRevision!=='string'
+    ||!/^[a-f0-9]{64}$/.test(receipt.preDispatchPendingRevision))return false;
+  const text=await readFile(join(directory,'LocalPreDispatch',`${id}-${receipt.preDispatchPendingRevision}.json`),'utf8')
+    .catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return undefined;throw error;});
+  if(!text||digest(text)!==receipt.preDispatchPendingRevision)return false;
+  try{
+    const prior=JSON.parse(text);
+    return prior.state==='pending'&&typeof prior.createdAt==='string'&&Boolean(prior.createdAt)
+      &&typeof prior.purpose==='string'&&Boolean(prior.purpose)&&prior.raw===undefined&&prior.result===undefined
+      &&receipt.raw===undefined&&receipt.result===undefined
+      &&['purpose','model','createdAt','singleReviewBinding','previewSourceKey','overviewSamplingVersion']
+        .every(field=>JSON.stringify(prior[field])===JSON.stringify(receipt[field]));
+  }catch(error){if(error instanceof SyntaxError)return false;throw error;}
+}
+
 /** Also guard callers resuming the original exact receipt without retry scope.
  * The original grant stays readable for byte-matched cached-result recovery. */
 export async function documentarySelectionRetryWasDispatched(directory:string,id:string):Promise<boolean>{
   for(const file of await readdir(directory)){
     if(!/^[a-f0-9]{64}\.json$/.test(file))continue;
     const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
-    if(receipt?.purpose==='visual-illustration'&&receipt.singleReviewBinding?.groundedRetryOrigin===id)return true;
+    if(receipt?.purpose==='visual-illustration'&&receipt.singleReviewBinding?.groundedRetryOrigin===id
+      &&!await documentaryAdmissionNotDispatched(directory,file.slice(0,-5),receipt))return true;
   }
   return false;
 }
@@ -132,6 +152,7 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
     for(const file of await readdir(directory)){
       if(!/^[a-f0-9]{64}\.json$/.test(file))continue;
       const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
+      if(await documentaryAdmissionNotDispatched(directory,file.slice(0,-5),receipt))continue;
       const prior=receipt?.singleReviewBinding;
       if(receipt?.purpose===request.purpose&&receipt.model===request.model&&prior?.checksum===binding.checksum
         &&prior.start===binding.start&&prior.end===binding.end
