@@ -684,6 +684,7 @@ export interface DocumentaryCandidatePriority {
   queries:string[];
   visualTarget:string;
   subjects:string[];
+  imageTieBreak?:(candidate:DocumentaryCandidate)=>boolean;
 }
 
 /** Rank the active task, never a provider's shortened retrieval query. */
@@ -691,8 +692,21 @@ export function documentarySimpleCandidatePriority(project:Project,scene:Scene,k
   const plan=planFastDocumentaryScene(project,scene,kind),ai=currentDocumentaryAiSearchPlan(project,scene);
   const fallback=currentDocumentaryFootageFallback(scene);
   const thematic=fallback&&(!ai||fallback.target===ai.fallbackVisualTarget&&JSON.stringify(fallback.queries)===JSON.stringify(ai.fallbackVideoQueries));
+  const identities=ai?.grounding?.mandatory.filter(check=>check.kind==='identity');
+  const normalized=(text:string)=>' '+text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()+' ';
   return {queries:plan.queries,visualTarget:plan.visualTarget,
-    subjects:thematic?[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement)};
+    subjects:thematic?[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement),
+    ...(kind==='image'&&!thematic&&identities?.length?{imageTieBreak:(candidate:DocumentaryCandidate)=>{
+      if(candidate.kind!=='image'||!Number.isFinite(candidate.width)||!Number.isFinite(candidate.height)
+        ||!(candidate.width!>0&&candidate.height!>0)
+        ||!(['commons','pexels','pixabay'].includes(candidate.provider)||candidate.localPath))return false;
+      // A saved file or a name in background prose does not establish the
+      // pictured subject. Prefer title-bound, usable geometry only on a tie;
+      // actual pixels still decide identity and every required physical detail.
+      const title=normalized(candidate.title.split(/[,;\r\n]|\s+[—–]\s+/u)[0]??'');
+      return identities.every(identity=>[identity.required,...(identity.aliases??[])].some(name=>name.trim()&&title.includes(normalized(name))))
+        &&!documentaryMaterialMetadataIssue(scene,candidate)&&!documentaryKnownQualityIssue(candidate,project,scene);
+    }}:{})};
 }
 
 // OR is an alternative only outside a quoted title/name. Each authored query
@@ -731,6 +745,11 @@ export function documentaryCandidatePriorityScore(candidate:DocumentaryCandidate
 
 export function selectSimpleDocumentaryCandidates(candidates: DocumentaryCandidate[],priority?:DocumentaryCandidatePriority): DocumentaryCandidate[] {
   const seen=new Set<string>();
+  const imageTies=new Map<DocumentaryCandidate,number>();
+  const imageTie=(candidate:DocumentaryCandidate)=>{
+    if(!imageTies.has(candidate))imageTies.set(candidate,Number(priority?.imageTieBreak?.(candidate)??false));
+    return imageTies.get(candidate)!;
+  };
   return candidates.filter(candidate=>{
     const key=documentaryCandidateKey(candidate);
     if(seen.has(key)||candidate.rights==='unknown'||(candidate.bytes??0)>750*1024*1024)return false;
@@ -747,7 +766,7 @@ export function selectSimpleDocumentaryCandidates(candidates: DocumentaryCandida
       const metadata=new Set(catalogWords(`${candidate.title} ${candidate.description??''}`));
       return terms.length?terms.filter(term=>metadata.has(term)).length/terms.length:0;
     };
-    return score(b)-score(a);
+    return score(b)-score(a)||(a.kind==='image'&&b.kind==='image'?imageTie(b)-imageTie(a):0);
   });
 }
 
