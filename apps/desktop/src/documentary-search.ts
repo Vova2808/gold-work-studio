@@ -151,13 +151,15 @@ function commonsAttributionLicense(candidate: DocumentaryCandidate): Documentary
 }
 
 /** The 1920px API request returns an unscaled original for small photos.
- * Use only a near-original standard size; never invent a transcode or upscale.
+ * Use a near-original standard size, or a copy retaining at least 1280x1080.
+ * Never invent a transcode or upscale; normal local quality checks still apply.
  * https://www.mediawiki.org/wiki/Common_thumbnail_sizes/en */
 function commonsSmallRaster(page:RecordValue,info:RecordValue):{url:string;width:number;height:number}|undefined{
   const mime=string(info.mime),width=Number(info.width),height=Number(info.height);
   if(!['image/jpeg','image/png'].includes(mime)||!Number.isInteger(width)||!Number.isInteger(height)
     ||width<=960||width>1920||height<=0||info.thumbmime&&info.thumbmime!==mime)return;
-  const size=[1280,960].find(value=>value<width&&value>=width*.9);
+  const size=[1280,960].find(value=>value<width
+    &&(value>=width*.9||value>=1280&&Math.round(height*value/width)>=1080));
   if(!size)return;
   const originalUrl=safeHttps(info.url),renderedUrl=safeHttps(info.thumburl);
   if(!originalUrl||!renderedUrl)return;
@@ -304,7 +306,7 @@ export class DocumentarySearch {
     const isolatedPublic=independentPublicSources&&['web','commons','internet-archive','loc','youtube'].includes(provider);
     const warningKey=this.webWarningKey(query,kind)+(independentPublicSources?':'+provider:'');
     // Earlier public-only YouTube results must not hide the configured API.
-    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-5':'commons-native-subject-2')
+    const publicCacheVersion=provider==='commons'?(kind==='image'?'commons-native-rendition-6':'commons-native-subject-2')
       :provider==='youtube'&&kind==='video'?'youtube-api-public-cc-2':'public-source-2';
     // subjectQuery includes the title-first mode and feature terms, so old
     // broad metadata batches cannot mask a newly focused image search.

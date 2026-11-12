@@ -16,6 +16,13 @@ const originalInfo={url:original,thumburl:original+'?utm_source=commons.wikimedi
 const page=(changes={})=>({pageid:14491633,title:'File:StateLibQld 1 145051 Cutty Sark (ship).jpg',imageinfo:[{...originalInfo,...changes}]});
 const payload=(changes={})=>({query:{pages:[page(changes)]}});
 const parse=(changes={},automatic=true)=>commonsCandidates(payload(changes),'Cutty Sark sails',automatic)[0]!;
+const tallName='Cutty_Sark_%28ship%2C_1869%29_-_SLV_H99.220-2364.jpg';
+const tallOriginal=`https://upload.wikimedia.org/wikipedia/commons/e/e5/${tallName}`;
+const tallThumb=`https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e5/${tallName}/1280px-${tallName}`;
+const tallPayload=(changes={})=>({query:{pages:[{pageid:15663715,title:'File:Cutty Sark (ship, 1869) - SLV H99.220-2364.jpg',
+  imageinfo:[{...originalInfo,url:tallOriginal,thumburl:tallOriginal+'?utm_content=thumbnail_unscaled',
+    descriptionurl:'https://commons.wikimedia.org/wiki/File:Cutty_Sark_(ship,_1869)_-_SLV_H99.220-2364.jpg',
+    width:1839,height:2101,thumbwidth:1920,thumbheight:2194,size:1801111,...changes}]}]}});
 
 test('small unscaled JPEG uses the closest standard same-file rendition without claiming HD or original bytes',()=>{
   const candidate=parse();
@@ -57,7 +64,40 @@ test('generic PNG names keep their encoding, format and closest standard size',(
   assert.equal(result.width,1280);assert.equal(result.height,914);assert.equal(result.bytes,undefined);
 });
 
-test('at most ten percent width loss is allowed; originals and thumbnails at or below 500 are never substituted',()=>{
+test('a tall original with real requested display dimensions keeps a detailed 1280px same-file copy',()=>{
+  const data=tallPayload(),candidate=commonsCandidates(data,'Cutty Sark sails',true)[0]!;
+  assert.equal(candidate.downloadUrl,tallThumb);assert.equal(candidate.previewUrl,tallThumb);
+  assert.equal(candidate.width,1280);assert.equal(candidate.height,1462);assert.equal(candidate.bytes,undefined);
+  const manual=commonsCandidates(data,'Cutty Sark sails',false)[0]!;
+  assert.equal(manual.downloadUrl,tallOriginal);assert.equal(manual.width,1839);assert.equal(manual.height,2101);assert.equal(manual.bytes,1801111);
+  for(const field of ['id','provider','kind','title','pageUrl','author','license','rights','attribution','match'] as const)
+    assert.equal(candidate[field],manual[field],`Same source and unverified content: ${field}`);
+  assert.equal(candidate.id,'commons:15663715');assert.equal(candidate.match,'unverified');
+  const confirmed=tallThumb+'?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail';
+  const confirmedData=tallPayload({thumburl:confirmed,thumbwidth:1280,thumbheight:1462});
+  assert.equal(commonsCandidates(confirmedData,'Cutty Sark sails',true)[0]!.downloadUrl,confirmed);
+  assert.equal(commonsCandidates(confirmedData,'Cutty Sark sails',false)[0]!.downloadUrl,tallOriginal);
+});
+
+test('larger reductions require both 1280px width and 1080px height, with unchanged file and geometry guards',()=>{
+  const parseTall=(changes={})=>commonsCandidates(tallPayload(changes),'Archive photograph',true)[0]!;
+  for(const [width,height] of [[1839,1000],[1839,1550],[1280,2000],[1200,1800],[1921,3000]] as const){
+    const result=parseTall({width,height,thumbwidth:1920,thumbheight:Math.round(height*1920/width)});
+    assert.equal(result.downloadUrl,tallOriginal,`No broad reduction for ${width}x${height}`);
+    assert.equal(result.width,width);assert.equal(result.height,height);
+  }
+  const boundary=parseTall({height:1551,thumbwidth:1839,thumbheight:1551});
+  assert.equal(boundary.width,1280);assert.equal(boundary.height,1080);assert.equal(boundary.downloadUrl,tallThumb);
+  for(const changes of [{thumbheight:1080},{mime:'image/png'},{thumbmime:'image/webp'},
+    {thumburl:tallThumb,thumbwidth:1280,thumbheight:1461},
+    {thumburl:tallThumb.replace('1280px-'+tallName,'1280px-Other_ship.jpg'),thumbwidth:1280,thumbheight:1462},
+    {thumburl:tallThumb.replace('thumb.wikimedia.org','example.org'),thumbwidth:1280,thumbheight:1462}])
+    assert.equal(parseTall(changes).downloadUrl,tallOriginal,JSON.stringify(changes));
+  const wrongTitle=tallPayload();wrongTitle.query.pages[0]!.title='File:Other ship.jpg';
+  assert.equal(commonsCandidates(wrongTitle,'Archive photograph',true)[0]!.downloadUrl,tallOriginal);
+});
+
+test('smaller working copies allow at most ten percent width loss; originals and thumbnails at or below 500 are never substituted',()=>{
   assert.equal(parse({width:1066,thumbwidth:1066}).width,960);
   for(const width of [500,501,600,959,960,1067,1200,1280,1500,1919,1920,1921]){
     const result=parse({width,thumbwidth:width});
@@ -109,13 +149,13 @@ test('one automatic metadata GET supplies the small rendition and coalesces a di
   assert.equal(calls,1,'No follow-up API request, transport retry or duplicate native discovery');
 });
 
-test('previous original-only automatic cache cannot hide the small rendition and remains untouched',async t=>{
+test('previous original-only automatic cache cannot hide the tall rendition and remains untouched',async t=>{
   const root=await mkdtemp(join(tmpdir(),'gws-commons-small-raster-'));
   t.after(async()=>{assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));assert.ok(root.includes('gws-commons-small-raster-'));await rm(root,{recursive:true,force:true});});
-  const query='Cutty Sark sails',key=createHash('sha256').update(JSON.stringify(['commons-native-rendition-4','commons','"cutty sark" sails','image','licensed-only','intitle:"cutty sark"'])).digest('hex');
-  const oldFile=join(root,key+'.json'),old=JSON.stringify({expiresAt:Date.now()+86400000,candidates:commonsCandidates(payload(),query)});
+  const query='Cutty Sark sails',key=createHash('sha256').update(JSON.stringify(['commons-native-rendition-5','commons','"cutty sark" sails','image','licensed-only','intitle:"cutty sark"'])).digest('hex');
+  const oldFile=join(root,key+'.json'),old=JSON.stringify({expiresAt:Date.now()+86400000,candidates:commonsCandidates(tallPayload(),query)});
   await writeFile(oldFile,old);let calls=0;
-  const make=()=>new DocumentarySearch(undefined,async()=>{calls++;return Response.json(payload({thumbwidth:1920,thumbheight:1357}));},root);
-  for(let attempt=0;attempt<2;attempt++)assert.equal((await make().search({query,entities:['Cutty Sark'],kind:'image',providers:['commons']},true,undefined,true)).candidates[0]!.downloadUrl,thumb);
+  const make=()=>new DocumentarySearch(undefined,async()=>{calls++;return Response.json(tallPayload());},root);
+  for(let attempt=0;attempt<2;attempt++)assert.equal((await make().search({query,entities:['Cutty Sark'],kind:'image',providers:['commons']},true,undefined,true)).candidates[0]!.downloadUrl,tallThumb);
   assert.equal(calls,1);assert.equal(await readFile(oldFile,'utf8'),old);
 });
