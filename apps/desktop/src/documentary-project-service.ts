@@ -2434,12 +2434,15 @@ export class DocumentaryProjectService {
         const unchanged=JSON.stringify([documentaryAiPlanContext(project),this.manualRevision(scene),doc.requirement,doc.layout]);
         const assertCurrent=async()=>{
           if(this.stopRequested.has(projectId))throw new DOMException('Подбор остановлен пользователем','AbortError');
+          const currentModel=(await this.intelligence!.selectionReviewIdentity?.())?.model;
+          const currentChecksum=await checksumFile(source.localPath!).catch(()=>undefined);
+          // Model/file checks yield. Read the user-owned scene after them so
+          // a late edit or pin cannot authorize the old snapshot's dispatch.
           const current=await this.projects.get(projectId,{omitCandidates:true}),latest=current?.scenes.find(item=>item.id===scene.id);
-          if(!current||!latest||['generating','paused'].includes(current.status)||latest.includeInAssembly===false
+          if(this.stopRequested.has(projectId)||!current||!latest||['generating','paused'].includes(current.status)||latest.includeInAssembly===false
             ||latest.documentary?.verified||latest.documentary?.pinned||latest.documentary?.manualReview
             ||JSON.stringify([documentaryAiPlanContext(current),this.manualRevision(latest),latest.documentary?.requirement,latest.documentary?.layout])!==unchanged
-            ||(await this.intelligence!.selectionReviewIdentity?.())?.model!==model
-            ||await checksumFile(source.localPath!).catch(()=>undefined)!==checksum)
+            ||currentModel!==model||currentChecksum!==checksum)
             throw new Error(`Сцена №${scene.order+1}: данные точной проверки изменились. Новый запрос не отправлен.`);
         };
         const prepared={...scene,trimStartSeconds:grant.binding.start,trimEndSeconds:source.kind==='video'?grant.binding.end:undefined,

@@ -18,7 +18,7 @@ import {documentaryIllustrationQualityInstructionV4} from './documentary-illustr
 import {DocumentaryRetryPermissions,listDocumentaryRecovery,readDocumentarySelectionRetryGrant} from './documentary-retry.js';
 
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
-for(const mode of ['exact','no-grant','changed-file','missing-file','changed-model','wrong-manifest','unknown-again','edit-before-dispatch','pinned','outside-scope'] as const)
+for(const mode of ['exact','no-grant','changed-file','missing-file','changed-model','wrong-manifest','unknown-again','edit-before-dispatch','edit-during-dispatch-check','pin-during-dispatch-check','pinned','outside-scope'] as const)
 test(`ordinary legacy selection performs only an existing authorized exact recovery before planning: ${mode}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'gws-legacy-exact-service-'));t.after(()=>rm(root,{recursive:true,force:true}));
  t.mock.method(globalThis,'fetch',async()=>assert.fail('Offline fixture: no HTTP'));
@@ -82,6 +82,19 @@ test(`ordinary legacy selection performs only an existing authorized exact recov
    await budget.beforeSubmit?.();
   }},run));
  }
+ if(mode==='edit-during-dispatch-check'||mode==='pin-during-dispatch-check'){
+  const withBudget=intelligence.withSelectionBudget.bind(intelligence),identity=intelligence.selectionReviewIdentity.bind(intelligence);
+  let checkingDispatch=false,edit=true,checks=0;
+  t.mock.method(intelligence,'selectionReviewIdentity',async()=>{
+   const value=await identity();
+   if(checkingDispatch&&edit){edit=false;await projects.mutate(project.id,current=>({scenes:current.scenes.map(s=>mode==='pin-during-dispatch-check'
+    ?{...s,documentary:{...s.documentary!,pinned:true}}:{...s,durationOverrideSeconds:7})}));}
+   return value;
+  });
+  t.mock.method(intelligence,'withSelectionBudget',async<T>(budget:Parameters<typeof intelligence.withSelectionBudget>[0],run:()=>Promise<T>)=>withBudget({...budget,beforeSubmit:async()=>{
+   checkingDispatch=++checks===2;try{await budget.beforeSubmit?.();}finally{checkingDispatch=false;}
+  }},run));
+ }
  // Keep this regression at the requested boundary. The real normal planner
  // must run; later discovery/new visual tasks are a separate selection phase.
  const planSearch=service.planSearch.bind(service);let normalPlanCompleted=false;
@@ -101,11 +114,11 @@ test(`ordinary legacy selection performs only an existing authorized exact recov
   assert.equal(visualCalls,2);assert.equal(planCalls,1);assert.equal(normalPlanCompleted,false);
   const repeated=await readFile(receiptPath,'utf8');await assert.rejects(service.autoSelect(project.id,{sceneIds:[sceneId]}));
   assert.equal(visualCalls,2);assert.equal(planCalls,1);assert.equal(await readFile(receiptPath,'utf8'),repeated);
- }else if(mode==='edit-before-dispatch'){
+ }else if(mode==='edit-before-dispatch'||mode==='edit-during-dispatch-check'||mode==='pin-during-dispatch-check'){
   assert.equal(visualCalls,1);assert.equal(planCalls,1);assert.equal(normalPlanCompleted,false);
   assert.ok(await readDocumentarySelectionRetryGrant(analysis,item.id),'A proven zero-POST edit cannot consume the permission');
   assert.equal(JSON.parse(await readFile(receiptPath,'utf8')).rejection,'local-admission-not-dispatched');
-  await projects.mutate(project.id,current=>({scenes:current.scenes.map(s=>({...s,durationOverrideSeconds:undefined}))}));
+  await projects.mutate(project.id,current=>({scenes:current.scenes.map(s=>({...s,durationOverrideSeconds:undefined,documentary:{...s.documentary!,pinned:false}}))}));
   await assert.rejects(service.autoSelect(project.id,{sceneIds:[sceneId]}));
   assert.equal(visualCalls,2);assert.equal(planCalls,2);assert.equal(normalPlanCompleted,true);
   assert.equal(JSON.parse(await readFile(receiptPath,'utf8')).state,'complete');
