@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { MemoryProjectRepository, MemoryTaskRepository, MockDirectorProvider, ProjectService } from "@gold-work/core";
 import { createDocumentarySettings, type Scene, type QueueTask } from "@gold-work/shared";
@@ -10,11 +10,18 @@ import { StandardRenderer } from "./standard-renderer.js";
 import { MockGenerationPipeline } from "./mock-generation-pipeline.js";
 
 test("restart does not resurrect an invalidated Stock Final, but reconciles a newly finished render", async t => {
-  const root = await mkdtemp(join(tmpdir(), "gws-completion-recovery-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(join(tmpdir(), "gws-completion-recovery-"));
+  t.after(async () => {
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes("gws-completion-recovery-"));
+    await rm(root, { recursive: true, force: true });
+  });
   const repository = new MemoryProjectRepository(), projects = new ProjectService(repository, new MockDirectorProvider());
   const project = await projects.create({ title: "Recovery", topic: "Locks", aspectRatio: "16:9", language: "English", mode: "standard", mediaMode: "stock" });
   project.settings.assembly.documentary = createDocumentarySettings();
   const output = join(root, "Final.mp4");
+  // This queue-state fixture represents an existing completed output. An
+  // absent file must never be restored as a successful export.
+  await writeFile(output, "non-empty completed-render fixture");
   project.scenes = [{ id: "one", order: 0, narration: "A lock", audioPath: "saved-voice.wav", documentary: { verified: false } }] as Scene[];
   project.status = "ready"; project.outputPath = undefined; project.updatedAt = "2026-09-27T01:00:00Z";
   const task: QueueTask = { id: "assembly", runId: "run", projectId: project.id, kind: "assemble", label: "Final", status: "done", progress: 100, attempts: 1, maxAttempts: 1, dependsOn: [], createdAt: "2026-09-26T23:00:00Z", updatedAt: "2026-09-27T00:00:00Z", resultPath: output };
