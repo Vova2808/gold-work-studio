@@ -5,10 +5,13 @@ import {join} from 'node:path';
 import type {DocumentaryAiSearchPlan,DocumentaryAiPlanGrounding,DocumentaryRecoveryItem} from '@gold-work/shared';
 import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
 import {documentaryJsonFormatIssue} from './documentary-json.js';
-import {atomicWrite} from './fs-utils.js';
+import {atomicWrite as writeAtomic} from './fs-utils.js';
 import {documentaryJson} from './documentary-intelligence.js';
 import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
+import {documentaryKnownEmptyReceipt,readDocumentaryRequestJournal} from './documentary-request-journal.js';
+
+const atomicWrite=(path:string,data:string)=>writeAtomic(path,data,{durable:true,allowCopyFallback:false});
 
 const digest=(text:string)=>createHash('sha256').update(text).digest('hex');
 async function routeRequestKeys(root:string):Promise<Set<string>> {
@@ -33,11 +36,13 @@ export type DocumentarySelectionRetryGrant = {
   id: string;
   revision: string;
   approvedAt: string;
-  priorState: 'pending'|'partial'|'received';
+  priorState: 'pending'|'partial'|'received'|'empty';
   model: string;
   binding: {checksum:string;taskKey:string;start:number;end:number};
   /** Only a terminal, incomplete response with the original narrated task. */
   groundedNarration?:string;
+  /** Known-empty retries may use today's prompt for this same visual question. */
+  visualQuestion?:{target:string;narration:string};
 };
 
 async function readSelectionAuthorization(directory:string,id:string):Promise<
@@ -60,7 +65,8 @@ async function readSelectionAuthorization(directory:string,id:string):Promise<
     const archived=await read(join(directory,'RetryHistory',`${id}-${grant.replacesRevision}.json`));
     if(!archived||digest(archived)!==grant.replacesRevision)return;
     const prior=JSON.parse(archived),binding=prior?.singleReviewBinding;
-    if(prior?.purpose!==state.purpose||!['pending','partial','received'].includes(prior.state)
+    const empty=documentaryKnownEmptyReceipt(prior);
+    if(prior?.purpose!==state.purpose||!(['pending','partial','received'].includes(prior.state)||empty)
       ||typeof prior.model!=='string'||!prior.model||typeof binding?.checksum!=='string'||!/^[a-f0-9]{64}$/.test(binding.checksum)
       ||typeof binding.taskKey!=='string'||!/^[a-f0-9]{64}$/.test(binding.taskKey)
       ||!Number.isFinite(binding.start)||!Number.isFinite(binding.end)||binding.start<0||binding.end<binding.start)return;
@@ -81,8 +87,10 @@ async function readSelectionAuthorization(directory:string,id:string):Promise<
       ?binding.quality.narration:undefined;
     const unsettledExact=!exactCompletedNarration&&['pending','partial'].includes(prior.state)
       ?{narration:typeof binding.quality?.narration==='string'?binding.quality.narration:undefined}:undefined;
-    return {available,completed,exactCompletedNarration,unsettledExact,grant:{id,revision:grant.replacesRevision,approvedAt:grant.approvedAt,priorState:prior.state,model:prior.model,
+    return {available,completed,exactCompletedNarration,unsettledExact,grant:{id,revision:grant.replacesRevision,approvedAt:grant.approvedAt,priorState:empty?'empty':prior.state,model:prior.model,
       binding:{checksum:binding.checksum,taskKey:binding.taskKey,start:binding.start,end:binding.end},
+      ...(empty&&typeof binding.quality?.target==='string'&&typeof binding.quality?.narration==='string'
+        ?{visualQuestion:{target:binding.quality.target,narration:binding.quality.narration}}:{}),
       ...(prior.state==='received'&&documentaryJsonFormatIssue(prior.raw)==='incomplete-json'
         &&typeof binding.quality?.narration==='string'&&binding.quality.narration.trim()
         ?{groundedNarration:binding.quality.narration}:{})}};
@@ -124,20 +132,19 @@ export async function documentaryAdmissionNotDispatched(directory:string,id:stri
 /** Also guard callers resuming the original exact receipt without retry scope.
  * The original grant stays readable for byte-matched cached-result recovery. */
 export async function documentarySelectionRetryWasDispatched(directory:string,id:string):Promise<boolean>{
-  for(const file of await readdir(directory)){
-    if(!/^[a-f0-9]{64}\.json$/.test(file))continue;
-    const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
+  for(const {key,receipt} of await readDocumentaryRequestJournal(directory)){
     if(receipt?.purpose==='visual-illustration'&&receipt.singleReviewBinding?.groundedRetryOrigin===id
-      &&!await documentaryAdmissionNotDispatched(directory,file.slice(0,-5),receipt))return true;
+      &&!await documentaryAdmissionNotDispatched(directory,key,receipt))return true;
   }
   return false;
 }
 
 type RetryRequest={id:string;purpose:string;model?:string;binding?:{checksum:string;taskKey?:string;start:number;end:number};legacyTaskKey?:string;existing:boolean;
+  visualQuestion?:{target:string;narration:string};
   groundedTask?:{sceneId:string;narration:string;originalScript:string;grounding:DocumentaryAiPlanGrounding}};
 
 /** The caller supplies the canonical request, after the ordinary unknown guards. */
-export async function checkDocumentarySelectionRetry(directory:string,request:RetryRequest):Promise<'exact'|'narrative'|'grounded'|undefined>{
+export async function checkDocumentarySelectionRetry(directory:string,request:RetryRequest):Promise<'exact'|'narrative'|'grounded'|'empty'|undefined>{
   const scope=documentarySelectionRetry.getStore();
   if(!scope||!('grant' in scope))return;
   const {grant}=scope,binding=request.binding;
@@ -145,6 +152,9 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
   if(request.purpose!=='visual-illustration'||request.model!==grant.model||!binding
     ||binding.checksum!==grant.binding.checksum||binding.start!==grant.binding.start||binding.end!==grant.binding.end)throw mismatch();
   const exact=request.id===grant.id&&binding.taskKey===grant.binding.taskKey;
+  const empty=grant.priorState==='empty'&&Boolean(grant.visualQuestion)&&Boolean(request.visualQuestion)
+    &&grant.visualQuestion!.target===request.visualQuestion!.target&&grant.visualQuestion!.narration===request.visualQuestion!.narration
+    &&(request.id===grant.id||!request.existing);
   // Only a received terminal answer can release the old source quarantine for
   // the same visual question with the newly added narrative criterion.
   const narrative=request.id!==grant.id&&!request.existing&&grant.priorState==='received'&&Boolean(binding.taskKey)
@@ -155,16 +165,14 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
     &&typeof task.sceneId==='string'&&Boolean(task.sceneId.trim())&&task.narration===grant.groundedNarration
     &&typeof task.originalScript==='string'&&task.originalScript.includes(task.narration)
     &&!documentaryAiPlanGroundingIssue({grounding:task.grounding,years:[]} as unknown as DocumentaryAiSearchPlan,task.originalScript);
-  if(!exact&&!narrative&&!grounded)throw mismatch();
+  if(!exact&&!narrative&&!grounded&&!empty)throw mismatch();
   const current=await readDocumentarySelectionRetryGrant(directory,grant.id);
   if(!current||current.revision!==grant.revision||current.approvedAt!==grant.approvedAt)throw mismatch();
   {
     // A different file revision or prompt key must not commission this same
     // narrative check a second time after its first dispatch.
-    for(const file of await readdir(directory)){
-      if(!/^[a-f0-9]{64}\.json$/.test(file))continue;
-      const receipt=JSON.parse(await readFile(join(directory,file),'utf8'));
-      if(await documentaryAdmissionNotDispatched(directory,file.slice(0,-5),receipt))continue;
+    for(const {key,receipt} of await readDocumentaryRequestJournal(directory)){
+      if(!receipt||await documentaryAdmissionNotDispatched(directory,key,receipt))continue;
       const prior=receipt?.singleReviewBinding;
       if(receipt?.purpose===request.purpose&&receipt.model===request.model&&prior?.checksum===binding.checksum
         &&prior.start===binding.start&&prior.end===binding.end
@@ -172,7 +180,7 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
     }
   }
   if(scope.probe)throw new DocumentarySelectionRetryProbePassed();
-  return exact?'exact':grounded?'grounded':'narrative';
+  return empty?'empty':exact?'exact':grounded?'grounded':'narrative';
 }
 
 export async function readDocumentarySelectionRetryEvidence(root:string,model:string){
@@ -191,7 +199,7 @@ export async function readDocumentarySelectionRetryEvidence(root:string,model:st
     if(authorization.unsettledExact)unsettledExact.push({id:grant.id,...authorization.unsettledExact});
     // The completed narrative evaluation has a separate receipt, so its
     // former received grant is still available. Only a cache probe can admit it.
-    if(completed||available&&grant.priorState==='received')cachedChecksums.add(grant.binding.checksum);
+    if(completed||available&&(grant.priorState==='received'||grant.priorState==='empty'))cachedChecksums.add(grant.binding.checksum);
   }
   return {grants,cachedChecksums,exactCompletions,unsettledExact};
 }
@@ -200,21 +208,23 @@ export async function readDocumentarySelectionRetryEvidence(root:string,model:st
  * uncertain submission. Keep the exact old response and its receipt. */
 export async function listDocumentaryRecovery(root:string):Promise<DocumentaryRecoveryItem[]> {
   const directory=join(root,'Documentary','Analysis');
-  const files=await readdir(directory).catch((e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return [];throw e;});
   // Route receipts deliberately forbid automatic retries even after a definite
   // failure. Their durable request manifests identify the two eligible tasks.
   const routeKeys=await routeRequestKeys(root);
   const result:DocumentaryRecoveryItem[]=[];
-  for(const file of files.filter(f=>/^[a-f0-9]{64}\.json$/.test(f))){
-    const raw=await readFile(join(directory,file),'utf8'),value=JSON.parse(raw);
+  for(const {key,revision,receipt:value} of await readDocumentaryRequestJournal(directory)){
+    if(!value)continue;
     // A complete received response can be recovered locally by the normal
     // checkpoint reader. Never offer to pay for that response again.
     if(value.state==='received'&&typeof value.raw==='string'){
       try{documentaryJson(value.raw);continue;}catch{/* A malformed complete response still needs explicit recovery. */}
     }
-    if(['pending','partial','received'].includes(value.state)
-      ||value.state==='failed'&&value.purpose==='semantic-montage'&&routeKeys.has(file.slice(0,-5)))result.push({id:file.slice(0,-5),revision:digest(raw),purpose:value.purpose??'analysis',state:value.state,
-      characters:typeof value.raw==='string'?value.raw.length:0,createdAt:value.createdAt??''});
+    const knownEmpty=documentaryKnownEmptyReceipt(value),quality=value.singleReviewBinding?.quality;
+    if(['pending','partial','received'].includes(value.state)||knownEmpty
+      ||value.state==='failed'&&value.purpose==='semantic-montage'&&routeKeys.has(key))result.push({id:key,revision,purpose:value.purpose??'analysis',state:knownEmpty?'empty':value.state,
+      characters:typeof value.raw==='string'?value.raw.length:0,createdAt:value.createdAt??'',
+      ...(typeof quality?.sceneId==='string'?{sceneId:quality.sceneId}:{}),...(typeof quality?.narration==='string'?{narration:quality.narration}:{}),
+      ...(knownEmpty?{knownEmpty:true}:{})});
   }
   return result;
 }

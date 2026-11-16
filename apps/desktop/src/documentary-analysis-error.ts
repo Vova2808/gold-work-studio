@@ -1,9 +1,13 @@
 /** A service failure pauses selection; an old uncertain request only blocks that candidate. */
 export class DocumentaryAnalysisError extends Error {
-  constructor(message: string, readonly kind: "unavailable" | "pending" = "unavailable", readonly purpose?: string, readonly retryableTerminal = false, readonly serviceUnavailable = false, readonly retryAfterMs?: number, readonly completedGatewayError = false) {
+  requestSent=false;
+  requestKey?:string;
+  constructor(message: string, readonly kind: "unavailable" | "pending" | "empty" = "unavailable", readonly purpose?: string, readonly retryableTerminal = false, readonly serviceUnavailable = false, readonly retryAfterMs?: number, readonly completedGatewayError = false) {
     super(message);
     this.name = "DocumentaryAnalysisError";
   }
+  /** Only call when the receipt or client boundary belongs to these bytes. */
+  forSubmittedRequest(key?:string):this {this.requestSent=true;this.requestKey=key;return this;}
 }
 
 /** Ownership was lost by an older version. Keep the unknown paid receipt and

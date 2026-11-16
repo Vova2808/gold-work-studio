@@ -15,8 +15,9 @@ import {documentaryVisualHash,visualHashDistance} from './documentary-visual-has
 import {documentaryActiveListItem,documentaryContextApproval,documentaryIllustrationApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
 import {documentaryContradictoryModelYear,documentaryExplicitModelYear} from './documentary-model-year.js';
-import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
-import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched,documentaryAdmissionNotDispatched} from './documentary-retry.js';
+import {documentaryCheckpointKey,documentaryVisualVerdictKey} from './documentary-checkpoint-key.js';
+import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched,documentaryAdmissionNotDispatched,DocumentaryRetryPermissions,listDocumentaryRecovery,readDocumentarySelectionRetryGrant} from './documentary-retry.js';
+import {documentaryKnownEmptyReceipt,readDocumentaryRequestJournal} from './documentary-request-journal.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
 import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
 import {documentaryIllustrationScriptGrounding,documentaryGroundedIllustrationQualityInstruction,documentaryGroundedFallbackIllustrationQualityInstruction,documentaryGroundedIllustrationQualityInstructionV1,documentaryGroundedFallbackIllustrationQualityInstructionV1,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedIllustrationQualityInstructionV3,documentaryGroundedFallbackIllustrationQualityInstructionV3,documentaryGroundedScriptFitIssue} from './documentary-illustration-quality.js';
@@ -57,7 +58,7 @@ import { DocumentaryAnalysisError, DocumentaryLegacyPreviewUnattributed } from "
 import {documentaryWorkLimits,DocumentaryBudgetExhausted} from './documentary-work-budget.js';
 import { AnyModelModelUnavailableError } from "./anymodel-text-fallback.js";
 import {receivedDocumentaryRanking} from './documentary-ranking-response.js';
-import { atomicWrite } from "./fs-utils.js";
+import { atomicWrite as writeAtomic } from "./fs-utils.js";
 import { measureDocumentaryStage } from "./documentary-metrics.js";
 import { recordDiagnosticEvent } from "./diagnostics.js";
 import { effectFfmpeg } from "./effect-media.js";
@@ -69,6 +70,7 @@ import { availableVideoSegments, buildVideoCatalog, documentaryFrozenVideoRange,
 import { directCatalogChoices, representativeCatalogChoices, documentaryAvailabilityIllustration, documentaryAvailabilitySearchHints, documentaryAvailabilityVisualInstruction, documentaryDistraction, documentaryCatalogIdentityConflict, documentarySubjectPolicy, documentaryRangeEditorialPolicy, documentaryRangeEditorialIssue, documentaryIdentityReviewIssue, documentaryIdentityMatches, documentaryIdentityNames, documentaryGeneralActionIssue, documentaryActionReviewIssue, documentaryProjectionIssue, documentaryListsNamedSubjects } from "./documentary-visual-relevance.js";
 
 type Completion = Pick<AnyModelClient, "documentaryCompletion" | "configured"> & Partial<Pick<AnyModelClient,"verifyPreDispatchRejection"|"probeDocumentaryConnection"|"documentaryAnalysisModel"|"documentaryQueryModel"|"documentaryMotionModel"|"documentaryMontageModel"|"documentaryConceptModel">>;
+const atomicWrite=(path:string,data:string)=>writeAtomic(path,data,{durable:true,allowCopyFallback:false});
 export type ExplanationFeedbackRequest={version:1;projectId:string;sceneId:string;feedback:string;beforeHash:string;operationKey:string;
   sceneIds:string[];scenes:Array<{sceneId:string;narration:string;durationInFrames:number}>;explanation:NonNullable<NonNullable<Scene['documentary']>['semanticMontage']>['explanation']};
 export type ExplanationFeedbackHooks={assertCurrent:()=>Promise<void>;onIdentity:(analysisKey:string)=>Promise<void>;
@@ -136,6 +138,10 @@ const singleReviewTaskKey=(input:Record<string,unknown>)=>createHash('sha256').u
   ...(input.fallbackNarrativeContext?[input.fallbackNarrativeContext]:[]),
   ...(input.scriptGrounding?[input.scriptGrounding]:[]),
 ])).digest('hex');
+function localVisualContext(project:Project,scene:Scene){
+  const context=documentarySceneContext(project,scene);
+  return {...context,preceding:context.preceding.slice(-2),following:context.following.slice(0,2),earlierTimeReferences:[]};
+}
 export class DocumentaryCachedAnalysisMissing extends Error {}
 /** Only emitted after old-receipt guards, before this request has a pending receipt or POST. */
 export class DocumentaryPreSubmitFailure extends Error {
@@ -331,7 +337,7 @@ export function documentaryJson(text: string,allowUnclosedFence=false): Record<s
   return parsed.result;
 }
 const completedGatewaySignature='[Error] The upstream provider is temporarily unavailable. Try again shortly.';
-const emptyVisualResponseMessage='Анализ материала не завершён: модель завершила визуальную проверку пустым ответом. Ответ получен без результата анализа; этот платный запрос автоматически не повторяется. Выберите другой материал или проверьте кандидат вручную.';
+const emptyVisualResponseMessage='Модель завершила визуальную проверку пустым ответом. Это известный результат без решения по материалу. Можно разрешить одну новую проверку с большим лимитом ответа в восстановлении запросов или выбрать другой материал.';
 function confirmedGatewayUnavailable(saved:{state:string;rejection?:string;raw?:string;completedAt?:string;completedGatewayError?:boolean}|undefined):boolean {
   // The old writer already marked this exact terminal result as rejected and
   // completed. A matching string in pending/partial content is never sufficient.
@@ -397,8 +403,8 @@ export async function readAnalysisCheckpoint(path: string): Promise<{ state: str
   return value;
 }
 export class DocumentaryIntelligence {
-  private workBudget = new AsyncLocalStorage<{remaining:()=>number;submit:()=>void;beforeSubmit?:()=>Promise<void>;capturePreSubmitFailure?:boolean;extend?:(ms:number)=>void}>();
-  withSelectionBudget<T>(budget:{remaining:()=>number;submit:()=>void;beforeSubmit?:()=>Promise<void>;capturePreSubmitFailure?:boolean;extend?:(ms:number)=>void},work:()=>Promise<T>):Promise<T> {
+  private workBudget = new AsyncLocalStorage<{remaining:()=>number;submit:()=>void|Promise<void>;beforeSubmit?:()=>Promise<void>;capturePreSubmitFailure?:boolean;extend?:(ms:number)=>void}>();
+  withSelectionBudget<T>(budget:{remaining:()=>number;submit:()=>void|Promise<void>;beforeSubmit?:()=>Promise<void>;capturePreSubmitFailure?:boolean;extend?:(ms:number)=>void},work:()=>Promise<T>):Promise<T> {
     return this.workBudget.run(budget,work);
   }
   private rankingBatch?:DocumentaryRankingBatch;
@@ -418,6 +424,7 @@ export class DocumentaryIntelligence {
     return JSON.stringify([project.id, scene.id, scene.narration, scene.documentary?.requirement, scene.documentary?.motionGraphic]);
   }
   private analysisSubmissions = 0;
+  private emptyRetryPermissions=new DocumentaryRetryPermissions();
   private consecutiveConnectionFailures = 0;
   private connectionRecovery?: Promise<void>;
   private connectionRecoveries = 0;
@@ -1113,7 +1120,7 @@ export class DocumentaryIntelligence {
     const previewSourceKey=this.previewSource.getStore()?.sourceKey;
     const previewMetadata={...(previewSourceKey?{previewSourceKey}:{}),...(words.singleReview?{singleReviewBinding:{
       checksum:String(words.checksum),revision:JSON.stringify(words.fileRevision),start:Number(words.startSeconds),end:Number(words.endSeconds),
-      taskKey:singleReviewTaskKey(words),...(words.fallbackNarrativeContext?{fallbackNarrativeBinding:words.fallbackNarrativeContext.binding}:{}),...(words.imagePreparation?{imagePreparation:words.imagePreparation}:{}),
+      taskKey:singleReviewTaskKey(words),verdictKey:documentaryVisualVerdictKey(words),...(words.fallbackNarrativeContext?{fallbackNarrativeBinding:words.fallbackNarrativeContext.binding}:{}),...(words.imagePreparation?{imagePreparation:words.imagePreparation}:{}),
       ...(retryOriginScope&&'grant' in retryOriginScope?{groundedRetryOrigin:retryOriginScope.grant.id}:{}),
       ...(words.illustrationQualityVersion===1?{quality:{version:1,target:String(words.visualTarget),narration:String(words.narration),...(words.sceneId?{sceneId:String(words.sceneId)}:{})}}:{})}}:{})};
     const legacyImages=images.length?this.inspection.getStore()?.legacyImageSamples:undefined;
@@ -1122,14 +1129,14 @@ export class DocumentaryIntelligence {
       const old=await readAnalysisCheckpoint(join(root,`${oldKey}.json`));
       if(old?.rejection==='local-admission-not-dispatched'&&!await documentaryAdmissionNotDispatched(root,oldKey,old))
         throw new DocumentaryAnalysisError('Доказательство остановки прежнего изображения до отправки не подтверждено; повтор отключён.','pending',purpose);
-      if(singleReviewModel&&old?.model!==singleReviewModel)continue;
+      if(singleReviewModel&&old?.model!==singleReviewModel&&old?.state==='complete')continue;
       if(old?.rejection==='model-refusal')throw new DocumentaryAnalysisError(old.error??'Модель отказалась анализировать материал.','pending',purpose);
       if(old&&old.state!=='failed'&&!(old.state==='rejected'&&old.rejection==='model-unavailable')&&(old.state!=='complete'||!old.result))
-        throw new DocumentaryAnalysisError('Проверка прежнего изображения имеет неизвестный результат. Новая подложка схемы не разрешает повторную оплату.','pending',purpose);
+        throw new DocumentaryAnalysisError('Проверка прежнего изображения имеет неизвестный результат. Новая подложка схемы не разрешает повторную оплату.','pending',purpose).forSubmittedRequest(oldKey);
     }
     const path = join(root, `${key}.json`);
     const saved = await readAnalysisCheckpoint(path);
-    if(saved?.rejection==='empty-response')throw new DocumentaryAnalysisError(saved.error??emptyVisualResponseMessage,'pending',purpose);
+    if(saved?.rejection==='empty-response')throw new DocumentaryAnalysisError(saved.error??emptyVisualResponseMessage,'empty',purpose).forSubmittedRequest(key);
     const retryScope=documentarySelectionRetry.getStore();
     const admissionRefusal=saved?.state==='failed'&&saved.rejection==='local-admission-not-dispatched';
     const resumingAdmission=admissionRefusal&&await documentaryAdmissionNotDispatched(root,key,saved);
@@ -1209,9 +1216,9 @@ export class DocumentaryIntelligence {
     if(saved?.state==='rejected'&&saved.rejection==='provider-unavailable'&&!resumingGateway)throw new DocumentaryAnalysisError(saved.error??'AnyModel сообщил о недоступности провайдера. Ответ сохранён; автоматического повтора нет.','unavailable',purpose,false,false,undefined,confirmedGatewayUnavailable(saved));
     if (saved?.state === "received") throw new DocumentaryAnalysisError(saved.raw&&documentaryJsonFormatIssue(saved.raw)==='incomplete-json'
       ?'Получен незавершённый JSON анализа: решения модели нет. Причина обрыва не установлена; лимит токенов не подтверждён. Исходный ответ сохранён; требуется явное разрешение одного повтора.'
-      :"Ответ анализа получен, но его формат не распознан. Ответ сохранён; повторный платный запрос не отправлен.", "pending", purpose);
-    if (saved?.state === "partial") throw new DocumentaryAnalysisError(`Сохранён незавершённый ответ анализа (${saved.raw?.length ?? 0} знаков). Этот платный запрос не повторяется; можно использовать другие источники и уже готовую часть каталога.`, "pending", purpose);
-    if (saved && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")&&!resumingGateway) throw new DocumentaryAnalysisError("Предыдущий запрос анализа Stock уже отправлялся, но результат не сохранён. Автоповтор отключён; проверьте журнал AnyModel.", "pending", purpose);
+      :"Ответ анализа получен, но его формат не распознан. Ответ сохранён; повторный платный запрос не отправлен.", "pending", purpose).forSubmittedRequest(key);
+    if (saved?.state === "partial") throw new DocumentaryAnalysisError(`Сохранён незавершённый ответ анализа (${saved.raw?.length ?? 0} знаков). Этот платный запрос не повторяется; можно использовать другие источники и уже готовую часть каталога.`, "pending", purpose).forSubmittedRequest(key);
+    if (saved && saved.state !== "failed" && !(saved.state === "rejected" && saved.rejection === "model-unavailable")&&!resumingGateway) throw new DocumentaryAnalysisError("Предыдущий запрос анализа Stock уже отправлялся, но результат не сохранён. Автоповтор отключён; проверьте журнал AnyModel.", "pending", purpose).forSubmittedRequest(key);
     // Adding sentence context must not disguise an uncertain paid request as a new retry.
     let preArchiveResponse:Record<string,unknown>|undefined;
     let byteVerifiedResponse:Record<string,unknown>|undefined;
@@ -1223,10 +1230,10 @@ export class DocumentaryIntelligence {
       const previousState = await readAnalysisCheckpoint(join(root, `${previousKey}.json`));
       if(previousState?.rejection==='local-admission-not-dispatched'&&!await documentaryAdmissionNotDispatched(root,previousKey,previousState))
         throw new DocumentaryAnalysisError('Доказательство остановки прежней проверки до отправки не подтверждено; повтор отключён.','pending',purpose);
-      if(singleReviewModel&&previousState?.model!==singleReviewModel)continue;
-      if(previousState?.rejection==='empty-response')throw new DocumentaryAnalysisError(previousState.error??emptyVisualResponseMessage,'pending',purpose);
+      if(singleReviewModel&&previousState?.model!==singleReviewModel&&previousState?.state==='complete')continue;
+      if(previousState?.rejection==='empty-response')throw new DocumentaryAnalysisError(previousState.error??emptyVisualResponseMessage,'empty',purpose).forSubmittedRequest(previousKey);
       if(previousState?.rejection==='model-refusal')throw new DocumentaryAnalysisError(previousState.error??'Модель отказалась анализировать материал.','pending',purpose);
-      if (previousState && previousState.state !== "failed" && !(previousState.state === "rejected" && previousState.rejection === "model-unavailable") && (previousState.state !== "complete" || !previousState.result)) throw new DocumentaryAnalysisError("Предыдущая проверка этого материала имеет неизвестный результат. Новый контекст не запускает платный повтор; проверьте журнал AnyModel.", "pending", purpose);
+      if (previousState && previousState.state !== "failed" && !(previousState.state === "rejected" && previousState.rejection === "model-unavailable") && (previousState.state !== "complete" || !previousState.result)) throw new DocumentaryAnalysisError("Предыдущая проверка этого материала имеет неизвестный результат. Новый контекст не запускает платный повтор; проверьте журнал AnyModel.", "pending", purpose).forSubmittedRequest(previousKey);
       // Old unknown requests still guard their pixels. A settled old verdict
       // does not answer the newly requested narrative criterion.
       if(words.fallbackNarrativeContext&&JSON.parse(previous.input).fallbackNarrativeContext?.binding!==words.fallbackNarrativeContext.binding)continue;
@@ -1332,6 +1339,7 @@ export class DocumentaryIntelligence {
     if(artworkCovered?.size&&Array.isArray(artworkRows)&&artworkRows.every(row=>!row.editable||artworkCovered.has(row.sceneId)))return {scenes:[]};
     const selectionRetryRequest=documentarySelectionRetry.getStore()?{
       id:key,purpose,model:singleReviewModel,binding:previewMetadata.singleReviewBinding,existing:Boolean(saved)&&!resumingAdmission,
+      ...(words.singleReview?{visualQuestion:{target:String(words.visualTarget),narration:String(words.narration)}}:{}),
       legacyTaskKey:words.fallbackNarrativeContext?singleReviewTaskKey({...words,fallbackNarrativeContext:undefined}):undefined,
       ...(words.scriptGrounding?{groundedTask:{sceneId:words.sceneId,narration:words.narration,...words.scriptGrounding}}:{}),
     }:undefined;
@@ -1385,7 +1393,7 @@ export class DocumentaryIntelligence {
     if(model)this.inspection.getStore()?.progress?.(`Анализ ${tier==='fast'?'общего плана':'деталей'} · ${model}…`);
     recordDiagnosticEvent('info','documentary.analysis.route',{projectId,purpose,tier,model});
     if(selectionRetryRequest)await checkDocumentarySelectionRetry(root,{...selectionRetryRequest,model});
-    this.workBudget.getStore()?.submit();
+    await this.workBudget.getStore()?.submit();
     const consumedApprovalText=approval&&!approval.consumedAt?JSON.stringify({...approval,consumedAt:createdAt}):undefined;
     if(consumedApprovalText){
       if(await readFile(approvalPath,'utf8')!==approvalText)throw Error('Разрешение повтора изменилось до отправки; платный запрос заблокирован.');
@@ -1511,7 +1519,7 @@ export class DocumentaryIntelligence {
       // dispatch-only allowance leaves saved partial/unknown receipts guarded.
       const raw = purpose==='candidate-relevance'&&!images.length&&Array.isArray(words.candidates)&&words.candidates.length>0
         ?await this.rankingBatch.request(projectId,model,system,input,savePartial,(batchFile,batchMember)=>atomicWrite(path,JSON.stringify({state:'pending',purpose,model,createdAt,batchFile,batchMember})))
-        :await this.client.documentaryCompletion(requestSystem, requestInput, images, requestSignal, savePartial,model,revision?9000:concepts?5000:artwork?14000:purpose==='semantic-montage'?9000:purpose==='visual-illustration'?(words.scriptGrounding?2800:words.namedSubject?1800:1200):purpose==='search-plan'?9000:words.singleReview===true?4000:words.fixedNamedInterval===true?2800:ordinaryVisual?2200:undefined,ordinaryVisual||purpose==='visual-illustration',purpose==='semantic-montage'?{purpose:'semantic-montage',...(oneShotRecovery||artwork||revision||concepts||options.explanationFeedback?{singleAttempt:true}:{})}:purpose==='visual-illustration'?{purpose:'visual-illustration',...(selectionRetry?{singleAttempt:true}:{}),onTerminal:metadata=>{completionMetadata=metadata;}}:undefined);
+        :await this.client.documentaryCompletion(requestSystem, requestInput, images, requestSignal, savePartial,model,revision?9000:concepts?5000:artwork?14000:purpose==='semantic-montage'?9000:purpose==='visual-illustration'?(selectionRetry==='empty'?5600:words.scriptGrounding?2800:words.namedSubject?1800:1200):purpose==='search-plan'?9000:words.singleReview===true?4000:words.fixedNamedInterval===true?2800:ordinaryVisual?2200:undefined,ordinaryVisual||purpose==='visual-illustration',purpose==='semantic-montage'?{purpose:'semantic-montage',...(oneShotRecovery||artwork||revision||concepts||options.explanationFeedback?{singleAttempt:true}:{})}:purpose==='visual-illustration'?{purpose:'visual-illustration',...(selectionRetry?{singleAttempt:true}:{}),onTerminal:metadata=>{completionMetadata=metadata;}}:undefined);
       await writing;
       // Preserve a received response even if its format is invalid: do not charge again to parse it.
       if(purpose==='semantic-montage'&&writeFailure)throw writeFailure;
@@ -1569,7 +1577,7 @@ export class DocumentaryIntelligence {
         this.connectionRecoveries=0;
         await atomicWrite(path,JSON.stringify({state:'rejected',rejection:'empty-response',purpose,...previewMetadata,model,overviewSamplingVersion,
           raw:error.partial,error:emptyVisualResponseMessage,completion:{...completionMetadata,disposition:'empty'},createdAt,completedAt:new Date().toISOString()}));
-        throw new DocumentaryAnalysisError(emptyVisualResponseMessage,'pending',purpose);
+        throw new DocumentaryAnalysisError(emptyVisualResponseMessage,'empty',purpose).forSubmittedRequest(key);
       }
       if(error instanceof DocumentaryModelRefusal){
         this.consecutiveConnectionFailures=0;
@@ -1633,7 +1641,7 @@ export class DocumentaryIntelligence {
         if(checkpoint)await atomicWrite(path,JSON.stringify({...checkpoint,completion:completionMetadata}));
       }
       throw new DocumentaryAnalysisError(`Анализ материала не завершён: ${error instanceof Error ? error.message : String(error)}${partial ? ` Сохранено ${partial.length} знаков ответа.` : ""}`, kind, purpose,retryableTerminal,(retryableTerminal||artwork||revision)&&error instanceof AnyModelProviderResponseError&&error.terminalStatus===503,
-        error instanceof AnyModelProviderResponseError?error.retryAfterMs:undefined);
+        error instanceof AnyModelProviderResponseError?error.retryAfterMs:undefined).forSubmittedRequest(key);
     }
     } finally { releaseAnalysis(); }
   }
@@ -2725,9 +2733,27 @@ export class DocumentaryIntelligence {
   }
 
   async inspectForSelection(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false, contextRecheck=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
-    return this.inspection.run({submissions:0,shouldStop,progress,cacheOnly,contextRecheck,comparisonSubjects:[],identities:undefined},async()=>({
-      review:await this.inspectIllustration(project,scene,progress),usedNewAnalysis:this.inspection.getStore()!.submissions>0,
-    }));
+    return this.inspection.run({submissions:0,shouldStop,progress,cacheOnly,contextRecheck,comparisonSubjects:[],identities:undefined},async()=>{
+      let review:Review;
+      try{review=await this.inspectIllustration(project,scene,progress);}
+      catch(error){
+        if(!(error instanceof DocumentaryAnalysisError)||error.kind!=='empty'||!error.requestKey||cacheOnly||shouldStop()
+          ||project.settings.assembly.documentary?.retryEmptyVisualResponse===false||documentarySelectionRetry.getStore())throw error;
+        const root=this.rootFor(project.id),directory=join(root,'Documentary','Analysis');
+        const prior=await readAnalysisCheckpoint(join(directory,error.requestKey+'.json'));
+        // A retry's empty answer is final for automation, including after restart.
+        if(prior?.singleReviewBinding?.groundedRetryOrigin
+          ||await stat(join(directory,error.requestKey+'.retry-authorization.json')).then(()=>true,(e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return false;throw e;}))throw error;
+        const item=(await listDocumentaryRecovery(root)).find(item=>item.id===error.requestKey&&item.state==='empty');
+        if(!item)throw error;
+        await this.emptyRetryPermissions.authorize(root,[item]);
+        const grant=await readDocumentarySelectionRetryGrant(directory,item.id);
+        if(!grant)throw error;
+        progress('Получен пустой ответ. Одна повторная проверка с увеличенным лимитом ответа…');
+        review=await documentarySelectionRetry.run({grant,probe:false},()=>this.inspectIllustration(project,scene,progress));
+      }
+      return {review,usedNewAnalysis:this.inspection.getStore()!.submissions>0};
+    });
   }
 
   private async inspectForSelectionStrict(project: Project, scene: Scene, progress: (message: string) => void = () => {}, shouldStop: () => boolean = () => false, cacheOnly=false, contextRecheck=false): Promise<{ review: Review; usedNewAnalysis: boolean }> {
@@ -2955,32 +2981,41 @@ export class DocumentaryIntelligence {
     const fullScript=project.videoBrief?.readyScript??[...project.scenes].sort((a,b)=>a.order-b.order).map(item=>item.narration).join('\n');
     const fallbackNarrativeContext=documentaryFallbackNarrativeContext(project,scene);
     const scriptGrounding=documentaryIllustrationScriptGrounding(doc.requirement.aiSearchPlan,fullScript);
-    const taskKey=singleReviewTaskKey({visualTarget:plan.visualTarget,narration:scene.narration,sourcePolicy:plan.sourcePolicy,
+    const taskInput={visualTarget:plan.visualTarget,narration:scene.narration,sourcePolicy:plan.sourcePolicy,
       namedSubject:plan.namedSubject,requiredYears:plan.requiredYears??[],analysisModel,singleReviewVersion:5,
-      activeListItem:documentaryActiveListItem(scene),narrativeContext:documentarySceneContext(project,scene),fullScript,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{}),...(scriptGrounding?{scriptGrounding}:{})});
+      activeListItem:documentaryActiveListItem(scene),narrativeContext:documentarySceneContext(project,scene),fullScript,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{}),...(scriptGrounding?{scriptGrounding}:{})};
+    const taskKey=singleReviewTaskKey(taskInput);
+    const verdictKey=documentaryVisualVerdictKey({...taskInput,singleReview:true,checksum:doc.checksum,startSeconds:start,endSeconds:end});
+    let stableReview:Record<string,unknown>|undefined;
     const savedRevision=previousMetadataRevision(doc.visualReview?.localReview,revision);
     if(savedRevision)predecessors.push(savedRevision);
-    for(const name of await readdir(analysisRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
-      if(!/^[a-f0-9]{64}\.json$/.test(name))continue;
-      const receipt=await readAnalysisCheckpoint(join(analysisRoot,name)),binding=receipt?.singleReviewBinding;
-      if(receipt?.purpose==='visual-illustration'&&analysisModel&&receipt.model!==analysisModel)continue;
+    for(const {key,receipt} of await readDocumentaryRequestJournal(analysisRoot)){
+      const binding=receipt?.singleReviewBinding;
       const sameFrames=binding?.checksum===doc.checksum&&binding.start===start&&binding.end===end;
       // Legacy bindings lack this question identity and may only match through
       // their exact prompt checkpoint, never block a different context globally.
       const sameTask=sameFrames&&(video||binding.imagePreparation===imagePreparation)
-        &&binding.taskKey===taskKey;
+        &&(binding.taskKey===taskKey||binding.verdictKey===verdictKey);
       // Removing a locally inferred place does not repay an unresolved view of
       // the same actual target. A different authored target remains independent.
       const sameVisualQuestion=sameFrames&&binding.quality?.target===qualityTarget&&binding.quality.narration===scene.narration;
-      if(sameTask&&receipt?.purpose==='visual-illustration'&&receipt.state==='complete'&&receipt.result)completedCurrentTask=true;
+      const legacyQuestion=sameVisualQuestion&&!binding.verdictKey&&binding.quality?.version===1;
+      if((sameTask||legacyQuestion)&&receipt?.purpose==='visual-illustration'&&receipt.state==='complete'&&receipt.result
+        &&!documentaryKnownEmptyReceipt(receipt)){
+        completedCurrentTask=true;
+        // Reuse the actual model answer and run all current evidence validators
+        // below. Legacy receipts with target+narration remain useful even when
+        // their prompt, model or file date has changed.
+        if(binding.quality?.version===1)stableReview={...receipt.result,__illustrationQualityVersion:1};
+      }
       if(sameTask&&receipt?.rejection==='model-refusal')throw new DocumentaryAnalysisError(receipt.error??'Модель отказалась анализировать материал.','pending',receipt.purpose);
-      if((sameTask||sameVisualQuestion)&&receipt?.rejection==='empty-response')
-        throw new DocumentaryAnalysisError(receipt.error??emptyVisualResponseMessage,'pending',receipt.purpose);
-      if(receipt&&(!binding||sameTask||sameVisualQuestion)
+      if((sameTask||sameVisualQuestion)&&documentaryKnownEmptyReceipt(receipt))
+        throw new DocumentaryAnalysisError(receipt!.error??emptyVisualResponseMessage,'empty',receipt!.purpose).forSubmittedRequest(key);
+      if(receipt&&(sameTask||sameVisualQuestion)
         &&/^(?:visual-|catalog-|video-)/.test(receipt.purpose??'')&&receipt.state!=='complete'&&receipt.state!=='failed'
         &&!(receipt.state==='rejected'&&receipt.rejection==='model-unavailable')){
         if(receipt.purpose==='video-catalog')pendingCatalog=true;
-        else throw new DocumentaryAnalysisError('Прежний оплаченный просмотр имеет неизвестный результат. Повтор не отправлен.','pending',receipt.purpose);
+        else throw new DocumentaryAnalysisError('Прежний оплаченный просмотр имеет неизвестный результат. Повтор не отправлен.','pending',receipt.purpose).forSubmittedRequest(key);
       }
       if(sameFrames){
         if(sameTask&&receipt?.purpose==='visual-illustration'&&receipt.state==='complete'&&receipt.result
@@ -2995,6 +3030,8 @@ export class DocumentaryIntelligence {
         if(former&&!predecessors.some(item=>JSON.stringify(item)===JSON.stringify(former)))predecessors.push(former);
       }
     }
+    if(stableReview&&!await matchesFileChecksum(file,doc.checksum))
+      throw new DocumentaryCachedAnalysisMissing('Изменились реальные байты исходника; сохранённый вердикт не применяется.');
     if(recoveringUncertainRange&&(!completedCurrentTask||!await matchesFileChecksum(file,doc.checksum)))
       throw new DocumentaryCachedAnalysisMissing('Нет завершённого просмотра этого файла, диапазона и текущей визуальной задачи.');
     const inspection=this.inspection.getStore();
@@ -3090,20 +3127,31 @@ export class DocumentaryIntelligence {
         system:documentaryIllustrationQualityInstruction,input:JSON.stringify({...legacyTask,fileRevision:oldRevision})}]:[]));
     if(fallbackNarrativeContext)previousRequests.push({system:qualitySystem,input:JSON.stringify(qualityTask)},...(oldRevision?[{
       system:qualitySystem,input:JSON.stringify({...qualityTask,fileRevision:oldRevision})}]:[]));
-    const qualityInput=JSON.stringify({...qualityTask,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
+    const legacyCurrentQualityInput=JSON.stringify({...qualityTask,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
+    // Keep old payloads as lookup data; only the new dispatch is scoped to the
+    // current line and two neighbours. Explicit grounding quotes retain their
+    // original wording even when their antecedent lies farther away.
+    const narrativeContext=localVisualContext(project,scene);
+    const nearbyScript=[...narrativeContext.preceding,narrativeContext.current,...narrativeContext.following].map(line=>line.text).join('\n');
+    const quotedContext=scriptGrounding?.grounding.mandatory.map(item=>item.scriptQuote).filter(quote=>!nearbyScript.includes(quote))??[];
+    const {fullScript:_fullScript,...localQualityTask}=qualityTask;
+    const qualityInput=JSON.stringify({...localQualityTask,narrativeContext,sceneId:scene.id,
+      ...(scriptGrounding?{scriptGrounding:{...scriptGrounding,originalScript:[nearbyScript,...new Set(quotedContext)].join('\n')}}:{}),
+      ...(fallbackNarrativeContext?{fallbackNarrativeContext}:{})});
+    previousRequests.push({system:qualitySystem,input:legacyCurrentQualityInput});
     if(scriptGrounding){
       const previousGroundedSystems=fallbackNarrativeContext
         ?[documentaryGroundedFallbackIllustrationQualityInstructionV3,documentaryGroundedFallbackIllustrationQualityInstructionV2,documentaryGroundedFallbackIllustrationQualityInstructionV1]
         :[documentaryGroundedIllustrationQualityInstructionV3,documentaryGroundedIllustrationQualityInstructionV2,documentaryGroundedIllustrationQualityInstructionV1];
       for(const previousGroundedSystem of previousGroundedSystems)
-        previousRequests.push({system:previousGroundedSystem,input:qualityInput},...(oldRevision?[{system:previousGroundedSystem,
-          input:JSON.stringify({...JSON.parse(qualityInput),fileRevision:oldRevision})}]:[]));
+        previousRequests.push({system:previousGroundedSystem,input:legacyCurrentQualityInput},...(oldRevision?[{system:previousGroundedSystem,
+          input:JSON.stringify({...JSON.parse(legacyCurrentQualityInput),fileRevision:oldRevision})}]:[]));
     }
     // Preserve the exact predecessor checkpoint, including byte-proven old
     // revisions. A corrected task instruction cannot repay unknown work or
     // reinterpret a completed refusal as an approval.
-    if(automaticReserve)previousRequests.push({system:sourceSystem+documentaryIllustrationQualityInstruction,input:qualityInput},...(oldRevision?[{
-      system:sourceSystem+documentaryIllustrationQualityInstruction,input:JSON.stringify({...JSON.parse(qualityInput),fileRevision:oldRevision})}]:[]));
+    if(automaticReserve)previousRequests.push({system:sourceSystem+documentaryIllustrationQualityInstruction,input:legacyCurrentQualityInput},...(oldRevision?[{
+      system:sourceSystem+documentaryIllustrationQualityInstruction,input:JSON.stringify({...JSON.parse(legacyCurrentQualityInput),fileRevision:oldRevision})}]:[]));
     const previousQualitySystem=sourceSystem+documentaryIllustrationQualityInstructionV1;
     previousRequests.push({system:previousQualitySystem,input:legacyQualityInput},...(oldRevision?[{system:previousQualitySystem,
       input:JSON.stringify({...JSON.parse(legacyQualityInput),fileRevision:oldRevision})}]:[]));
@@ -3132,13 +3180,13 @@ export class DocumentaryIntelligence {
     // The original-meaning criterion is a genuinely new visual question. An
     // explicit inspection may submit it once; passive/cache-only inspection
     // cannot. Its own receipt and unknown guards are independent of the old task.
-    const readReview=()=>this.complete(project.id,'visual-illustration',qualitySystem,qualityInput,images,previousRequests);
+    const readReview=()=>stableReview?Promise.resolve(stableReview):this.complete(project.id,'visual-illustration',qualitySystem,qualityInput,images,previousRequests);
     // Another catalogue page may be pending after this exact cut was reviewed.
     // Only a cached answer can be used until the catalogue request is resolved.
     const value:Record<string,unknown>=pendingCatalog||!supersededTargetContract&&(previousUnprovedVideo||previousQualityReview)?await this.inspection.run({...inspection!,cacheOnly:true},readReview).catch(error=>{
       if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error;
       if(previousQualityReview&&inspection?.cacheOnly)throw error;
-      if(pendingCatalog)throw new DocumentaryAnalysisError('Прежний платный анализ этого видео не завершён. Источник сохранён; проверяю другой кандидат без повторной оплаты.','pending','video-catalog');
+      if(pendingCatalog)throw new DocumentaryAnalysisError('Прежний платный анализ этого видео не завершён. Источник сохранён; проверяю другой кандидат без повторной оплаты.','pending','video-catalog').forSubmittedRequest();
       if(previousQualityReview)return {reason:'Нет полного анализа для текущих данных: прежний оплаченный просмотр не подтверждает видимость объекта и уместность надписей. Повтор тех же кадров не отправлен.'};
       // Discovery metadata may have drifted enough to miss the old prompt key.
       // A completed check of these exact source frames still cannot be repaid.
@@ -3290,19 +3338,17 @@ export class DocumentaryIntelligence {
         }
       }catch(error){if(!(error instanceof DocumentaryCachedAnalysisMissing))throw error;}
       const analysisRoot=join(this.rootFor(project.id),'Documentary','Analysis');
-      for(const name of await readdir(analysisRoot).catch(error=>{if(error.code==='ENOENT')return [];throw error;})){
-        if(!/^[a-f0-9]{64}\.json$/.test(name))continue;
-        const receipt=await readAnalysisCheckpoint(join(analysisRoot,name));
-        // Older receipts have no source binding. Conservatively stop rather
-        // than hide an unknown paid job behind the new strategy.
+      for(const {key,receipt} of await readDocumentaryRequestJournal(analysisRoot)){
+        // An unbound legacy request still guards its exact transport key above;
+        // it cannot establish ownership of this unrelated candidate.
         const binding=receipt?.singleReviewBinding;
         // Creating another hardlink cannot hide the SAME unresolved interval.
-        const relevant=!binding||binding.checksum===doc.checksum
+        const relevant=binding&&binding.checksum===doc.checksum
           &&binding.start===start&&binding.end===end;
         if(receipt&&relevant&&/^(?:visual-|catalog-|video-)/.test(receipt.purpose??'')
           &&receipt.state!=='complete'&&receipt.state!=='failed'
           &&!(receipt.state==='rejected'&&receipt.rejection==='model-unavailable'))
-          throw new DocumentaryAnalysisError('Старый платный анализ имеет неизвестный результат. Новый просмотр не отправлен.','pending',receipt.purpose!);
+          throw new DocumentaryAnalysisError('Старый платный анализ имеет неизвестный результат. Новый просмотр не отправлен.','pending',receipt.purpose!).forSubmittedRequest(key);
       }
       progress(video?'Проверяю выбранный отрезок один раз по пяти реальным кадрам…':'Проверяю исходное изображение один раз…');
       value=await invoke();

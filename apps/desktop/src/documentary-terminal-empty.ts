@@ -1,24 +1,18 @@
-import {readFile,readdir} from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {DocumentaryCandidate,Scene} from '@gold-work/shared';
 import {checksumFile} from './effect-library.js';
+import {documentaryKnownEmptyReceipt,readDocumentaryRequestJournal} from './documentary-request-journal.js';
 export type DocumentaryTerminalEmptySource=DocumentaryCandidate&{checksum:string};
 
-/** A settled empty answer permits work on OTHER sources, never another
- * payment for these bytes. Read only; preserve the receipt and quarantine. */
+/** A settled empty answer permits work on other sources. Reusing these bytes
+ * needs the separate one-shot recovery path; this reader never grants it. */
 export async function documentaryTerminalEmptySources(root:string,model:string,scenes:Scene[]):Promise<Map<string,DocumentaryTerminalEmptySource[]>>{
   const result=new Map<string,DocumentaryTerminalEmptySource[]>();
   const directory=join(root,'Documentary','Analysis');
-  const files=await readdir(directory).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error;});
   const inspected=new Map<string,DocumentaryTerminalEmptySource|undefined>();
-  for(const name of files){
-    if(!/^[a-f0-9]{64}\.json$/.test(name))continue;
-    const receipt=JSON.parse(await readFile(join(directory,name),'utf8'));
-    const legacy=receipt?.state==='complete'&&receipt.result?.status==='uncertain';
-    if(receipt?.purpose!=='visual-illustration'||receipt.model!==model
-      ||!(receipt.state==='rejected'&&receipt.rejection==='empty-response'||legacy)
-      ||receipt.raw!==''||receipt.completion?.disposition!=='empty'||receipt.completion.receivedCharacters!==0
-      ||typeof receipt.completedAt!=='string'||!Number.isFinite(Date.parse(receipt.completedAt)))continue;
+  for(const {receipt} of await readDocumentaryRequestJournal(directory)){
+    if(!receipt||receipt.model!==model||!documentaryKnownEmptyReceipt(receipt))continue;
     const binding=receipt.singleReviewBinding;
     if(!/^[a-f0-9]{64}$/.test(binding?.checksum??'')||binding?.quality?.version!==1
       ||typeof binding.quality.narration!=='string'||!binding.quality.narration.trim()
