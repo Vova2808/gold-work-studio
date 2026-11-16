@@ -324,6 +324,8 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
     ?(/\b(?:walk[ -]?around|cold start|startup|start up)\b/iu.test(candidate.title)?20:/\bvlog\b/iu.test(candidate.title)?6:0):0;
   const modelNames=vehicleAction?names.map(name=>name.trim().split(/\s+/).at(-1)!).filter(name=>/^[a-z]{6,}$/i.test(name)):[];
   const modelYear=documentaryExplicitModelYear(requirement,narration);
+  const modelYearSupport=(candidate:DocumentaryCandidate)=>modelYear
+    ?has(candidate.title,modelYear)?2:has(primarySubjectMetadata(candidate),modelYear)?1:0:0;
   const useful=candidates.filter(candidate=>{
     if(candidate.rights==='unknown'||documentaryProjectionIssue(candidate))return false;
     // Explicitly synthetic/irrelevant titles do not deserve paid inspection.
@@ -360,6 +362,6 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
   };
   const target={subject:primary?.name??identities[0]?.name,visualTarget:requirement.aiSearchPlan?.visualTarget??requirement.detail,
     queries:requirement.queries};
-  return useful.sort((a,b)=>mixedAction(a)-mixedAction(b)
+  return useful.sort((a,b)=>modelYearSupport(b)-modelYearSupport(a)||mixedAction(a)-mixedAction(b)
     ||documentaryMetadataRelevance(b,target)-documentaryMetadataRelevance(a,target)||score(b)-score(a)).slice(0,3);
 }
