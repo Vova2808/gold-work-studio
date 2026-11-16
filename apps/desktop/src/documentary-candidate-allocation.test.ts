@@ -12,7 +12,7 @@ import {LocalProjectStorage} from './local-project-storage.js';
 import {prepareDocumentaryScript} from './documentary-plan.js';
 
 function candidate(id:string,kind:'image'|'video'='image'):DocumentaryCandidate{
-  return {id,kind,provider:'pexels',title:id,description:'car',pageUrl:`https://www.pexels.com/${id}/`,downloadUrl:`https://fixture.invalid/${id}`,
+  return {id,kind,provider:'pexels',title:`car factory ${id}`,description:'car',pageUrl:`https://www.pexels.com/${id}/`,downloadUrl:`https://fixture.invalid/${id}`,
     localPath:`/fixtures/${id}.${kind==='image'?'png':'mp4'}`,author:'fixture',attribution:'fixture',license:'Pexels',licenseUrl:'https://www.pexels.com/license/',
     rights:'licensed',query:'car',retrievedAt:'now',width:1600,height:900,durationSeconds:30,match:'unverified',concerns:[]};
 }

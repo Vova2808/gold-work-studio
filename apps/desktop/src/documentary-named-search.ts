@@ -27,7 +27,8 @@ function primarySubjectMetadata(candidate:DocumentaryCandidate):string {
     // ..."), but never promote a credited book's title to the depicted object.
     .replace(/\b(?:drawn|painted|created|produced|photographed|illustrated)\s+by\b.*$/iu,''))
     .join(' ');
-  return `${candidate.title} ${stripCredits(captions)} ${stripCredits(subject)}`;
+  const caption=documentaryShortMetadata({...candidate,description:`${stripCredits(captions)} ${stripCredits(subject)}`});
+  return `${caption.title} ${caption.description}`;
 }
 
 // Only a cheap contradiction with an explicitly human portrait, not a
@@ -319,6 +320,8 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
   // Vehicle captions often omit the manufacturer ("Baby Blue Mustang driving").
   // A distinctive model word is a discovery clue only, never identity approval.
   const vehicleAction=requirement.scriptRequirements?.checks.some(check=>check.kind==='action'&&/\b(?:car|vehicle|automobile)\b/i.test(check.required));
+  const mixedAction=(candidate:DocumentaryCandidate)=>vehicleAction
+    ?(/\b(?:walk[ -]?around|cold start|startup|start up)\b/iu.test(candidate.title)?20:/\bvlog\b/iu.test(candidate.title)?6:0):0;
   const modelNames=vehicleAction?names.map(name=>name.trim().split(/\s+/).at(-1)!).filter(name=>/^[a-z]{6,}$/i.test(name)):[];
   const modelYear=documentaryExplicitModelYear(requirement,narration);
   const useful=candidates.filter(candidate=>{
@@ -326,7 +329,7 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
     // Explicitly synthetic/irrelevant titles do not deserve paid inspection.
     if(documentaryNamedMetadataIssue(candidate)||documentaryCandidateSubjectIssue(candidate,requirement,narration,rejectPortraitObjects))return false;
     const metadata=`${candidate.title} ${candidate.description}`;
-    const caption=documentaryShortMetadata(candidate),subject=`${caption.title} ${caption.description}`;
+    const subject=primarySubjectMetadata(candidate);
     if(names.length&&![...names,...modelNames].some(name=>has(subject,name)))return false;
     const period=requirement.historicalIllustration;
     // This shortcut otherwise favours an undated building with several brand
@@ -353,10 +356,10 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
     const bystanders=personTarget&&!/\b(?:fans?|supporters|audience)\b|болельщик|фанат/iu.test(narration)
       &&/\bfan\s*club\b|\bfans?\b.*\b(?:reaction|react|members)\b|\b(?:trading card|photomontage|fotomontaje)\b|болельщик|фанат/iu.test(title)?20:0;
     const face=personTarget&&/\b(?:interview|intervista|entrevista)\b|интервью/iu.test(title)?2:0;
-    const mixedAction=vehicleAction?(/\b(?:walk[ -]?around|cold start|startup|start up)\b/iu.test(title)?20:/\bvlog\b/iu.test(title)?6:0):0;
-    return actionScore(title)*8+titleMatches*6+date+detail+short+face-bystanders-mixedAction;
+    return actionScore(title)*8+titleMatches*6+date+detail+short+face-bystanders-mixedAction(candidate);
   };
   const target={subject:primary?.name??identities[0]?.name,visualTarget:requirement.aiSearchPlan?.visualTarget??requirement.detail,
     queries:requirement.queries};
-  return useful.sort((a,b)=>documentaryMetadataRelevance(b,target)-documentaryMetadataRelevance(a,target)||score(b)-score(a)).slice(0,3);
+  return useful.sort((a,b)=>mixedAction(a)-mixedAction(b)
+    ||documentaryMetadataRelevance(b,target)-documentaryMetadataRelevance(a,target)||score(b)-score(a)).slice(0,3);
 }
