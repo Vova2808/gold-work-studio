@@ -130,6 +130,35 @@ for(const automatic of [true,false])test(`known empty has an actionable single r
   const entries=await readDocumentaryRequestJournal(f.directory);assert.ok(entries.some(row=>row.receipt?.rejection==='empty-response'));
 });
 
+for(const changedModel of [false,true])test(`a persisted empty authorization resumes the larger one-shot review without caller scope (changedModel=${changedModel})`,async t=>{
+  const f=await fixture(t);f.project.settings.assembly.documentary!.retryEmptyVisualResponse=false;
+  let model='first';const calls:Array<{model:string;maxTokens:number;singleAttempt:boolean}>=[];
+  const client:any={configured:async()=>true,documentaryAnalysisModel:async()=>model,
+    documentaryCompletion:async(_system:unknown,_input:unknown,_images:unknown,_signal:unknown,_partial:unknown,requestedModel:string,maxTokens:number,_compact:unknown,options:any)=>{
+      calls.push({model:requestedModel,maxTokens,singleAttempt:options.singleAttempt===true});
+      options.onTerminal({finishReason:'stop',terminalKind:'finish_reason',outputLimit:maxTokens,receivedCharacters:0});
+      throw new AnyModelOutputFormatError('Empty terminal response',true,'');
+    }};
+  await assert.rejects(new DocumentaryIntelligence(client,()=>f.root).inspectForSelection(f.project,f.scene));
+  const items=await listDocumentaryRecovery(f.root),origin=items[0]!.id;
+  await new DocumentaryRetryPermissions().authorize(f.root,items);
+  const permission=join(f.directory,origin+'.retry-authorization.json'),before=await readFile(permission,'utf8');
+  // Simulate process loss after durable authorization and before dispatch.
+  // The restarted service's ordinary prepared-source path supplies no scope.
+  if(changedModel)model='second';
+  f.project.settings.assembly.documentary!.retryEmptyVisualResponse=true;
+  const resumed=new DocumentaryIntelligence(client,()=>f.root);
+  await assert.rejects(resumed.inspectForSelection(f.project,f.scene,undefined,undefined,true));
+  assert.equal(calls.length,1);assert.equal(await readFile(permission,'utf8'),before);
+  await assert.rejects(resumed.inspectForSelection(f.project,f.scene),error=>error instanceof DocumentaryAnalysisError&&error.kind==='empty');
+  assert.deepEqual(calls,[{model:'first',maxTokens:1200,singleAttempt:false},{model,maxTokens:5600,singleAttempt:true}]);
+  const entries=await readDocumentaryRequestJournal(f.directory);
+  assert.equal(entries.filter(row=>row.receipt?.singleReviewBinding?.groundedRetryOrigin===origin).length,1);
+  model='third';
+  await assert.rejects(new DocumentaryIntelligence(client,()=>f.root).inspectForSelection(f.project,f.scene));
+  assert.equal(calls.length,2,'A restarted caller or another model cannot spend the same empty authorization again');
+});
+
 test('a known-empty grant can follow the configured model but its one retry remains spent across models',async t=>{
   const f=await fixture(t),id='b'.repeat(64),binding={checksum:f.checksum,start:0,end:0,taskKey:'c'.repeat(64),quality:{version:1,target:'A bird',narration:f.scene.narration,sceneId:f.scene.id}};
   await writeFile(join(f.directory,id+'.json'),JSON.stringify({state:'rejected',rejection:'empty-response',purpose:'visual-illustration',model:'old-model',

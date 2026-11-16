@@ -16,7 +16,7 @@ import {documentaryActiveListItem,documentaryContextApproval,documentaryIllustra
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
 import {documentaryContradictoryModelYear,documentaryExplicitModelYear} from './documentary-model-year.js';
 import {documentaryCheckpointKey,documentaryVisualVerdictKey} from './documentary-checkpoint-key.js';
-import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched,documentaryAdmissionNotDispatched,DocumentaryRetryPermissions,listDocumentaryRecovery,readDocumentarySelectionRetryGrant} from './documentary-retry.js';
+import {checkDocumentarySelectionRetry,documentarySelectionRetry,documentarySelectionRetryWasDispatched,documentaryAdmissionNotDispatched,DocumentaryRetryPermissions,listDocumentaryRecovery,readDocumentarySelectionRetryGrant,readDocumentarySelectionRetryEvidence} from './documentary-retry.js';
 import {documentaryKnownEmptyReceipt,readDocumentaryRequestJournal} from './documentary-request-journal.js';
 import {receivedDocumentaryPlanPayload} from './documentary-plan-json.js';
 import {parseDocumentaryJson,documentaryJsonFormatIssue} from './documentary-json.js';
@@ -689,6 +689,21 @@ export class DocumentaryIntelligence {
   private async complete(projectId: string, purpose: string, system: string, input: string, images: string[] = [], previousRequests: Array<{ system: string; input: string }> = [], overviewSamplingVersion?: 1 | 2, options:CompletionOptions={}): Promise<Record<string, unknown>> {
     options.signal?.throwIfAborted();
     const retryScope=documentarySelectionRetry.getStore();
+    if(purpose==='visual-illustration'&&!retryScope){
+      const request=JSON.parse(input);
+      if(request.singleReview){
+        // Authorization survives a restart independently of the caller's
+        // in-memory scope. Re-enter the ordinary retry gates so a prepared
+        // original gets the same larger, single-attempt review and durable
+        // origin as an inline empty retry, including after a model change.
+        const evidence=await readDocumentarySelectionRetryEvidence(this.rootFor(projectId),String(request.analysisModel??''));
+        const grant=evidence.grants.find(grant=>grant.priorState==='empty'&&grant.visualQuestion!==undefined
+          &&grant.binding.checksum===request.checksum&&grant.binding.start===request.startSeconds&&grant.binding.end===request.endSeconds
+          &&grant.visualQuestion.target===request.visualTarget&&grant.visualQuestion.narration===request.narration);
+        if(grant)return documentarySelectionRetry.run({grant,probe:false},()=>
+          this.complete(projectId,purpose,system,input,images,previousRequests,overviewSamplingVersion,options));
+      }
+    }
     const cached=retryScope&&'cached' in retryScope;
     const probe=retryScope&&'grant' in retryScope&&retryScope.probe
       ?['retry-probe',retryScope.grant.id,retryScope.grant.revision,retryScope.grant.approvedAt]:[];
