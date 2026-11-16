@@ -53,7 +53,9 @@ test("local Stock import owns originals and metadata; review gates export and re
   await assert.rejects(service.importMaterial(project.id, sceneId, { path: image, pageUrl: "", title: "Replacement", author: "", license: "", licenseUrl: "" }), /остановите/);
 });
 
-test('query repair and bounded supplement share the original attempt budget',async()=>{
+test('query repair and bounded supplement share the original attempt budget',async t=>{
+  const budgetRoot=await mkdtemp(join(tmpdir(),'gws-supplement-budget-'));
+  t.after(()=>rm(budgetRoot,{recursive:true,force:true}));
   const scene=(id:string,order:number,verified=false):Scene=>({id,order,title:id,imagePrompt:'',animationPrompt:'',
     durationSeconds:5,status:'ready',narration:`Motorcycle ${id}`,
     includeInAssembly:true,documentary:{verified,pinned:false,requirement:{text:`Motorcycle ${id}`,
@@ -65,8 +67,8 @@ test('query repair and bounded supplement share the original attempt budget',asy
   }};
   const calls:Array<{ids?:string[];session:unknown}>=[];
   const intelligence={refineQueries:async()=>new Map([['changed',['motorcycle racing track']]])};
-  const storage={ensureProject:async(saved:Project)=>{assert.equal(saved.id,project.id);return project.id;}};
-  const service=new DocumentaryProjectService(projects as never,storage as LocalProjectStorage,
+  const storage={projectDirectory:()=>budgetRoot,ensureProject:async(saved:Project)=>{assert.equal(saved.id,project.id);return project.id;}};
+  const service=new DocumentaryProjectService(projects as never,storage as unknown as LocalProjectStorage,
     {} as DocumentarySearch,'',{} as never,()=>{},intelligence as never);
   (service as unknown as {selectAll:(id:string,options:{sceneIds?:string[]},videoOnly:boolean,attempts:unknown,session:unknown)=>Promise<AutoStockSelectionResult>})
     .selectAll=async(_id,options,_videoOnly,_attempts,session)=>{

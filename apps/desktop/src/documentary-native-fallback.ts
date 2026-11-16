@@ -1,5 +1,5 @@
 import type {Project,Scene,DocumentaryMotionGraphic} from '@gold-work/shared';
-import {documentaryThematicReserveIssue} from '@gold-work/shared';
+import {documentaryThematicReserveIssue,documentaryNativeCardReady} from '@gold-work/shared';
 import {documentarySceneSeconds} from './documentary-sequences.js';
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
@@ -63,9 +63,8 @@ function graphicFor(scene:Scene):DocumentaryMotionGraphic {
 /** Full narration card using the existing animated editorial composition. */
 export function applyDocumentaryNativeFallback(project:Project,scene:Scene):Scene {
   const doc=scene.documentary,g=doc?.motionGraphic,text=scene.narration.trim();
-  if(documentaryThematicReserveIssue(doc?.requirement.aiSearchPlan))return scene;
   if(project.mediaMode!=='stock'||project.settings.assembly.documentary?.version!==2||scene.includeInAssembly===false
-    ||!doc||doc.verified||doc.pinned||!text||text.replace(/\s+/gu,' ').length>320||!doc.autoError
+    ||!doc||doc.verified||doc.pinned||!text||!doc.autoError
     ||doc.cuts?.length||doc.texts?.length||doc.caption.enabled||doc.layout==='compare'||doc.comparison
     ||doc.templateOrigin==='manual'||(doc.effects??[]).some(e=>e.enabled&&e.kind!=='audio'&&e.boundary?.origin!=='automatic')||g&&g.origin!=='automatic')return scene;
   const graphic=graphicFor(scene);
@@ -83,15 +82,9 @@ export function applyDocumentaryNativeFallback(project:Project,scene:Scene):Scen
 
 export function documentaryNativeFallbackReady(project:Project,scene:Scene):boolean {
   const doc=scene.documentary,fallback=doc?.nativeFallback;
-  if(documentaryThematicReserveIssue(doc?.requirement.aiSearchPlan))return false;
-  if(project.mediaMode!=='stock'||project.settings.assembly.documentary?.version!==2||!doc?.verified||!fallback
-    ||fallback.version!==1||fallback.narration!==scene.narration||!fallback.reason.trim()
-    ||doc.selected||scene.imagePath||scene.videoPath||doc.visualReview||doc.checksum||doc.pinned)return false;
+  if(project.mediaMode!=='stock'||project.settings.assembly.documentary?.version!==2||!documentaryNativeCardReady(scene)||!fallback)return false;
   if(fallback.automaticRecovery&&(project.settings.assembly.documentary.autoMotionGraphics!==true
     ||project.settings.assembly.documentary.excludedTemplates?.includes('full')
     ||fallback.automaticRecovery.binding!==documentaryThematicRecoveryBinding(project,scene)))return false;
-  const expected=graphicFor(scene),actual=doc.motionGraphic;
-  return Boolean(expected.title&&expected.title.length<=320&&actual?.enabled&&actual.kind===expected.kind
-    &&actual.title===expected.title&&actual.quoteMode==='speech'&&actual.origin==='automatic'
-    &&actual.startSeconds===0&&Math.abs(actual.durationSeconds-expected.durationSeconds)<1/30);
+  return true;
 }

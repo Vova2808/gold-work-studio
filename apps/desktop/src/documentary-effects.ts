@@ -15,12 +15,13 @@ export function documentaryEffectSummary(project:Project,assets:readonly EffectA
   const included=project.scenes.filter(scene=>scene.includeInAssembly!==false);
   const effects=included.flatMap(scene=>scene.documentary?.effects.filter(e=>e.enabled&&e.origin==='automatic')??[]);
   const sounds=effects.filter(e=>e.kind==='audio').length,visuals=effects.length-sounds;
+  const transitions=effects.filter(e=>e.kind!=='audio'&&e.role==='transition').length;
   const available=assets.filter(asset=>asset.state==='ready'&&asset.automatic&&asset.review==='approved'&&asset.rights==='user-confirmed'&&!asset.deletedAt);
   const settings=project.settings.assembly.documentary;
   const enabled=settings?.autoEffects!==false||(settings?.autoTransitions??settings?.autoEffects)!==false;
   const emptyLibrary=enabled&&available.length===0;
-  return {sounds,visuals,available:available.length,emptyLibrary,
-    message:`Автоэффекты: звуков ${sounds}, визуальных ${visuals}.`+(emptyLibrary?' Библиотека автоматических эффектов пуста: добавьте и одобрите эффекты.'
+  return {sounds,visuals,transitions,available:available.length,emptyLibrary,
+    message:`Из библиотеки добавлено: звуков ${sounds}, переходов ${transitions}, других визуальных эффектов ${visuals-transitions}.`+(emptyLibrary?' Библиотека автоматических эффектов пуста: добавьте и одобрите эффекты.'
       :enabled&&effects.length===0?' Для текущих смысловых событий подходящие эффекты не добавлены.':'')};
 }
 

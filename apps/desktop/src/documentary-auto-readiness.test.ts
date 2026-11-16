@@ -162,7 +162,8 @@ test('the actual terminal shape counts 35 approved and all 28 unfinished, retain
   assert.equal(scenes.filter(documentaryAutomaticMaterialReady).length,35);
   assert.equal(scenes.filter(scene=>documentaryMaterialUsable(scene)).length,54);
   assert.deepEqual(scenes.filter(scene=>documentaryManualReviewReady(scene)).map(scene=>scene.order+1),pendingNumbers);
-  assert.deepEqual(missingAssemblyInputs({...project,scenes:scenes.filter(scene=>documentaryManualReviewReady(scene))}),[],'Manual editing/export semantics stay unchanged');
+  assert.equal(missingAssemblyInputs({...project,scenes:scenes.filter(scene=>documentaryManualReviewReady(scene))}).length,pendingNumbers.length,
+    'Editable but unapproved sources use the same needs-choice gate in editor and export');
   let montage=0;
   await assert.rejects(prepareDocumentaryProduction(project.id,{projects:{get:async()=>project,update:async()=>project},signal:new AbortController().signal,startNarration:async()=>async()=>{},
     documentary:{planSearch:async()=>project,

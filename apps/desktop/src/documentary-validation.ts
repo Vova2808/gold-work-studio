@@ -8,6 +8,8 @@ import {isDeepStrictEqual} from 'node:util';
 import {documentaryVisualSourceIssue} from './documentary-source-eligibility.js';
 import {documentarySavedQualityIssue} from './documentary-source-quality.js';
 import {savedRouteComparisonIssue} from './documentary-route-comparison.js';
+import {documentaryRetainedApproval} from '@gold-work/shared';
+import {documentaryNativeFallbackReady} from './documentary-native-fallback.js';
 
 /** Fail visibly before rendering invalid edits; never silently drop an effect or a comparison. */
 export function documentaryEditErrors(project: Project): string[] {
@@ -23,7 +25,7 @@ export function documentaryEditErrors(project: Project): string[] {
     const doc = scene.documentary;
     const issue = (text: string) => errors.push(`сцена ${scene.order + 1}: ${text}`);
     if (!doc) { issue("нет плана Stock"); continue; }
-    const qualityIssue=documentarySavedQualityIssue(project,scene);
+    const qualityIssue=documentaryRetainedApproval(scene,project)?undefined:documentarySavedQualityIssue(project,scene);
     if(qualityIssue)issue(qualityIssue);
     const sourceIssue=documentaryVisualSourceIssue(scene,project.scenes);
     if(sourceIssue)issue(sourceIssue);
@@ -102,7 +104,7 @@ export function documentaryEditErrors(project: Project): string[] {
       if(graphic.kind==='statistic'&&!/\d/.test(graphic.value??'')&&!groundedDocumentaryMotion({kind:'statistic',value:graphic.value},graphic.value??'',graphic.value??'')) issue('укажите число для счётчика');
       if(graphic.kind==='feature-list'&&!(graphic.items?.length&&graphic.items.length>=2)) issue('добавьте хотя бы два пункта списка');
       if(graphic.kind==='subject-card'&&!graphic.title.trim())issue('укажите имя героя или название объекта');
-      if(graphic.kind==='quote'&&(!graphic.title.trim()||graphic.title.length>320||graphic.highlight&&!graphic.title.toLocaleLowerCase().includes(graphic.highlight.toLocaleLowerCase())))issue('цитата должна содержать выделяемую фразу и быть не длиннее 320 символов');
+      if(graphic.kind==='quote'&&(!graphic.title.trim()||graphic.title.length>320&&!documentaryNativeFallbackReady(project,scene)||graphic.highlight&&!graphic.title.toLocaleLowerCase().includes(graphic.highlight.toLocaleLowerCase())))issue('цитата должна содержать выделяемую фразу и быть не длиннее 320 символов');
       if(graphic.kind==='bar-chart'){
         const cards=graphic.cards??[];
         if(cards.length<2||cards.length>5||cards.some(c=>!c.label.trim()||!/^\d+(?:[.,]\d+)?\s*[^\d]*$/u.test(c.value??'')))issue('диаграмме нужны 2–5 подписанных числовых значений');

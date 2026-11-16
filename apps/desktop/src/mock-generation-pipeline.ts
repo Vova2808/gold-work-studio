@@ -838,6 +838,34 @@ export class MockGenerationPipeline {
     });
   }
 
+  async resolveUncertainSubmission(taskId:string,decision:'retry'|'abandon'):Promise<QueueTask> {
+    await this.initialize();
+    if(decision!=='retry'&&decision!=='abandon')throw new Error('Выберите решение по неизвестному заказу.');
+    return this.mutate(async()=>{
+      const task=this.tasks.find(item=>item.id===taskId);
+      if(!task)throw new Error('Задача не найдена');
+      this.assertNotStopping(task.projectId);
+      if(this.executing.has(taskId)||!['failed','cancelled','blocked'].includes(task.status))
+        throw new Error('Сначала дождитесь остановки задачи и сохранения ответа провайдера.');
+      if(hasPaidReceipt(task))throw new Error('ID заказа известен. Используйте «Продолжить заказ», чтобы получить оплаченный результат.');
+      if(!task.pendingSubmission&&!task.retryBlockedReason)throw new Error('У задачи нет неизвестной отправки.');
+      const original=structuredClone(task);
+      task.submissionResolutions=[...(task.submissionResolutions??[]),{decision,resolvedAt:new Date().toISOString(),
+        pendingSubmission:task.pendingSubmission,reason:task.retryBlockedReason}];
+      task.pendingSubmission=undefined;
+      task.retryBlockedReason=undefined;
+      task.submissionTrackingVersion=2;
+      task.status=decision==='retry'?'failed':'cancelled';
+      task.error=decision==='retry'?'Пользователь подтвердил отсутствие заказа. Разрешён ручной повтор.':'Пользователь отказался от неизвестного заказа.';
+      task.updatedAt=new Date().toISOString();
+      try{await this.persist();}catch(error){
+        for(const key of Object.keys(task))if(!(key in original))delete (task as unknown as Record<string,unknown>)[key];
+        Object.assign(task,original);throw error;
+      }
+      return structuredClone(task);
+    });
+  }
+
   async retry(taskId: string): Promise<QueueTask> {
     await this.initialize();
     return this.mutate(async () => {

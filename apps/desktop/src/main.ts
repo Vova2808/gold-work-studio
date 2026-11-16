@@ -316,8 +316,12 @@ function registerIpc(): void {
   handleIpc('music:pixabay',(_event,query:string)=>choosePixabayMusic(join(workspacePath,'Materials','Music'),typeof query==='string'?query:''));
   handleIpc('documentary:probe',()=>anyModelClient.probeDocumentaryConnection());
   handleIpc('documentary:recovery',async(_event,projectId:string)=>{
-    if(!await projectService.get(projectId,{omitCandidates:true}))throw Error('Проект не найден');
-    return listDocumentaryRecovery(projectStorage.projectDirectory(projectId));
+    const project=await projectService.get(projectId,{omitCandidates:true});
+    if(!project)throw Error('Проект не найден');
+    return (await listDocumentaryRecovery(projectStorage.projectDirectory(projectId))).map(item=>{
+      const scene=project.scenes.find(scene=>item.sceneId?scene.id===item.sceneId:Boolean(item.narration)&&scene.narration===item.narration);
+      return {...item,sceneId:scene?.id??item.sceneId,sceneNumber:scene?scene.order+1:undefined};
+    });
   });
   handleIpc('documentary:retry-analysis',async(_event,projectId:string,requests:DocumentaryRecoveryItem[])=>{
     if(!await projectService.get(projectId,{omitCandidates:true}))throw Error('Проект не найден');
@@ -593,6 +597,8 @@ function registerIpc(): void {
     await documentaryService.stop(projectId);
     return mutateQueue(() => pipeline.stop(projectId));
   });
+  handleIpc('queue:resolve-submission',(_event,taskId:string,decision:'retry'|'abandon')=>
+    mutateQueue(()=>pipeline.resolveUncertainSubmission(taskId,decision)));
   handleIpc("queue:retry", async (_event, taskId: string) => {
     const task = (await pipeline.list()).find(candidate => candidate.id === taskId);
     if (task?.kind === 'assemble' && !task.prepareOnly) {

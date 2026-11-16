@@ -1,5 +1,6 @@
 import type { Project } from './index.js';
 import { documentaryMaterialUsable } from './documentary.js';
+import {documentarySceneReady} from './documentary-readiness.js';
 
 /** Input readiness is independent of an exported Final and of queue progress. */
 export function projectEditorReady(project: Project): boolean {
@@ -12,7 +13,7 @@ export function projectEditorReady(project: Project): boolean {
     const visual = documentary
       ? Boolean(doc?.selected ? doc.selected.kind === 'video' ? scene.videoPath : scene.imagePath : nativeGraphic)
       : Boolean(scene.imagePath || scene.videoPath);
-    return visual && (!documentary || documentaryMaterialUsable(scene))
+    return visual && (!documentary || documentarySceneReady(scene,undefined,project))
       && (!project.settings.voice.enabled || !scene.narration.trim() || Boolean(scene.audioPath));
   });
 }

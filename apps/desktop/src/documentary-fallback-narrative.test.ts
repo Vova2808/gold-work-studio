@@ -110,8 +110,10 @@ test('both full03 reserve stages get original referents and send only the new gr
   assert.match(system,/Use a common related action when the action is itself the point/);
   assert.match(system,/If the core relation cannot survive available real footage, return an empty reserve/);
   assert.doesNotMatch(system,/No (?:person|named person).*\bplace\b/);
-  return JSON.stringify({scenes:cases.map((row,index)=>{
-   const request=input.requestedScenes[index], [fallbackVisualTarget,fallbackVideoQueries]=anchors[index]!;
+  assert.ok(input.requestedScenes.length<=4,'Reserve planning keeps the same bounded batch size as primary planning');
+  return JSON.stringify({scenes:input.requestedScenes.map((request:{sceneId:string;narration:string;originalSearchPlan:any})=>{
+   const index=cases.findIndex(row=>request.sceneId===`scene-${row.scene}`),row=cases[index]!;
+   assert.ok(row);const [fallbackVisualTarget,fallbackVideoQueries]=anchors[index]!;
    assert.equal(request.sceneId,`scene-${row.scene}`);assert.equal(request.narration,row.narration);
    assert.equal(request.originalSearchPlan.subject,row.subject);assert.equal(request.originalSearchPlan.visualTarget,row.primary);
    assert.equal(request.originalSearchPlan.fallbackVisualTarget,row.target);
@@ -128,7 +130,7 @@ test('both full03 reserve stages get original referents and send only the new gr
      assert.ok(!discovery!.queries.includes(cases[index]!.target));
    }
  }
- assert.equal(calls,2,'one batch per reserve stage; no primary submission');
+ assert.equal(calls,4,'two bounded batches per reserve stage; no primary submission');
 });
 
 test('explicit thematic mode is passed faithfully; action illustrations and grounded generic footage are not blanket-rejected',async()=>{

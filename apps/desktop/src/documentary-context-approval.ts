@@ -20,6 +20,7 @@ import {documentarySavedIllustrationQualityIssue} from './documentary-illustrati
 import {documentaryKnownOriginalGeometryIssue} from './documentary-source-quality.js';
 import {documentaryThematicRecoveryBinding,documentaryThematicDiscoveryRequirement} from './documentary-automatic-thematic-recovery.js';
 import {documentaryGeographicReserveIssue} from './documentary-thematic-location.js';
+import {documentaryRetainedApproval} from '@gold-work/shared';
 import {documentaryFallbackNarrativeIssue} from './documentary-fallback-narrative.js';
 
 type Review=NonNullable<DocumentaryScene['visualReview']>;
@@ -129,6 +130,9 @@ function sceneForSavedThematicFootage(project:Project,scene:Scene,doc:Documentar
 export function documentarySavedContextIssue(project:Project,saved:Scene):string|undefined {
   const savedDoc=saved.documentary;
   if(!savedDoc?.verified||savedDoc.pinned)return;
+  if(documentaryRetainedApproval(saved,project))return;
+  if(savedDoc.nativeFallback&&!savedDoc.selected&&!savedDoc.nativeFallback.automaticRecovery)
+    return documentaryNativeFallbackReady(project,saved)?undefined:'Графическая сцена больше не соответствует текущей реплике или длительности озвучки.';
   const scene=sceneForSavedThematicFootage(project,saved,savedDoc),doc=scene.documentary!;
   const reserveIssue=documentaryThematicReserveIssue(doc.requirement.aiSearchPlan);
   if(reserveIssue&&(doc.requirement.footageFallback||doc.nativeFallback?.automaticRecovery))return reserveIssue;

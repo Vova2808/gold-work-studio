@@ -1,4 +1,4 @@
-import {documentaryMaterialUsable,type Scene} from '@gold-work/shared';
+import {documentarySceneReady,type Scene} from '@gold-work/shared';
 import {stat} from 'node:fs/promises';
 
 export const documentaryMissingSelectedMaterialMessage='Локальный файл выбранного материала отсутствует или пуст.';
@@ -7,7 +7,7 @@ export const documentaryMissingSelectedMaterialMessage='Локальный фа�
  * requires approval. Verified native scenes need no selected footage. This
  * deliberately matches the existing strict automatic-export guard. */
 export function documentaryAutomaticMaterialReady(scene:Scene):boolean {
-  return Boolean(scene.documentary?.verified&&documentaryMaterialUsable(scene));
+  return documentarySceneReady(scene);
 }
 
 export async function documentarySelectedMaterialMissing(scene:Scene):Promise<boolean> {

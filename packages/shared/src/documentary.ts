@@ -1,5 +1,6 @@
 import type { EffectBlend, EffectDefaults } from "./effect-library.js";
 import type { Project } from "./index.js";
+import {documentaryRetainedApproval} from './documentary-acceptance.js';
 import type { DocumentaryMontageSettings, DocumentarySemanticMontage } from './documentary-montage.js';
 export * from './documentary-montage.js';
 export * from "./documentary-transitions.js";
@@ -103,6 +104,10 @@ export function documentaryVideoOriginIssue(origin:DocumentaryFootageOrigin):str
 }
 
 export function documentaryMaterialUsable(scene: Project['scenes'][number], fileAvailable?: (path:string)=>boolean): boolean {
+  if(documentaryRetainedApproval(scene)){
+    const path=scene.documentary?.selected?.kind==='video'?scene.videoPath:scene.imagePath;
+    return Boolean(path&&(!fileAvailable||fileAvailable(path)));
+  }
   const doc=scene.documentary;
   if(doc?.verified&&!doc.pinned&&doc.selected?.kind==='video'&&doc.visualReview?.illustrationApproval)
     return doc.visualReview.status==='accepted'&&!documentaryVideoOriginIssue(documentaryFootageOrigin(doc.visualReview));
@@ -363,7 +368,7 @@ export interface DocumentaryTextClip {
 }
 export interface DocumentaryScene {
   version: 2;
-  acceptedUnderPreviousRules?: {version:1;fingerprint:string;reason:string};
+  acceptedUnderPreviousRules?: {version:1;fingerprint:string;context:string;reviewCheckedAt:string;reason:string};
   /** Cached semantic direction, tied to the narration/source fingerprint. */
   semanticMontage?: DocumentarySemanticMontage['scenes'][number];
   /** Automatic cuts are replaceable; unmarked legacy cuts remain authored. */

@@ -2,6 +2,8 @@ export * from "./effect-library.js";
 export * from "./music.js";
 import type { MusicSettings } from "./music.js";
 export * from "./documentary.js";
+export * from "./documentary-acceptance.js";
+export * from "./documentary-readiness.js";
 import type { EffectLibraryApi } from "./effect-library.js";
 import type { DocumentaryApi, DocumentaryScene, DocumentarySettings, DocumentarySourceProvider } from "./documentary.js";
 import { documentarySceneTransition } from "./documentary-transitions.js";
@@ -1187,6 +1189,8 @@ export interface QueueTask {
   error?: string;
   /** Повтор может создать платный дубликат уже отправленного удалённого задания. */
   retryBlockedReason?: string;
+  /** Explicit user reconciliation; original unknown submission remains auditable. */
+  submissionResolutions?: Array<{decision:'retry'|'abandon';resolvedAt:string;pendingSubmission?:QueueTask['pendingSubmission'];reason?:string}>;
   resultPath?: string;
   /** Persisted degraded result, never presented as successful AI animation. */
   resultFallback?: "static-image";
@@ -1253,7 +1257,7 @@ export interface QueuePolicy {
 export * from "./channel-analytics.js";
 import type { SaveTrackedChannelInput, TrackedYouTubeChannel } from "./channel-analytics.js";
 
-export interface DocumentaryRecoveryItem {id:string;revision:string;purpose:string;state:string;characters:number;createdAt:string}
+export interface DocumentaryRecoveryItem {id:string;revision:string;purpose:string;state:string;characters:number;createdAt:string;sceneId?:string;sceneNumber?:number;narration?:string;knownEmpty?:boolean}
 export interface AppUpdateState {
   status: "unsupported" | "idle" | "checking" | "up-to-date" | "downloading" | "downloaded" | "installing" | "error";
   currentVersion: string;
@@ -1373,6 +1377,7 @@ export interface DesktopApi extends EffectLibraryApi, DocumentaryApi {
   resumeGeneration(projectId: string): Promise<QueueTask[]>;
   stopGeneration(projectId: string): Promise<QueueTask[]>;
   retryTask(taskId: string): Promise<QueueTask>;
+  resolveUncertainSubmission(taskId:string,decision:'retry'|'abandon'):Promise<QueueTask>;
   clearFinishedTasks(): Promise<QueueTask[]>;
   /** Останавливает текущую работу и очищает только записи очереди, не затрагивая проекты и их файлы. */
   clearQueue(): Promise<QueueTask[]>;

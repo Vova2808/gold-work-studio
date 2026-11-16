@@ -873,6 +873,9 @@ export const fallbackApi: DesktopApi = {
     requireProject(projectId).status = "failed";
     return clone(tasks.filter((task) => task.projectId === projectId));
   },
+  async resolveUncertainSubmission() {
+    throw new Error('Решение по заказу доступно в установленном приложении с сохранённой очередью.');
+  },
   async retryTask(taskId) {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task) throw new Error("Задача не найдена");

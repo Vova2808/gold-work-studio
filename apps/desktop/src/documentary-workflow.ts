@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import type { ProjectService } from '@gold-work/core';
-import { documentaryMaterialUsable, projectEditorReady, type Project, type QueueTask, type StockProductionRun } from '@gold-work/shared';
+import { documentarySceneReady, projectEditorReady, type Project, type QueueTask, type StockProductionRun } from '@gold-work/shared';
 import { hasPreparedDocumentaryNarration, usesContinuousDocumentaryNarration } from './documentary-narration.js';
 import { DocumentarySelectionIncompleteError } from './documentary-production.js';
 
@@ -34,7 +34,7 @@ export async function startDocumentaryWorkflowExport(projectId: string, projects
 export function assertDocumentaryAutoExport(project: Project): void {
   const scenes = project.scenes.filter(scene => scene.includeInAssembly !== false);
   if (!scenes.length) throw new Error('В проекте нет включённых сцен для экспорта.');
-  const unverified = scenes.filter(scene => !scene.documentary?.verified || !documentaryMaterialUsable(scene));
+  const unverified = scenes.filter(scene => !documentarySceneReady(scene,undefined,project));
   if (unverified.length) throw new Error(`Автоматический экспорт остановлен: проверьте материалы сцен ${unverified.slice(0, 12).map(scene => `№${scene.order + 1}`).join(', ')}. Готовые кадры и озвучка сохранены; откройте «Видео и фото».`);
 }
 

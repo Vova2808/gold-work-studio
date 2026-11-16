@@ -278,7 +278,7 @@ test('cheap candidate ordering ignores period-only matches before spending a fra
   assert.deepEqual(ranked.map(item=>item.id),['ship','unknown']);
 });
 
-test('production treats a mixed video percentage as a search target while 100 percent remains strict',async()=>{
+test('production treats video percentage as a target unless strict quota is explicitly selected',async()=>{
   const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
   const project=await projects.create({title:'Harbour',topic:'Harbour',mode:'standard',mediaMode:'stock',language:'English',aspectRatio:'16:9'});
   project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:'The harbour is quiet.'};
@@ -296,39 +296,42 @@ test('production treats a mixed video percentage as a search target while 100 pe
   const options={projects:{get:async()=>project,update:projects.update.bind(projects)},documentary,signal:new AbortController().signal,startNarration:async()=>async()=>{}};
   const result=await prepareDocumentaryProduction(project.id,options);
   assert.equal(result.project.settings.stockVideoPercent,60);
-  assert.equal(completions,1);assert.equal(montages,1);assert.deepEqual(project.scenes,before);
+  assert.equal(completions,0);assert.equal(montages,1);assert.deepEqual(project.scenes,before);
   assert.equal(project.settings.stockVideoPercent,60);
   scene.documentary!.verified=false;
   await assert.rejects(prepareDocumentaryProduction(project.id,options),/Не найдены подходящие материалы/);
-  assert.equal(completions,1);assert.equal(montages,1,'An unready scene must stop before quota completion and montage');
+  assert.equal(completions,0);assert.equal(montages,1,'An unready scene must stop before quota completion and montage');
   scene.documentary!.verified=true;
+  project.settings.assembly.documentary!.videoQuotaPolicy='strict';
   project.settings.stockVideoPercent=100;
   await assert.rejects(prepareDocumentaryProduction(project.id,options),error=>error instanceof DocumentarySelectionIncompleteError
     &&error.recoverable&&/0.0%.*100%/.test(error.message));
-  assert.equal(completions,2);assert.equal(montages,1);
+  assert.equal(completions,1);assert.equal(montages,1);
   // The user's explicit video-only mode does not depend on the analysis adapter.
   documentary.automaticVideoQuotaRequired=false;
   await assert.rejects(prepareDocumentaryProduction(project.id,options),/0.0%.*100%/);
-  assert.equal(completions,2);assert.equal(montages,1);
+  assert.equal(completions,1);assert.equal(montages,1);
   project.settings.stockVideoPercent=0;
   await prepareDocumentaryProduction(project.id,options);assert.equal(montages,2);
-  documentary.automaticVideoQuotaRequired=true;project.settings.stockVideoPercent=60;
+  documentary.automaticVideoQuotaRequired=true;project.settings.stockVideoPercent=0;
   documentary.prepareMontage=async()=>{montages++;return {...project,settings:{...project.settings,stockVideoPercent:100}};};
   await assert.rejects(prepareDocumentaryProduction(project.id,options),DocumentarySelectionIncompleteError);
   assert.equal(montages,3,'Quota must be checked against the returned montage snapshot as well');
   assert.deepEqual(project.scenes,before);
 });
-test('settled route preparation runs before readiness but cannot bypass explicit video-only mode',async()=>{
+test('settled route preparation runs before readiness but cannot bypass explicit strict video quota',async()=>{
   const projects=new ProjectService(new MemoryProjectRepository(),new MockDirectorProvider());
   let project=await projects.create({title:'Routes',topic:'Routes',mediaMode:'stock',mode:'standard',language:'English',aspectRatio:'16:9'});
   project.videoBrief={...project.videoBrief!,creationMode:'script',readyScript:'The ships followed alternative routes.'};
   project.scenes=prepareDocumentaryScript(project,createVoiceCalibration({provider:'elevenlabs',voice:'fixture',language:'en',sampleText:'A measured voice reads the sentence.',audioDurationSeconds:4})).slice(0,1);
   project.settings.stockVideoPercent=100;
+  project.settings.assembly.documentary!.videoQuotaPolicy='strict';
   const failure={sceneId:project.scenes[0]!.id,sceneNumber:1,category:'provider-temporary' as const,message:'source unavailable'};
   const stages:string[]=[];
   const documentary={automaticVideoQuotaRequired:true,planSearch:async()=>project,
     autoSelect:async()=>{stages.push('selection');return {project,total:1,selected:0,skipped:0,failed:1,failures:[failure]};},
-    prepareRouteComparisons:async(_id:string,failures:unknown[])=>{assert.deepEqual(failures,[failure]);stages.push('route');project.scenes[0]!.documentary!.verified=true;return project;},
+    prepareRouteComparisons:async(_id:string,failures:unknown[])=>{assert.deepEqual(failures,[failure]);stages.push('route');
+      Object.assign(project.scenes[0]!.documentary!,{verified:true,motionGraphic:{enabled:true,origin:'automatic',durationSeconds:5}});return project;},
     prepareMontage:async()=>{stages.push('montage');return project;}};
   assert.equal(project.settings.stockVideoPercent,100);
   await assert.rejects(prepareDocumentaryProduction(project.id,{projects:{get:async()=>project,update:async()=>project},documentary,signal:new AbortController().signal,startNarration:async()=>async()=>{}}),/0.0%.*100%/);

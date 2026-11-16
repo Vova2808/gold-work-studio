@@ -251,8 +251,9 @@ test("legacy in-flight Lumean requests without IDs are held; tracked pre-submit 
   const setup = await harness(t, async () => { throw new Error("No network expected"); });
   const task = (await setup.repository.list())[0];
   assert.ok(task);
-  for (const tracked of [false, true]) {
-    await setup.repository.replace([{ ...task, status: "running", submissionTrackingVersion: tracked ? 1 : undefined }]);
+  for (const version of [undefined, 1, 2] as const) {
+    const tracked=version===2;
+    await setup.repository.replace([{ ...task, status: "running", submissionTrackingVersion: version }]);
     const restored = setup.makePipeline();
     await restored.initialize();
     const recovered = (await restored.list())[0];
@@ -260,4 +261,36 @@ test("legacy in-flight Lumean requests without IDs are held; tracked pre-submit 
     assert.equal(recovered.status, tracked ? "paused" : "failed");
     assert.equal(Boolean(recovered.pendingSubmission), !tracked);
   }
+});
+
+test('explicit resolution survives restart without submitting or deleting the unknown-order audit',async t=>{
+  let posts=0;
+  const setup=await harness(t,async()=>{posts++;throw new Error('Resolution must not send a request');});
+  const original=(await setup.repository.list())[0]!;
+  for(const decision of ['retry','abandon'] as const){
+    await setup.repository.replace([{...original,status:'running',submissionTrackingVersion:undefined}]);
+    const held=setup.makePipeline();await held.initialize();
+    assert.ok((await held.list())[0]!.pendingSubmission);
+    const resolved=await held.resolveUncertainSubmission(original.id,decision);
+    assert.equal(resolved.pendingSubmission,undefined);
+    assert.equal(resolved.retryBlockedReason,undefined);
+    assert.equal(resolved.submissionResolutions?.at(-1)?.decision,decision);
+    assert.equal(resolved.submissionResolutions?.at(-1)?.pendingSubmission?.provider,'legacy-media');
+    const restarted=setup.makePipeline();await restarted.initialize();
+    const saved=(await restarted.list())[0]!;
+    assert.equal(saved.pendingSubmission,undefined);
+    assert.equal(saved.retryBlockedReason,undefined);
+    assert.equal(saved.status,decision==='retry'?'failed':'cancelled');
+    assert.deepEqual(saved.submissionResolutions,resolved.submissionResolutions);
+  }
+  assert.equal(posts,0);
+});
+
+test('resolution refuses a known paid order and does not clear its receipt',async t=>{
+  const setup=await harness(t,async()=>{throw new Error('No request expected');});
+  const original=(await setup.repository.list())[0]!;
+  await setup.repository.replace([{...original,status:'failed',lumeanOrder:{orderId:'already-paid',inputFingerprint:'same-speech'}}]);
+  const restored=setup.makePipeline();await restored.initialize();
+  await assert.rejects(restored.resolveUncertainSubmission(original.id,'retry'),/ID заказа известен/);
+  assert.equal((await restored.list())[0]!.lumeanOrder?.orderId,'already-paid');
 });

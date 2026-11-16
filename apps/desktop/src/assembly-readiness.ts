@@ -1,5 +1,5 @@
 import type { Project, QueueTask, Scene, TaskKind } from "@gold-work/shared";
-import {documentaryMaterialUsable} from '@gold-work/shared';
+import {documentarySceneReady} from '@gold-work/shared';
 import { documentaryEditErrors } from "./documentary-validation.js";
 import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {fastDocumentaryGraphicReady} from './documentary-fast-graphics.js';
@@ -23,7 +23,7 @@ export function missingAssemblyInputs(
     const standaloneReady=project.mediaMode==='stock'&&documentaryStandaloneArtworkReady(scene);
     const issue=stockDocumentary&&!standaloneReady?documentarySavedContextIssue(project,scene):undefined;
     if (stockDocumentary) {
-      if(!standaloneReady&&!documentaryMaterialUsable(scene,fileAvailable)||issue)missing.push(`сцена ${scene.order + 1}: ${issue??'подтвердите объект, эпоху и условия использования материала'}`);
+      if(!standaloneReady&&!documentarySceneReady(scene,fileAvailable,project)||issue)missing.push(`сцена ${scene.order + 1}: ${issue??'подтвердите объект, эпоху и условия использования материала'}`);
     }
     const videoEnabled = (project.settings.video.enabled && !scene.videoFallback) || scene.stockSource?.mediaType === "video";
     const imageReady = Boolean(scene.imagePath && fileAvailable(scene.imagePath));

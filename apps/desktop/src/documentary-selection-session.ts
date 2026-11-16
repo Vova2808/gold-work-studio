@@ -176,5 +176,9 @@ export class DocumentarySelectionSession {
     const budget=this.budget(sceneId,kind),elapsed=Math.max(0,ms);
     budget.searchMs+=elapsed;budget.started+=elapsed;
   }
-  async drain(){await Promise.allSettled(this.searches.values());}
+  async drain(){
+    await Promise.allSettled(this.searches.values());
+    await this.debitWrites;
+    if(this.onDebit)await this.onDebit(this.snapshot());
+  }
 }

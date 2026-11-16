@@ -4465,6 +4465,17 @@ function ProjectsPage({ projects, busy, onCreate, onOpen, onDuplicate, onDelete,
 
 function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onApplied, onReviseArtwork, onNavigateStage, onPause, onResume, onStop, onRetry, onClear, onClearAll,onContinue }: { tasks: QueueTask[]; projects: Project[]; workflowProject?: Project; autoStockProgress: AutoStockProgress | null; onApplied:(project:Project)=>void; onReviseArtwork:(id:string,feedback:string)=>Promise<void>; onNavigateStage: OpenProjectWorkflowStage; onPause: (id: string) => void; onResume: (id: string) => void; onStop: (id: string) => Promise<void>; onRetry: (id: string) => void; onClear: () => void; onClearAll: () => void;onContinue:(id:string)=>Promise<void> }) {
   const [stockTab, setStockTab] = useState<"speech" | "materials" | "assemble">("speech");
+  const [resolutionError,setResolutionError]=useState('');
+  const [resolving,setResolving]=useState<string>();
+  const resolveSubmission=async(task:QueueTask,decision:'retry'|'abandon')=>{
+    const message=decision==='retry'
+      ?'Вы проверили кабинет провайдера и убедились, что заказ не создан? Разрешение снимет блокировку. Нажатие «Повторить» может привести к новому списанию.'
+      :'Отказаться от неизвестного заказа? История отправки сохранится; готовые файлы останутся в проекте.';
+    if(!window.confirm(message))return;
+    setResolving(task.id);setResolutionError('');
+    try{await (window.goldWork??fallbackApi).resolveUncertainSubmission(task.id,decision);}
+    catch(error){setResolutionError(errorMessage(error));}finally{setResolving(undefined);}
+  };
   const [reviewSceneId,setReviewSceneId]=useState<string>();
   const reviewScene=workflowProject?.scenes.find(scene=>scene.id===reviewSceneId);
   const [stopping,setStopping]=useState<string[]>([]);
@@ -4619,6 +4630,7 @@ function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onAppl
         </div>
       )}
       <section className="queue-board">
+        {resolutionError&&<p role="alert">{resolutionError}</p>}
         {stock && <div className="stock-production-tabs" role="tablist" aria-label="Этапы производства Stock">
           {([ ["speech", "Озвучка"], ["materials", "Видео и фото"], ["assemble", "Сборка"] ] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={stockTab === id} className={stockTab === id ? "active" : ""} onClick={() => setStockTab(id)}>{label}</button>)}
         </div>}
@@ -4664,7 +4676,10 @@ function QueuePage({ tasks, projects, workflowProject, autoStockProgress, onAppl
                     </button>
                   )}
                   {(task.status === "failed" || task.status === "cancelled") && task.retryBlockedReason && (
-                    <span className="queue-error">Повтор отключён: {task.retryBlockedReason}</span>
+                    <><span className="queue-error">Повтор отключён: {task.retryBlockedReason}</span>
+                      {!knownOrder&&<><button disabled={Boolean(resolving)} onClick={()=>void resolveSubmission(task,'retry')}>Проверил: заказа нет — разрешить повтор</button>
+                        <button disabled={Boolean(resolving)} onClick={()=>void resolveSubmission(task,'abandon')}>Отказаться от задачи</button></>}
+                    </>
                   )}
                 </footer>
               </article>;
@@ -5585,7 +5600,7 @@ function TimelineEditor({ project, hasQueueTasks, onClose, onShowScenes, onOpenF
   const changeCuts = (sceneId: string, cuts: DocumentaryVisualCut[]) => {
     const scene = scenes.find(item => item.id === sceneId);
     if (!scene?.documentary) return;
-    patchScene(sceneId, { documentary: { ...scene.documentary, cuts } });
+    patchScene(sceneId, { documentary: { ...scene.documentary, cuts, cutsOrigin: 'manual' } });
     setPlaying(false); setMediaMode("live");
   };
   const changeText = (sceneId: string, id: string, text: DocumentaryTextClip | null) => {

@@ -1,7 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectService } from "@gold-work/core";
 import type { AutoStockFailure, Project, QueueTask, Scene } from "@gold-work/shared";
-import {documentaryAutomaticMaterialReady, documentaryMissingSelectedMaterialMessage} from './documentary-auto-readiness.js';
+import {documentarySceneReady} from '@gold-work/shared';
+import {documentaryAutomaticMaterialReady, documentaryMissingSelectedMaterialMessage,documentarySelectedMaterialMissing} from './documentary-auto-readiness.js';
 import {documentaryCheckedVideoCoverage} from './documentary-automatic-native-recovery.js';
 import type { LocalProjectStorage } from "./local-project-storage.js";
 import { prepareDocumentaryTiming } from "./documentary-timing.js";
@@ -72,7 +73,7 @@ export function documentaryNarrationReadiness(input: {
 /** Shared by queue:start and the bounded native production check. */
 export async function prepareDocumentaryProduction(projectId:string,options:{
   projects:Pick<ProjectService,'get'|'update'>;
-  documentary:Pick<DocumentaryProjectService,'planSearch'|'autoSelect'> & Partial<Pick<DocumentaryProjectService,'prepareMontage'|'automaticVideoQuotaRequired'|'completeWithVideoQuota'|'prepareRouteComparisons'>>;
+  documentary:Pick<DocumentaryProjectService,'planSearch'|'autoSelect'> & Partial<Pick<DocumentaryProjectService,'prepareMontage'|'automaticVideoQuotaRequired'|'completeWithVideoQuota'|'prepareRouteComparisons'|'completeWithFreeCards'|'completeWithRelatedMaterials'>>;
   signal:AbortSignal;
   allowActiveNarration?:boolean;
   startNarration:()=>Promise<(sceneId?:string)=>Promise<void>>;
@@ -100,7 +101,18 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
   if(!selectedProject)throw new Error('Проект не найден');
   let project=selectedProject;
   const missingFiles=new Set(result?.failures.filter(failure=>failure.message===documentaryMissingSelectedMaterialMessage).map(failure=>failure.sceneId));
-  const unfinished=project.scenes.filter(scene=>scene.includeInAssembly!==false&&(!documentaryAutomaticMaterialReady(scene)||missingFiles.has(scene.id)));
+  const policy=project.settings.assembly.documentary?.missingMaterialPolicy??'related';
+  if(project.scenes.some(scene=>scene.includeInAssembly!==false&&(!documentarySceneReady(scene,undefined,project)||missingFiles.has(scene.id)))){
+    if(policy==='related'&&documentary.completeWithRelatedMaterials)
+      project=await documentary.completeWithRelatedMaterials(projectId,signal);
+    else if(policy==='card'&&documentary.completeWithFreeCards)
+      project=await documentary.completeWithFreeCards(projectId,sourceOutage,[...missingFiles]);
+  }
+  for(const id of [...missingFiles]){
+    const scene=project.scenes.find(scene=>scene.id===id);
+    if(scene&&(scene.documentary?.nativeFallback||!await documentarySelectedMaterialMissing(scene)))missingFiles.delete(id);
+  }
+  const unfinished=project.scenes.filter(scene=>scene.includeInAssembly!==false&&(!documentarySceneReady(scene,undefined,project)||missingFiles.has(scene.id)));
   const numbers=unfinished.map(s=>s.order+1);
   if(numbers.length){
     const manual=unfinished.filter(s=>s.documentary?.manualReview),pending=manual.filter(s=>['pending','unknown','error'].includes(s.documentary!.manualReview!.analysis?.status??'pending')).length;
@@ -117,11 +129,10 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
   signal.throwIfAborted();
   // Only an otherwise complete timeline can benefit from replacing stills.
   // The quota selector checks feasibility before any network request.
-  if(documentary.automaticVideoQuotaRequired&&documentary.completeWithVideoQuota)
+  if(project.settings.assembly.documentary?.videoQuotaPolicy==='strict'&&documentary.automaticVideoQuotaRequired&&documentary.completeWithVideoQuota)
     project=await documentary.completeWithVideoQuota(project,signal);
   const requireVideoQuota=()=>{
-    // Mixed percentages guide selection; only explicit video-only mode is a hard gate.
-    if(project.settings.stockVideoPercent<100)return;
+    if(project.settings.assembly.documentary?.videoQuotaPolicy!=='strict')return;
     const coverage=documentaryCheckedVideoCoverage(project),target=project.settings.stockVideoPercent;
     if(coverage.videoSeconds+1e-6<coverage.totalSeconds*target/100){
       const actual=coverage.totalSeconds?100*coverage.videoSeconds/coverage.totalSeconds:0;
@@ -132,5 +143,14 @@ export async function prepareDocumentaryProduction(projectId:string,options:{
   if(documentary.prepareMontage)project=await measureDocumentaryStage('montage',{projectId},()=>documentary.prepareMontage!(projectId,signal));
   // Montage can change cuts and the amount of visible moving footage.
   requireVideoQuota();
+  const coverage=documentaryCheckedVideoCoverage(project);
+  const placeholderScenes=project.scenes.filter(scene=>scene.includeInAssembly!==false&&scene.documentary?.nativeFallback).map(scene=>scene.order+1);
+  const related=project.scenes.filter(scene=>scene.includeInAssembly!==false&&scene.documentary?.requirement.footageFallback).map(scene=>scene.order+1);
+  const videoPercent=coverage.totalSeconds?100*coverage.videoSeconds/coverage.totalSeconds:0;
+  const message=`Видео ${videoPercent.toFixed(1)}% при цели ${project.settings.stockVideoPercent}%.`
+    +(related.length?` Тематические иллюстрации: ${related.map(n=>'№'+n).join(', ')}.`:'')
+    +(placeholderScenes.length?` Бесплатные карточки: ${placeholderScenes.map(n=>'№'+n).join(', ')}.`:'');
+  project=await projects.update(projectId,{settings:{...project.settings,assembly:{...project.settings.assembly,
+    documentary:{...project.settings.assembly.documentary!,productionReport:{videoPercent,targetVideoPercent:project.settings.stockVideoPercent,placeholderScenes,message}}}}});
   return {project,result,sourceOutage};
 }

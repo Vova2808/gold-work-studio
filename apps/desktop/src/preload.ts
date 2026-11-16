@@ -142,6 +142,7 @@ const api: DesktopApi = {
   resumeGeneration: (projectId: string) => ipcRenderer.invoke("queue:resume", projectId),
   stopGeneration: (projectId: string) => ipcRenderer.invoke("queue:stop", projectId),
   retryTask: (taskId: string) => ipcRenderer.invoke("queue:retry", taskId),
+  resolveUncertainSubmission: (taskId:string,decision:'retry'|'abandon') => ipcRenderer.invoke('queue:resolve-submission',taskId,decision),
   clearFinishedTasks: () => ipcRenderer.invoke("queue:clear-finished"),
   clearQueue: () => ipcRenderer.invoke("queue:clear-all"),
   regenerateScene: (projectId: string, sceneId: string | string[], target: "image" | "video" | "audio" | "all" = "all") =>

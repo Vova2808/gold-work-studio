@@ -79,6 +79,18 @@ export function StockWorkflowSettings({ project, api, disabled, samplePlaying, s
       <Field title={`${percent}% видео · ${100 - percent}% фото`}><input aria-label="Доля видео" type="range" min={0} max={100} step={1} value={percent} onChange={e => onSettings({ stockVideoPercent: Number(e.target.value) })} /></Field>
       <div className="stock-workflow-ratio-labels"><span>Только фото</span><span>Только видео</span></div>
       <p>60% видео / 40% фото — стартовая настройка, её можно свободно менять. Доля по длительности ролика. Фактическую долю и сцены без подходящего материала видно в производстве.</p>
+      <Field title="Если точный материал не найден"><select value={doc.missingMaterialPolicy??'related'} onChange={e=>changeDocumentary({missingMaterialPolicy:e.target.value as 'related'|'card'|'hold'})}>
+        <option value="related">Подобрать тематический материал и пометить</option>
+        <option value="card">Бесплатная карточка с репликой</option>
+        <option value="hold">Ожидать выбора материала</option>
+      </select></Field>
+      <Field title="Доля видео"><select value={doc.videoQuotaPolicy??'target'} onChange={e=>changeDocumentary({videoQuotaPolicy:e.target.value as 'target'|'strict'})}>
+        <option value="target">Цель подбора; разрешить экспорт с меньшей долей</option>
+        <option value="strict">Обязательное условие экспорта</option>
+      </select></Field>
+      <label><input type="checkbox" checked={doc.retryEmptyVisualResponse!==false} onChange={e=>changeDocumentary({retryEmptyVisualResponse:e.target.checked})}/> Один платный повтор после подтверждённо пустого ответа проверки</label>
+      <p>Повтор использует увеличенный лимит ответа и общий бюджет сцены. Неизвестные результаты требуют отдельного решения.</p>
+      {doc.productionReport&&<p role="status">{doc.productionReport.message}</p>}
     </section>
 
     <section className="stock-workflow-section">
@@ -102,6 +114,7 @@ export function StockWorkflowSettings({ project, api, disabled, samplePlaying, s
     <section className="stock-workflow-section">
       <h2><span>6</span> Музыка и звуки</h2>
       <StockMusicControls api={api} settings={settings} onSettings={onSettings} onChooseMusic={onChooseMusic} />
+      {doc.effectsStatus&&<p role="status">{doc.effectsStatus.message}</p>}
       <details className="stock-workflow-more"><summary>Звуковые акценты · {doc.autoEffects === false || doc.sfxVolume === 0 ? "выключены" : `${doc.sfxVolume}%`}</summary>
         <p>Звуки сопровождают смысловые акценты; после вступления используются реже. Добавленные вручную звуки остаются на дорожках редактора.</p>
         <Field title={`Громкость эффектов · ${doc.autoEffects === false ? 0 : doc.sfxVolume}%`}><input aria-label="Громкость эффектов" type="range" min={0} max={100} value={doc.autoEffects === false ? 0 : doc.sfxVolume} onChange={e => changeDocumentary({ sfxVolume: Number(e.target.value), autoEffects: Number(e.target.value) > 0 })} /></Field>

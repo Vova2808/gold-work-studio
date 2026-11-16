@@ -16,13 +16,15 @@ import {currentDocumentaryFootageFallback,fastDocumentaryCandidateScore,planFast
 import {QueryPlanIssuesError,DocumentaryQueryRetryScopeError} from './documentary-ai-query-planner.js';
 import {currentDocumentaryAiSearchPlan,documentaryAiPlanContext} from './documentary-ai-plan-state.js';
 import {documentaryAiPlanGroundingIssue} from '@gold-work/shared';
+import {documentaryAcceptanceContext,documentaryAcceptanceFingerprint,documentaryRetainedApproval} from '@gold-work/shared';
 import {fastDocumentaryGraphicReady} from './documentary-fast-graphics.js';
 import {documentaryFootageRecoveryScenes,prepareDocumentaryFootageRecovery,restoreDocumentaryFootageRecovery,documentaryPhotoRecoveryScenes,prepareDocumentaryPhotoRecovery} from './documentary-footage-recovery.js';
 import {applyDocumentaryNativeFallback,documentaryNativeFallbackReady} from './documentary-native-fallback.js';
 import {documentarySceneSeconds} from './documentary-sequences.js';
 import {DocumentarySelectionSession,type DocumentaryTransferFailures} from './documentary-selection-session.js';
+import {persistentDocumentarySelectionSession} from './documentary-persisted-budget.js';
 import {documentarySelectionFailure} from './documentary-selection-failure.js';
-import {documentarySelectionRetry,DocumentarySelectionRetryProbePassed,readDocumentarySelectionRetryEvidence,type DocumentarySelectionRetryGrant} from './documentary-retry.js';
+import {documentarySelectionRetry,DocumentarySelectionRetryProbePassed,readDocumentarySelectionRetryEvidence,DocumentaryRetryPermissions,listDocumentaryRecovery,type DocumentarySelectionRetryGrant} from './documentary-retry.js';
 import {documentaryTerminalEmptySources,type DocumentaryTerminalEmptySource} from './documentary-terminal-empty.js';
 import {documentaryAutomaticMaterialReady,documentaryMissingSelectedMaterialMessage,documentarySelectedMaterialMissing} from './documentary-auto-readiness.js';
 import {claimDocumentaryThematicRecovery,documentaryThematicRecoveryBinding,documentaryThematicDiscoveryRequirement,repairDocumentaryGeographicReserve} from './documentary-automatic-thematic-recovery.js';
@@ -40,6 +42,7 @@ import {documentaryGroundedThematicQuery,documentaryThematicMetadataIssue} from 
 import {documentaryNamedDiscoveryQueries,documentaryNamedMetadataShortlist,documentaryExactRequirementForRetry,documentaryNamedMetadataIssue,documentaryYouTubeNameFallback,documentaryNamedVideo,documentaryCandidateSubjectIssue,documentaryPlannedDiscoveryRequirement,documentaryCommonsDiscoverySubjects,documentaryGroundedDiscoveryName} from './documentary-named-search.js';
 import {documentaryContinuityModelYear,documentaryContradictoryModelYear} from './documentary-model-year.js';
 import {documentaryMaterialMetadataIssue} from './documentary-material-metadata.js';
+import {documentaryMetadataRelevance,documentaryMetadataRelevanceIssue} from './documentary-metadata-relevance.js';
 import {documentarySceneContext,documentaryGeneralIllustration,documentaryCallToActionIllustration,documentaryNamedListPortrait,type DocumentarySceneContext} from './documentary-scene-context.js';
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -66,7 +69,8 @@ import {documentaryNarrationContext,documentaryMetadataShortlist,documentaryLega
 import {documentaryRepresentationIssue} from './documentary-thematic.js';
 
 import type { EffectLibrary } from "./effect-library.js";
-import { planDocumentaryEffects } from "./documentary-effects.js";
+import { planDocumentaryEffects,documentaryEffectSummary } from "./documentary-effects.js";
+import {documentaryArtworkSkipReason} from './documentary-artwork-application.js';
 import { groundDocumentaryScenes, planDocumentaryComparisons } from "./documentary-comparison.js";
 import {recoverDocumentaryPlanContext,readDocumentaryContextRecovery} from './documentary-plan-recovery.js';
 import {documentarySourceQualityIssue,documentaryQualityPresentation,documentarySavedQualityIssue,documentaryKnownQualityIssue,documentaryGameplayMetadataIssue,documentaryAutoPortraitTemplate} from './documentary-source-quality.js';
@@ -110,7 +114,7 @@ function motionArtworkApplication(project:Project,commission?:SavedMotionArtwork
   const rows=commission?.scenes??scenes.flatMap(s=>s.documentary?.semanticMontage?.artwork
     ?[{sceneId:s.id,artwork:s.documentary.semanticMontage.artwork,artworkSpan:s.documentary.semanticMontage.artworkSpan}]:[]);
   let attached=0,used=0;
-  const skipped:Array<{sceneId:string;scene:number;stage:'attachment'|'montage'}>=[];
+  const skipped:Array<{sceneId:string;scene:number;stage:'attachment'|'montage';reason:string}>=[];
   for(const row of rows){
     const first=scenes.findIndex(s=>s.id===row.sceneId),scene=scenes[first],direction=scene?.documentary?.semanticMontage;
     const linked=Boolean(direction&&isDeepStrictEqual(direction.artwork,row.artwork)&&isDeepStrictEqual(direction.artworkSpan,row.artworkSpan));
@@ -122,7 +126,8 @@ function motionArtworkApplication(project:Project,commission?:SavedMotionArtwork
         &&isDeepStrictEqual(graphic.artworkSpan,row.artworkSpan);
     });
     if(applied)used++;
-    else skipped.push({sceneId:row.sceneId,scene:(scene?.order??-1)+1,stage:linked?'montage':'attachment'});
+    else skipped.push({sceneId:row.sceneId,scene:(scene?.order??-1)+1,stage:linked?'montage':'attachment',
+      reason:linked?documentaryArtworkSkipReason(project,row.sceneId,row.artwork).message:'План графики не прикреплён к текущей сцене'});
   }
   return {accepted:commission?.scenes.length,attached,used,skipped};
 }
@@ -688,6 +693,8 @@ export interface DocumentaryCandidatePriority {
   queries:string[];
   visualTarget:string;
   subjects:string[];
+  objectClass?:string;
+  excludedClasses?:string[];
   imageTieBreak?:(candidate:DocumentaryCandidate)=>boolean;
 }
 
@@ -703,6 +710,7 @@ export function documentarySimpleCandidatePriority(project:Project,scene:Scene,k
   const canonicalIdentity=documentaryGroundedDiscoveryName(ai);
   const normalized=(text:string)=>' '+text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()+' ';
   return {queries:plan.queries,visualTarget:plan.visualTarget,
+    objectClass:plan.objectClass,excludedClasses:plan.excludedClasses,
     subjects:thematic?canonicalIdentity?[canonicalIdentity]:[]:plan.namedSubject?[plan.namedSubject]:ai?[ai.subject]:documentarySearchSubjects(scene.documentary!.requirement),
     ...(kind==='image'&&(!thematic||canonicalIdentity)&&identities?.length?{imageTieBreak:(candidate:DocumentaryCandidate)=>{
       if(candidate.kind!=='image'||!Number.isFinite(candidate.width)||!Number.isFinite(candidate.height)
@@ -736,19 +744,16 @@ function catalogAlternatives(query:string):string[] {
 }
 
 export function documentaryCandidatePriorityScore(candidate:DocumentaryCandidate,priority:DocumentaryCandidatePriority):number {
-  const modifier=(word:string)=>catalogPeriodWord(word)||/^(?:victorian|edwardian|georgian|medieval|renaissance|ancient|modern|contemporary|era|period|image|picture|illustration)$/.test(word);
-  const subject=new Set((priority.subjects.length?priority.subjects:[priority.visualTarget]).flatMap(catalogTerms).filter(word=>
-    priority.subjects.length||!modifier(word)));
-  const metadata=new Set(catalogWords(`${candidate.title} ${candidate.description??''}`));
   const queries=priority.queries.length?priority.queries:[priority.visualTarget];
-  return Math.max(0,...queries.flatMap(catalogAlternatives).map(query=>{
-    let total=0,matched=0;
-    for(const term of catalogTerms(query)){
-      const weight=modifier(term)?0.25:subject.has(term)?4:1;
-      total+=weight;if(metadata.has(term))matched+=weight;
-    }
-    return total?matched/total:0;
-  }));
+  return Math.max(0,...queries.flatMap(catalogAlternatives).map(query=>documentaryMetadataRelevance(candidate,
+    {visualTarget:query,subject:priority.subjects.join(' '),objectClass:priority.objectClass,excludedClasses:priority.excludedClasses})));
+}
+
+function documentaryPriorityMetadataIssue(candidate:DocumentaryCandidate,priority:DocumentaryCandidatePriority):string|undefined {
+  const targets=(priority.queries.length?priority.queries:[priority.visualTarget]).flatMap(catalogAlternatives);
+  const issues=targets.map(query=>documentaryMetadataRelevanceIssue(candidate,{visualTarget:query,
+    subject:priority.subjects.join(' '),objectClass:priority.objectClass,excludedClasses:priority.excludedClasses}));
+  return issues.length&&issues.every(Boolean)?issues[0]:undefined;
 }
 
 export function selectSimpleDocumentaryCandidates(candidates: DocumentaryCandidate[],priority?:DocumentaryCandidatePriority): DocumentaryCandidate[] {
@@ -762,9 +767,7 @@ export function selectSimpleDocumentaryCandidates(candidates: DocumentaryCandida
     const key=documentaryCandidateKey(candidate);
     if(seen.has(key)||candidate.rights==='unknown'||(candidate.bytes??0)>750*1024*1024)return false;
     seen.add(key);
-    // Active-task ordering keeps sparse and modifier-only captions available
-    // for pixel review. Missing metadata is not a visual rejection.
-    if(priority)return true;
+    if(priority)return !documentaryPriorityMetadataIssue(candidate,priority);
     const terms=catalogTerms(candidate.query??''),metadata=new Set(catalogWords(`${candidate.title} ${candidate.description??''}`));
     return !onlyPeriodMatches(terms,terms.filter(term=>metadata.has(term)));
   }).sort((a,b)=>{
@@ -941,6 +944,79 @@ export class DocumentaryProjectService {
    * searches still use autoSelect; changed scripts/plans use normal planning. */
   get automaticVideoQuotaRequired():boolean {return Boolean(this.intelligence?.simpleSelection);}
 
+  /** A deliberate local fallback. This path never searches or submits a paid review. */
+  async completeWithFreeCards(projectId:string,reason='Ограниченный поиск завершён без подходящего материала.',missingSceneIds:string[]=[]):Promise<Project> {
+    const missing=new Set(missingSceneIds);
+    const project=await this.projects.mutate(projectId,current=>({scenes:current.scenes.map(scene=>{
+      const doc=scene.documentary;
+      if(!doc||doc.pinned||scene.includeInAssembly===false||doc.verified&&!missing.has(scene.id))return scene;
+      return applyDocumentaryNativeFallback(current,{...scene,documentary:{...doc,verified:false,autoError:doc.autoError||reason}});
+    })}));
+    await this.storage.ensureProject(project);
+    return project;
+  }
+
+  async completeWithRelatedMaterials(projectId:string,signal?:AbortSignal):Promise<Project> {
+    const project=await this.projects.get(projectId);
+    if(!project)throw new Error('Проект не найден');
+    const result=await this.completeWithSourceFallback(project,signal,undefined,true);
+    await this.storage.ensureProject(result);
+    return result;
+  }
+
+  private async retainAcceptedMaterials(project:Project,sceneIds?:string[]):Promise<Project> {
+    const updates=new Map<string,Scene>();
+    for(const scene of project.scenes){
+      const doc=scene.documentary;
+      if(sceneIds&&!sceneIds.includes(scene.id)||!doc?.verified||doc.pinned||!doc.selected
+        ||doc.visualReview?.status!=='accepted')continue;
+      const file=doc.selected.kind==='video'?scene.videoPath:scene.imagePath;
+      const sameRange=doc.selected.kind!=='video'||doc.visualReview.trimEndSeconds!==undefined
+        &&Math.abs((scene.trimStartSeconds??0)-(doc.visualReview.trimStartSeconds??0))<.01
+        &&Math.abs((scene.trimEndSeconds??0)-doc.visualReview.trimEndSeconds)<.01;
+      const sameTask=doc.requirement.text===scene.narration&&(!doc.visualReview.scriptEvidence
+        ||doc.visualReview.scriptEvidence.scriptText===scene.narration);
+      const sameBytes=Boolean(file&&doc.checksum&&await checksumFile(file).then(value=>value===doc.checksum,()=>false));
+      // Rule upgrades may keep an old verdict; actual edits never inherit it.
+      const oldMarker=doc.acceptedUnderPreviousRules?.reviewCheckedAt===doc.visualReview.checkedAt;
+      if(!sameRange||!sameTask||!sameBytes||oldMarker&&!documentaryRetainedApproval(scene,project)){
+        updates.set(scene.id,{...scene,documentary:{...doc,verified:false,
+          autoError:'После одобрения изменились материал, отрезок или задача сцены. Требуется проверка изменённого материала.'}});
+        continue;
+      }
+      if(oldMarker)continue;
+      if(await documentarySelectedMaterialMissing(scene))continue;
+      const issue=documentarySavedQualityIssue(project,scene)||documentarySavedIdentityIssue(scene)||documentarySavedContextIssue(project,scene)
+        ||'Сохранённое одобрение того же файла и отрезка.';
+      updates.set(scene.id,{...scene,documentary:{...doc,autoError:undefined,
+        acceptedUnderPreviousRules:{version:1,fingerprint:documentaryAcceptanceFingerprint(scene),context:documentaryAcceptanceContext(project,scene),reviewCheckedAt:doc.visualReview.checkedAt,reason:issue},
+        reviewNote:`Принято по прежним правилам; материал сохранён. ${issue}`}});
+    }
+    if(!updates.size)return project;
+    return this.projects.mutate(project.id,current=>({scenes:current.scenes.map(scene=>{
+      const before=project.scenes.find(item=>item.id===scene.id);
+      return updates.has(scene.id)&&isDeepStrictEqual(scene,before)?updates.get(scene.id)!:scene;
+    })}),{candidateSceneIds:[...updates.keys()]});
+  }
+
+  private readonly emptyRetryPermissions=new DocumentaryRetryPermissions();
+  private async authorizeKnownEmptyReviews(project:Project,sceneIds?:string[]):Promise<void> {
+    if(project.settings.assembly.documentary?.retryEmptyVisualResponse===false)return;
+    const root=this.storage.projectDirectory(project.id),directory=join(root,'Documentary','Analysis');
+    const scenes=project.scenes.filter(scene=>scene.includeInAssembly!==false&&!scene.documentary?.verified&&!scene.documentary?.pinned
+      &&(!sceneIds||sceneIds.includes(scene.id)));
+    const items=(await listDocumentaryRecovery(root)).filter(item=>item.knownEmpty&&scenes.some(scene=>
+      item.sceneId?item.sceneId===scene.id:item.narration===scene.narration));
+    for(const item of items){
+      if(this.stopRequested.has(project.id))return;
+      const permission=join(directory,item.id+'.retry-authorization.json');
+      if(await stat(permission).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))continue;
+      const receipt=JSON.parse(await readFile(join(directory,item.id+'.json'),'utf8'));
+      if(receipt.singleReviewBinding?.groundedRetryOrigin)continue;
+      await this.emptyRetryPermissions.authorize(root,[item]);
+    }
+  }
+
   async canResumeNativeFallback(projectId:string):Promise<boolean> {
     if(!this.intelligence?.simpleSelection)return false;
     const project=await this.projects.get(projectId,{omitCandidates:true});
@@ -998,6 +1074,7 @@ export class DocumentaryProjectService {
   async completeWithVideoQuota(project:Project,signal?:AbortSignal):Promise<Project>{
     if(!this.intelligence?.simpleSelection||!this.intelligence.inspectForSelection||!this.intelligence.withSelectionBudget)return project;
     const projectId=project.id,intelligence=this.intelligence;
+    const lifetime=await persistentDocumentarySelectionSession(this.storage.projectDirectory(projectId),false);
     return completeDocumentaryVideoQuota({
       read:async()=>(await this.projects.get(projectId))!,
       progress:(scene,current,result)=>{
@@ -1016,7 +1093,7 @@ export class DocumentaryProjectService {
           message:`Сцена ${scene.order+1}: добираю реальное видео; проверенное фото сохранено`});
         const result=await this.searcher.search({query,kind:'video',entities:documentarySearchSubjects(requirement),
           years:requirement.years,providers:fastDocumentaryProviders(plan,'video')},true,stop,true);
-        const videos=result.candidates.filter(candidate=>candidate.kind==='video');
+        const videos=result.candidates.filter(candidate=>candidate.kind==='video'&&!documentaryMetadataRelevanceIssue(candidate,plan));
         return preferUnusedDocumentaryCandidates(current,scene,requirement.identities?.length
           ?documentaryNamedMetadataShortlist(videos,requirement,scene.narration,true):videos,true,candidate=>fastDocumentaryCandidateScore(plan,candidate));
       },
@@ -1026,7 +1103,9 @@ export class DocumentaryProjectService {
         const replacement=prepared.scenes.find(item=>item.id===scene.id)!;
         return {...replacement,...documentaryFallbackVideoRange(current,replacement,true)};
       }),
-      inspect:async(current,scene,budget)=>intelligence.withSelectionBudget!(budget,async()=>
+      inspect:async(current,scene,budget)=>intelligence.withSelectionBudget!({...budget,submit:async()=>{
+        await budget.submit();await lifetime.takeAnalysis(scene.id,'video');
+      }},async()=>
         (await intelligence.inspectForSelection!(current,scene,undefined,()=>budget.signal.aborted)).review),
       commit:async(sceneId,binding,accepted,beforeCommit)=>{
         signal?.throwIfAborted();
@@ -1078,6 +1157,7 @@ export class DocumentaryProjectService {
   private async completeWithSourceFallback(project:Project,signal?:AbortSignal,retrySceneId?:string,automaticRecovery=false,thematicSceneIds?:ReadonlySet<string>,exhaustedScenes?:Map<string,string>):Promise<Project> {
     const photoFirst=documentaryPhotoFirstScenes(project,true);
     const projectId=project.id;
+    const lifetime=await persistentDocumentarySelectionSession(this.storage.projectDirectory(projectId),false);
     const ready=automaticRecovery?documentaryAutomaticMaterialReady:documentaryMaterialUsable;
     const inScope=(scene:Scene)=>!thematicSceneIds||thematicSceneIds.has(scene.id);
     const recoveryBindings=new Map(project.scenes.filter(inScope).map(scene=>[scene.id,documentaryThematicRecoveryBinding(project,scene)]));
@@ -1160,6 +1240,7 @@ export class DocumentaryProjectService {
       return allowed(desired)?desired:allowed(plan.preferredKind)?plan.preferredKind:allowed('image')?'image':allowed('video')?'video':undefined;
     };
     const rank=(current:Project,scene:Scene,candidates:DocumentaryCandidate[])=>{
+      candidates=selectSimpleDocumentaryCandidates(candidates,documentarySimpleCandidatePriority(current,scene,candidates[0]?.kind??'video'));
       if(candidates.some(candidate=>candidate.provider==='local')){
         const requirement=scene.documentary!.requirement,plan=currentDocumentaryAiSearchPlan(current,scene);
         const queries=activeThematic(current,scene)?requirement.footageFallback!.queries:plan?(candidates[0]?.kind==='image'?plan.imageQueries:[...plan.videoQueries,...plan.fallbackVideoQueries]):requirement.queries;
@@ -1315,9 +1396,10 @@ export class DocumentaryProjectService {
               ||documentaryGeminiRetryBinding(saved,scene)!==documentaryGeminiRetryBinding(current,original)
               ||original.documentary!.requirement.footageFallback?.automaticRecovery&&!documentaryThematicDiscoveryRequirement(saved,scene))
               throw Error('Сцена изменилась до отправки проверки; запрос не отправлен.');
-          },submit:()=>{
+          },submit:async()=>{
             if(cacheOnly)throw new DocumentaryCachedAnalysisMissing('Cache-only восстановление не разрешает новую отправку.');
-            if(submissions++>=1)throw new DocumentaryAnalysisError('Лимит одного просмотра запасного материала исчерпан; повтор не отправлен.');
+            if(submissions++>=(current.settings.assembly.documentary?.retryEmptyVisualResponse===false?1:2))throw new DocumentaryAnalysisError('Лимит просмотра запасного материала исчерпан; повтор не отправлен.');
+            await lifetime.takeAnalysis(sceneId,original.documentary!.selected!.kind);
           }},inspect):await inspect();
         analysis={status:review.status,reason:review.reason};
       }catch(error){
@@ -1606,7 +1688,6 @@ export class DocumentaryProjectService {
     if (!run&&!planning?.size) return;
     this.stopRequested.add(projectId);
     this.downloadControllers.get(projectId)?.abort();
-    for(const controller of this.planningControllers.get(projectId)??[])controller.abort();
     // Keep receiving an already-paid response and save it before stopping.
     await Promise.all([...(run?[run]:[]),...(planning??[])].map(promise=>promise.catch(()=>{})));
   }
@@ -1851,7 +1932,10 @@ export class DocumentaryProjectService {
     const ids=new Set(eligible.map(scene=>scene.id));
     if(!ids.size)return ids;
     const block=(id:string,reason:string)=>{if(ids.delete(id))options.blocked?.set(id,reason);};
-    const holdAll=(reason:string)=>{for(const id of [...ids])block(id,reason);return ids;};
+    const readCheckpoint=async(file:string)=>{
+      try{return JSON.parse(await readFile(file,'utf8'));}
+      catch{recordDiagnosticEvent('warn','documentary.query-refresh.unreadable-checkpoint',{projectId:project.id});return undefined;}
+    };
     const root=this.storage.projectDirectory(project.id);
     const checkpoints=async (directory:string)=>(await readdir(directory).catch((error:NodeJS.ErrnoException)=>{
       if(error.code==='ENOENT')return [];
@@ -1863,11 +1947,11 @@ export class DocumentaryProjectService {
         const directory=join(root,namespace);
         for(const name of await checkpoints(directory)){
           signal?.throwIfAborted();
-          const saved=JSON.parse(await readFile(join(directory,name),'utf8'));
-          if(!Array.isArray(saved?.attempts))return holdAll('Обновление плана заблокировано: история отправленных AI-запросов недоступна или повреждена. Автоматического платного повтора нет.');
+          const saved=await readCheckpoint(join(directory,name));
+          if(!Array.isArray(saved?.attempts))continue;
           for(const attempt of saved.attempts){
             if(attempt?.responseState==='complete'&&['complete','invalid'].includes(attempt.status))continue;
-            if(!Array.isArray(attempt?.ids)||!attempt.ids.every((id:unknown)=>typeof id==='string'))return holdAll('Обновление плана заблокировано: неизвестна принадлежность прежнего AI-запроса. Автоматического платного повтора нет.');
+            if(!Array.isArray(attempt?.ids)||!attempt.ids.every((id:unknown)=>typeof id==='string'))continue;
             for(const id of attempt.ids)block(id,'Результат отправленного запроса AI-планировщику не подтверждён. Прежний план сохранён; автоматического платного повтора нет.');
           }
         }
@@ -1879,19 +1963,21 @@ export class DocumentaryProjectService {
       for(const name of await checkpoints(analysis)){
         signal?.throwIfAborted();
         if(!ids.size)return ids;
-        const saved=JSON.parse(await readFile(join(analysis,name),'utf8'));
+        const saved=await readCheckpoint(join(analysis,name));
+        if(!saved)continue;
         if(saved?.state==='failed'&&saved.purpose==='visual-illustration'&&saved.approvedRetryAt&&saved.previousRevision
           &&!retryEvidence?.grants.some(grant=>grant.id===name.slice(0,-5)&&grant.groundedNarration)
           &&!retryEvidence?.unsettledExact.some(item=>item.id===name.slice(0,-5)))
-          return holdAll('Обновление плана заблокировано: исходная история разрешённого точного повтора не подтверждена. Автоматического платного повтора нет.');
+          for(const scene of eligible)if(saved.singleReviewBinding?.quality?.narration===scene.narration)
+            block(scene.id,'История разрешённого повтора этой сцены не подтверждена.');
         if(saved?.state==='complete'&&saved.result||['failed','rejected','invalid'].includes(saved?.state))continue;
         const narration=saved?.singleReviewBinding?.quality?.narration;
-        if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))return holdAll('Обновление плана заблокировано: неизвестна принадлежность прежней проверки материала. Автоматического платного повтора нет.');
+        if(typeof narration!=='string'||!project.scenes.some(scene=>scene.narration===narration))continue;
         for(const scene of eligible)if(scene.narration===narration)block(scene.id,'Прежний план сохранён. Его обновление заблокировано: предыдущая визуальная проверка материала имеет неизвестный результат. Автоматического платного повтора нет.');
       }
       for(const pending of retryEvidence?.unsettledExact??[]){
         if(!pending.narration||!project.scenes.some(scene=>scene.narration===pending.narration))
-          return holdAll('Обновление плана заблокировано: неизвестна принадлежность разрешённого точного повтора без завершённого результата.');
+          continue;
         for(const scene of eligible)if(scene.narration===pending.narration)
           block(scene.id,'Прежний точный запрос разрешён к одному повтору, но его завершённый результат ещё не подтверждён. Разрешение само по себе не обновляет план.');
       }
@@ -1901,7 +1987,8 @@ export class DocumentaryProjectService {
         // blocking the planner only because selection keeps these sources held
         // independently of the refreshed task below.
         const authorizedKeys=settledEmptySourceKeys(emptySources.get(scene.id));
-        const sourceEvidence=[...(retryEvidence?.grants.filter(item=>item.groundedNarration===scene.narration)??[]),
+        const sourceEvidence=[...(retryEvidence?.grants.filter(item=>item.groundedNarration===scene.narration
+          ||item.priorState==='empty'&&item.visualQuestion?.narration===scene.narration)??[]),
           ...(retryEvidence?.exactCompletions.filter(item=>item.narration===scene.narration).map(item=>item.grant)??[])];
         for(const grant of sourceEvidence){
           const checksum=grant.binding.checksum;
@@ -1917,7 +2004,8 @@ export class DocumentaryProjectService {
             throw error;
           });
           if(raw===undefined)continue;
-          const saved=JSON.parse(raw);
+          let saved;
+          try{saved=JSON.parse(raw);}catch{block(scene.id,'История незавершённых проверок этой сцены повреждена.');continue;}
           if(saved?.version!==1||!Array.isArray(saved.keys)||saved.keys.some((key:unknown)=>typeof key!=='string'||!authorizedKeys.has(key)))
             block(scene.id,'Прежний план сохранён. Его обновление заблокировано отметкой о незавершённой проверке сохранённого источника. Завершённые проверки других сцен не снимают эту блокировку.');
         }
@@ -1925,7 +2013,8 @@ export class DocumentaryProjectService {
     }catch(error){
       signal?.throwIfAborted();
       recordDiagnosticEvent('warn','documentary.query-refresh.checkpoints-unavailable',{projectId:project.id});
-      return holdAll('Обновление плана заблокировано: не удалось прочитать историю оплаченных проверок. Автоматического платного повтора нет.');
+      // Exact request readers still guard dispatch. Unattributed history cannot own every scene.
+      return ids;
     }
     return ids;
   }
@@ -1966,6 +2055,7 @@ export class DocumentaryProjectService {
     const inScope = (scene: Scene) => !sceneIds || sceneIds.includes(scene.id);
     if(cachedOnly&&(!this.queryPlanner?.readCached||!this.queryPlanner.readIssues))throw new Error('Чтение сохранённых AI-планов недоступно.');
     if(!cachedOnly)project=await this.markMissingAutomaticMaterials(project,sceneIds,signal);
+    if(!refreshReady)project=await this.retainAcceptedMaterials(project,sceneIds);
     const recoverableRoutes=new Map<string,Scene>();
     if(!refreshReady&&!cachedOnly)for(const scene of project.scenes){
       if(!inScope(scene)||documentaryRouteApprovalCandidate(project,scene)===scene)continue;
@@ -2108,7 +2198,7 @@ export class DocumentaryProjectService {
       if(missing.length){
         this.publish({projectId,phase:'preparing',completed:plan.size,total:pending.length,selected:0,skipped:0,failed:missing.length,
           message:`AI-запросы сохранены для ${plan.size} сцен. Для ${missing.length} сцен план ещё не готов; уже полученные результаты сохранены.${reason}`});
-        throw new DocumentaryPlanningIncompleteError(`AI-план поисковых запросов не готов для сцен ${missing.map(scene=>'№'+(scene.order+1)).join(', ')}. Уже полученные результаты сохранены.${reason||' Продолжите подготовку плана.'}`);
+        // Missing plans are held per scene below; narration and the other scenes continue.
       }
       return project;
     }
@@ -2240,10 +2330,11 @@ export class DocumentaryProjectService {
     this.stopRequested.delete(projectId);
     this.downloadControllers.set(projectId,new AbortController());
     if(waitForNarration)this.narrationWaits.set(projectId,waitForNarration);
-    const session=new DocumentarySelectionSession();
+    let session!:DocumentarySelectionSession;
     const attempts=new Map<string,{scope:string;keys:Set<string>;found:boolean}>();
     let total=0;
     const run=(async()=>{
+      session=await persistentDocumentarySelectionSession(this.storage.projectDirectory(projectId));
       // A selector starting during a refresh reads only after the new target has been applied.
       const release=await this.reserveSource(`query-target:${projectId}`);release();
       if(this.stopRequested.has(projectId))throw new DOMException('Подбор остановлен пользователем','AbortError');
@@ -2340,10 +2431,10 @@ export class DocumentaryProjectService {
       throw error;
     }
     finally{
-      await session.drain();
+      await session?.drain();
       try{
         const root=join(this.storage.projectDirectory(projectId),'Documentary');await mkdir(root,{recursive:true});
-        await atomicWrite(join(root,'selection-budget.json'),JSON.stringify({version:1,limits:documentaryWorkLimits,scenes:session.snapshot()},null,2));
+        if(session)await atomicWrite(join(root,'selection-run.json'),JSON.stringify({version:1,limits:documentaryWorkLimits,scenes:session.snapshot()},null,2));
       }catch{recordDiagnosticEvent('warn','documentary.selection.budget-report-unavailable',{projectId});}
       this.autoRuns.delete(projectId);this.downloadControllers.delete(projectId);this.narrationWaits.delete(projectId);
     }
@@ -2437,6 +2528,7 @@ export class DocumentaryProjectService {
       const grants=evidence.grants.filter(grant=>['pending','partial'].includes(grant.priorState)
         &&evidence.unsettledExact.some(item=>item.id===grant.id&&item.narration===scene.narration));
       for(const grant of grants){
+        try {
         const checksum=grant.binding.checksum,manifest=join(root,'Documentary',scene.id.replace(/[^a-zA-Z0-9_-]/g,'_'),checksum+'.source.json');
         const source=await readFile(manifest,'utf8').then(text=>JSON.parse(text) as DocumentaryCandidate&{checksum?:string},()=>undefined);
         if(!source?.localPath||source.checksum!==checksum||!source.id||!source.provider||!['image','video'].includes(source.kind)
@@ -2486,6 +2578,13 @@ export class DocumentaryProjectService {
         const completed=await readDocumentarySelectionRetryEvidence(root,model);
         if(!completed.exactCompletions.some(item=>item.grant.id===grant.id&&item.narration===scene.narration))
           throw new Error(`Сцена №${scene.order+1}: точная проверка не имеет подтверждённого завершённого результата. Автоповтор отключён.`);
+        } catch(error) {
+          if(this.stopRequested.has(projectId)||error instanceof Error&&error.name==='AbortError')throw error;
+          const message=error instanceof Error?error.message:String(error);
+          await this.projects.mutate(projectId,current=>({scenes:current.scenes.map(latest=>latest.id===scene.id&&latest.documentary&&!latest.documentary.verified
+            ?{...latest,documentary:{...latest.documentary,autoError:message}}:latest)}),{candidateSceneIds:[]});
+          this.publish({projectId,phase:'preparing',currentSceneId:scene.id,completed:0,total:project.scenes.length,selected:0,skipped:0,failed:1,message});
+        }
       }
     }
   }
@@ -2506,16 +2605,7 @@ export class DocumentaryProjectService {
         years:plan.requiredYears??doc.requirement.years,fastVisualTarget:plan.visualTarget,fastSourcePolicy:plan.sourcePolicy,fastPlanVersion:1}}};
     })}),{candidateSceneIds:[]});
     if (!project) throw new Error('Проект не найден');
-    if (waitForNarration && project.scenes.some(scene => {
-      if(scene.includeInAssembly===false||scene.documentary?.pinned||documentaryMaterialUsable(scene)
-        ||options.sceneIds&&!options.sceneIds.includes(scene.id))return false;
-      const requirement=scene.documentary?.requirement;
-      // Fast planning is local: readiness is the current narration and its
-      // saved queries, not the old paid semantic-planning marker.
-      return this.intelligence?.simpleSelection
-        ?this.queryPlanner?!currentDocumentaryAiSearchPlan(project,scene):requirement?.text!==scene.narration||!requirement?.queries.some(query=>query.trim())
-        :requirement?.plannedBy!=='semantic';
-    })) throw new Error("Сначала подготовьте поисковой план");
+    project=await this.retainAcceptedMaterials(project,options.sceneIds);
     const beforeExcerptRepair=project.scenes;
     const restoredExcerpts=await restoreDocumentaryExcerptReviews(project,this.storage.projectDirectory(projectId));
     if(restoredExcerpts.some((scene,index)=>scene!==beforeExcerptRepair[index]))
@@ -2591,7 +2681,7 @@ export class DocumentaryProjectService {
       if(issue)savedReviewIssues.set(scene.id,issue);
     }
     if(this.intelligence?.savedMotionIssue)for(const scene of project.scenes){
-      if(options.sceneIds&&!options.sceneIds.includes(scene.id)||scene.includeInAssembly===false)continue;
+      if(options.sceneIds&&!options.sceneIds.includes(scene.id)||scene.includeInAssembly===false||documentaryRetainedApproval(scene,project))continue;
       const work=async()=>await this.intelligence!.savedMotionIssue?.(project,scene);
       const kind=scene.documentary?.selected?.kind??'video';session.resume(scene.id);
       try{
@@ -2605,6 +2695,7 @@ export class DocumentaryProjectService {
     project = await this.projects.mutate(projectId, current => {
       const scenes=current.scenes.map(scene => {
       const doc=scene.documentary,graphic=doc?.motionGraphic;
+      if(documentaryRetainedApproval(scene,current))return scene;
       // Retire the old automatic comparison only while the saved media proof is valid.
       if((!options.sceneIds||options.sceneIds.includes(scene.id))&&doc?.verified&&!doc.pinned&&doc.selected
         &&doc.visualReview?.status==='accepted'&&graphic?.enabled&&graphic.origin==='automatic'&&graphic.kind==='map-route'&&graphic.routeComparison){
@@ -2654,6 +2745,7 @@ export class DocumentaryProjectService {
     const scenes = project.scenes.filter(scene => inScope(scene) && scene.includeInAssembly !== false).sort((a, b) => a.order - b.order);
     if (scenes.length && (options.force || scenes.some(scene => !documentaryMaterialUsable(scene))) && (!this.intelligence || !await this.intelligence.available())) throw new DocumentaryAnalysisError("Для проверки реальных кадров нужен доступный AnyModel",'unavailable');
     const failures: AutoStockSelectionResult["failures"] = [];
+    await this.authorizeKnownEmptyReviews(project,options.sceneIds);
     const recoveredContext=await readDocumentaryContextRecovery(this.storage.projectDirectory(projectId));
     const reviewIdentity=this.intelligence?.simpleSelection?await this.intelligence.selectionReviewIdentity?.():undefined;
     const retryEvidence=reviewIdentity&&this.intelligence?.inspectForSelection
@@ -2702,6 +2794,12 @@ export class DocumentaryProjectService {
       if (this.stopRequested.has(projectId)) return;
       let project = (await this.projects.get(projectId,{omitCandidates:true}))!;
       scene=project.scenes.find(item=>item.id===scene.id)!;
+      if(this.queryPlanner&&!scene.documentary?.verified&&!scene.documentary?.pinned&&!currentDocumentaryAiSearchPlan(project,scene)){
+        const message=scene.documentary?.autoError||'Для этой сцены AI-план ещё не готов. Остальные сцены продолжают подбор.';
+        await changeScene(scene.id,current=>({...current,documentary:{...current.documentary!,autoError:message}}));
+        failures.push(documentarySelectionFailure(scene,{message,fallbackCategory:'no-results'}));
+        completed++;return;
+      }
       const terminalEmptyKeys=settledEmptySourceKeys(emptySources.get(scene.id));
       if(scene.documentary?.pinned&&await documentarySelectedMaterialMissing(scene)){
         failures.push(documentarySelectionFailure(scene,{message:documentaryMissingSelectedMaterialMessage,fallbackCategory:'download'}));
@@ -2801,7 +2899,7 @@ export class DocumentaryProjectService {
             await changeScene(scene.id,current=>({...current,documentary:{...current.documentary!,autoError:error.message}}));
             throw error;
           }
-          pendingVideoReview=scene.documentary?.selected?.kind==='video'&&error instanceof DocumentaryAnalysisError&&error.kind==='pending';
+          pendingVideoReview=scene.documentary?.selected?.kind==='video'&&error instanceof DocumentaryAnalysisError&&error.kind==='pending'&&error.requestSent;
           recordDiagnosticEvent('info','documentary.analysis.saved-context-not-restored',{projectId,sceneId:scene.id,reason:error instanceof Error?error.name:'Error',paidRequests:preparedSubmissionAttempted?'unknown':0});
         }
       }
@@ -2981,7 +3079,8 @@ export class DocumentaryProjectService {
         const retryProbes=new Map<string,Promise<void>>();
         const retryFor=(candidate:DocumentaryCandidate)=>admittedRetries.get(retryCandidateKey(candidate));
         const hasGroundedGrant=(candidate:DocumentaryCandidate)=>candidate.provider==='local'
-          &&Boolean(retryEvidence?.grants.some(grant=>grant.groundedNarration===scene.narration&&candidate.id==='local:'+grant.binding.checksum));
+          &&Boolean(retryEvidence?.grants.some(grant=>(grant.groundedNarration===scene.narration
+            ||grant.priorState==='empty'&&grant.visualQuestion?.narration===scene.narration)&&candidate.id==='local:'+grant.binding.checksum));
         const isUncertain=(candidate:DocumentaryCandidate)=>!retryFor(candidate)&&(hasGroundedGrant(candidate)
           ||uncertainCandidateFingerprints(candidate).some(key=>uncertainCandidates.has(key)));
         const probeRetry=(candidate:DocumentaryCandidate,taskScene:Scene,savedSource?:typeof preparedSources[number]):Promise<void>|undefined=>{
@@ -3380,7 +3479,8 @@ export class DocumentaryProjectService {
           const namedShortlist=!quick&&!localOnly?documentaryNamedMetadataShortlist(localOrder,discovery,scene.narration):[];
           retryDirectStill=Boolean(directStill);
           let attempts = this.intelligence!.simpleSelection?preferUnusedDocumentaryCandidates(latestProject,scene,
-            selectSimpleDocumentaryCandidates([...namedShortlist,...localOrder],candidatePriority)):(namedShortlist.length?documentaryCandidateAttempts(localOrder,searchSubjects,namedShortlist):directStill?[directStill]:quick ? earlyCandidates : fastThematic.length?fastThematic:documentaryCandidateAttempts(localOrder, searchSubjects))
+            selectSimpleDocumentaryCandidates([...namedShortlist,...localOrder],candidatePriority),false,
+            candidate=>documentaryCandidatePriorityScore(candidate,candidatePriority)):(namedShortlist.length?documentaryCandidateAttempts(localOrder,searchSubjects,namedShortlist):directStill?[directStill]:quick ? earlyCandidates : fastThematic.length?fastThematic:documentaryCandidateAttempts(localOrder, searchSubjects))
             .filter(candidate=>!documentaryThematicMetadataIssue(requirement,candidate,project.videoBrief?.readyScript??''))
             .sort((a,b)=>Number(slowStockProviders.has(a.provider))-Number(slowStockProviders.has(b.provider)));
           if(!quick&&!localOnly&&shortProbe&&!attempts.includes(shortProbe))attempts.unshift(shortProbe);
@@ -3397,7 +3497,7 @@ export class DocumentaryProjectService {
               message=>this.publish({projectId,phase:'preparing',completed,total:scenes.length,selected,skipped,failed:failures.length,currentSceneId:scene.id,message}),
               ()=>Boolean(fatal)||this.stopRequested.has(projectId)); }
             catch (error) {
-              if (!(error instanceof DocumentaryAnalysisError) || error.kind !== "pending") throw error;
+              if (!(error instanceof DocumentaryAnalysisError) || !['pending','empty'].includes(error.kind)) throw error;
               await changeScene(scene.id, current => ({ ...current, documentary: { ...current.documentary!, autoError: error.message } }));
               // Metadata ranking is optional. Keep the bounded local shortlist;
               // actual-frame validation below is still mandatory for approval.
@@ -3462,10 +3562,10 @@ export class DocumentaryProjectService {
                 {retryChecksum:selectionRetry?.checksum??savedChecksums.get(retryCandidateKey(candidate)),binding:resumeBinding,onLocalReuse:reservePhoto?()=>{reusedLocalCopy=true;}:undefined}); }
               catch (error) {
                 if (error instanceof DocumentaryStorageUnavailableError || (error as NodeJS.ErrnoException)?.code === "ENOSPC") throw error;
-                if(error instanceof DocumentaryAnalysisError&&error.kind!=='pending')throw error;
+                if(error instanceof DocumentaryAnalysisError&&!['pending','empty'].includes(error.kind))throw error;
                 if(error instanceof DocumentaryAnalysisError&&error.kind==='pending'){
-                  if(kind==='video')pendingVideoReview=true;
-                  await rememberUncertain(candidate);
+                  if(kind==='video'&&error.requestSent)pendingVideoReview=true;
+                  if(error.requestSent)await rememberUncertain(candidate);
                 }
                 const message = error instanceof Error ? error.message : String(error);
                 if(kind==='video'&&(candidate.provider==='pexels'||candidate.provider==='pixabay')&&!candidate.localPath
@@ -3473,7 +3573,8 @@ export class DocumentaryProjectService {
                   slowStockProviders.add(candidate.provider);
                   recordDiagnosticEvent('info','documentary.download.provider-short-only',{projectId,sceneId:scene.id,provider:candidate.provider});
                 }
-                if(kind==='video'&&!(error instanceof DocumentaryCandidateRejected)){
+                if(kind==='video'&&!(error instanceof DocumentaryCandidateRejected)
+                  &&!(error instanceof DocumentaryAnalysisError&&error.kind==='empty')){
                   videoOperationalError=true;
                   session.blockPhotoFallback(scene.id);
                 }
@@ -3547,10 +3648,10 @@ export class DocumentaryProjectService {
                 try {
                   if(!selectionRetry)await this.intelligence!.prepareSource?.(project, current, message => this.publish({ projectId, phase: "preparing", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id, message }), () => Boolean(fatal) || this.stopRequested.has(projectId));
                 } catch (error) {
-                  if (!(error instanceof DocumentaryAnalysisError) || error.kind !== "pending") throw error;
-                  if(kind==='video'){pendingVideoReview=true;session.blockPhotoFallback(scene.id);}
+                  if (!(error instanceof DocumentaryAnalysisError) || !['pending','empty'].includes(error.kind)) throw error;
+                  if(kind==='video'&&error.kind==='pending'&&error.requestSent){pendingVideoReview=true;session.blockPhotoFallback(scene.id);}
                   blockedCatalogs.add(documentaryCandidateKey(candidate));
-                  await rememberUncertain(candidate,current.documentary?.checksum);
+                  if(error.kind==='pending'&&error.requestSent)await rememberUncertain(candidate,current.documentary?.checksum);
                   await changeScene(scene.id, latest => ({ ...latest, documentary: { ...latest.documentary!, autoError: error.message } }));
                   continue;
                 }
@@ -3608,10 +3709,10 @@ export class DocumentaryProjectService {
                     :{review:await this.intelligence!.inspect(project,current),usedNewAnalysis:true};
                 }
               } catch (error) {
-                if (!(error instanceof DocumentaryAnalysisError) || error.kind !== "pending") throw error;
-                if(kind==='video'){pendingVideoReview=true;session.blockPhotoFallback(scene.id);}
+                if (!(error instanceof DocumentaryAnalysisError) || !['pending','empty'].includes(error.kind)) throw error;
+                if(kind==='video'&&error.kind==='pending'&&error.requestSent){pendingVideoReview=true;session.blockPhotoFallback(scene.id);}
                 if (error.purpose === "video-catalog") blockedCatalogs.add(documentaryCandidateKey(candidate));
-                await rememberUncertain(candidate,current.documentary?.checksum);
+                if(error.kind==='pending'&&error.requestSent)await rememberUncertain(candidate,current.documentary?.checksum);
                 primaryPhotoRejection = undefined;
                 await changeScene(scene.id, latest => ({ ...latest, documentary: { ...latest.documentary!, autoError: error.message } }));
                 this.publish({ projectId, phase: "applying", completed, total: scenes.length, selected, skipped, failed: failures.length, currentSceneId: scene.id,
@@ -4305,7 +4406,7 @@ export class DocumentaryProjectService {
         const partial=commissionedArtwork?.incomplete??(artworkOutcome.incomplete
           ?artworkOutcome.message.match(/План частичный: ([\s\S]*)$/u)?.[1]??'сохранена доступная часть плана.':undefined);
         artworkOutcome={...artworkOutcome,message:`AI-графика: ${accepted===undefined?'':`принято ${accepted}, `}прикреплено ${attached}, в монтаже ${used}${commissionedArtwork?` · ${commissionedArtwork.model}`:''}.`
-          +(skipped.length?` Не применены: ${skipped.slice(0,3).map(row=>row.scene?`сцена ${row.scene}`:row.sceneId).join(', ')}${skipped.length>3?`; ещё ${skipped.length-3}`:''}; ответы сохранены.`:'')
+          +(skipped.length?` Не применены: ${skipped.slice(0,3).map(row=>`${row.scene?`сцена ${row.scene}`:row.sceneId} — ${row.reason}`).join('; ')}${skipped.length>3?`; ещё ${skipped.length-3}`:''}; ответы сохранены.`:'')
           +(commissionedArtwork?.rejected.length?` Отклонено при проверке: ${commissionedArtwork.rejected.length}.`:'')
           +(partial?` План частичный: ${partial}`:'')};
       }
@@ -4321,6 +4422,8 @@ export class DocumentaryProjectService {
 
   async refreshMontage(projectId: string): Promise<Project> {
     if(this.autoRuns.has(projectId))throw new Error('Дождитесь завершения подбора материалов');
+    const saved=await this.projects.get(projectId);
+    if(saved)await this.retainAcceptedMaterials(saved);
     await this.projects.mutate(projectId,current=>{
       if(current.mediaMode!=='stock'||current.settings.assembly.documentary?.version!==2)throw new Error('Откройте Stock Documentary v2');
       if(current.status==='generating'||current.status==='paused')throw new Error('Сначала завершите или остановите производство');
@@ -4356,6 +4459,11 @@ export class DocumentaryProjectService {
       }) }),{candidateSceneIds:[]});
       await this.storage.ensureProject(project);
     }
+    const assets=this.library?(await this.library.snapshot()).assets:[];
+    const summary=documentaryEffectSummary(project,assets);
+    project=await this.projects.mutate(projectId,current=>({settings:{...current.settings,assembly:{...current.settings.assembly,
+      documentary:{...current.settings.assembly.documentary!,effectsStatus:{audio:summary.sounds,transitions:summary.transitions,message:summary.message}}}}}),{candidateSceneIds:[]});
+    await this.storage.ensureProject(project);
     return project;
   }
 

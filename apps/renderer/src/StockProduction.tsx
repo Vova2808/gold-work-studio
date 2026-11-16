@@ -1,14 +1,12 @@
 import { Check, Clapperboard, Download, Film, ListChecks, Volume2 } from "lucide-react";
 import {useEffect,useRef,useState} from 'react';
-import { projectEditorReady } from '@gold-work/shared';
+import { projectEditorReady,documentarySceneReady } from '@gold-work/shared';
 import { documentaryVideoCoverage, documentaryManualReviewReady, type AutoStockProgress, type Project, type QueueTask, type Scene } from "@gold-work/shared";
 import { stockVideoTarget } from "./stock-workflow-settings";
 import {documentaryMaterialReviewNote,documentaryProviderLabels} from './documentary-material-review';
 
 export function materialReady(scene: Scene): boolean {
-  const doc=scene.documentary,g=doc?.motionGraphic;
-  const native=doc?.verified&&!doc.selected&&!scene.imagePath&&!scene.videoPath&&g?.enabled&&g.origin==='automatic'&&g.title.trim()&&g.durationSeconds>0;
-  return Boolean(documentaryManualReviewReady(scene)||native||doc?.verified&&doc.selected&&(doc.selected.kind==='video'?scene.videoPath:scene.imagePath));
+  return documentarySceneReady(scene);
 }
 
 export function stockMaterialApplied(scene: Scene): boolean {
@@ -24,7 +22,7 @@ export function stockProductionState(project: Project, tasks: QueueTask[], incom
   const scenes = project.scenes.filter(scene => scene.includeInAssembly !== false);
   const total = scenes.length;
   const speechDone = scenes.filter(scene => scene.audioPath).length;
-  const ready = scenes.filter(materialReady);
+  const ready = scenes.filter(scene=>documentarySceneReady(scene,undefined,project));
   const planned = scenes.filter(scene => {const req=scene.documentary?.requirement;return req?.plannedBy==='semantic'
     ||req?.fastPlanVersion===1&&req.text===scene.narration&&req.queries.some(query=>query.trim());}).length;
   const materialsActive = Boolean(progress && !["complete", "failed", "stopped"].includes(progress.phase));
@@ -161,7 +159,7 @@ export function ArtworkFeedbackAction({project,onRevise,disabled=false}:{project
 export function StockMaterialQueue({ project, progress, onReview }: { project: Project; progress: AutoStockProgress | null; onReview?: (sceneId:string)=>void }) {
   return <div className="stock-material-queue" aria-label="Подбор материалов по сценам">
     {project.scenes.filter(scene => scene.includeInAssembly !== false).map(scene => {
-      const ready = materialReady(scene);
+      const ready = documentarySceneReady(scene,undefined,project);
       const pending = documentaryManualReviewReady(scene);
       const active = progress?.currentSceneId === scene.id && !["complete", "failed", "stopped"].includes(progress.phase);
       const kind = ready ? scene.documentary?.selected?.kind : scene.documentary?.requirement.preferredKind;
