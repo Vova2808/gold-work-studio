@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -88,4 +88,29 @@ test('query repair and bounded supplement share the original attempt budget',asy
   assert.equal(result.selected,1);
   assert.equal(result.failed,1);
   assert.deepEqual(result.failures.map(item=>item.sceneId),['unchanged']);
+});
+
+test('a budget flush failure releases the run lock so a repaired ledger can continue without restarting',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'gws-budget-flush-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,'Documentary','selection-budget.json');
+  let project={id:'flush',settings:createDefaultProjectSettings(),scenes:[]} as unknown as Project;
+  const projects={get:async()=>project,mutate:async(_id:string,change:(p:Project)=>Partial<Project>)=>{
+    project={...project,...change(project)};return project;
+  }};
+  const phases:string[]=[];
+  const service=new DocumentaryProjectService(projects as never,
+    {projectDirectory:()=>root,ensureProject:async()=>root} as never,{} as never,root,{} as never,event=>phases.push(event.phase));
+  let calls=0,ledger='';
+  (service as unknown as {selectAll:()=>Promise<AutoStockSelectionResult>}).selectAll=async()=>{
+    if(++calls===1){ledger=await readFile(path,'utf8');await writeFile(path,'broken ledger');}
+    return {project,total:0,selected:0,skipped:0,failed:0,failures:[]};
+  };
+  const first=service.autoSelect(project.id),sameRun=service.autoSelect(project.id);
+  await Promise.all([assert.rejects(first,/сохранённый бюджет/),assert.rejects(sameRun,/сохранённый бюджет/)]);
+  assert.equal(calls,1,'Concurrent callers wait for the same durable flush outcome');
+  assert.equal(phases.at(-1),'failed');
+  await writeFile(path,ledger);
+  const resumed=await service.autoSelect(project.id);
+  assert.equal(resumed.failed,0);assert.equal(calls,2);
 });

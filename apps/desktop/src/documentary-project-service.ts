@@ -2422,7 +2422,7 @@ export class DocumentaryProjectService {
         message:result.failed?`Не подтверждены материалы ${result.failed} сцен. Готовые кадры сохранены.`:'Все материалы проверены и сохранены.'});
       return result;
     })();
-    this.autoRuns.set(projectId,run);
+    const finalized=(async()=>{
     try{return await run;}
     catch(error){
       const stopped=this.stopRequested.has(projectId)||error instanceof Error&&error.name==='AbortError';
@@ -2431,13 +2431,23 @@ export class DocumentaryProjectService {
       throw error;
     }
     finally{
-      await session?.drain();
       try{
-        const root=join(this.storage.projectDirectory(projectId),'Documentary');await mkdir(root,{recursive:true});
-        if(session)await atomicWrite(join(root,'selection-run.json'),JSON.stringify({version:1,limits:documentaryWorkLimits,scenes:session.snapshot()},null,2));
-      }catch{recordDiagnosticEvent('warn','documentary.selection.budget-report-unavailable',{projectId});}
-      this.autoRuns.delete(projectId);this.downloadControllers.delete(projectId);this.narrationWaits.delete(projectId);
+        await session?.drain();
+        try{
+          const root=join(this.storage.projectDirectory(projectId),'Documentary');await mkdir(root,{recursive:true});
+          if(session)await atomicWrite(join(root,'selection-run.json'),JSON.stringify({version:1,limits:documentaryWorkLimits,scenes:session.snapshot()},null,2));
+        }catch{recordDiagnosticEvent('warn','documentary.selection.budget-report-unavailable',{projectId});}
+      }catch(error){
+        this.publish({projectId,phase:'failed',completed:0,total,selected:0,skipped:0,failed:0,
+          message:error instanceof Error?error.message:String(error)});
+        throw error;
+      }finally{
+        this.autoRuns.delete(projectId);this.downloadControllers.delete(projectId);this.narrationWaits.delete(projectId);
+      }
     }
+    })();
+    this.autoRuns.set(projectId,finalized);
+    return finalized;
   }
 
   private async repairFailedIdentities(projectId: string, sceneIds?: string[]): Promise<string[]> {
