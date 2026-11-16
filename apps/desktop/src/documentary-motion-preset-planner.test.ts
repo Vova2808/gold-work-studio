@@ -51,25 +51,25 @@ test('neighboring ordinary phrases keep meaning without repeated preset choreogr
   assert.ok(first.every(g=>g&&g.startSeconds+g.durationSeconds<=6),'the same literal emphasis remains readable inside its own scene');
   const marked=createDocumentaryMotionPresetPlanner(p);
   const marker=(title:string)=>graphic('key-point',{title,variant:'marker',highlight:title});
-  assert.equal(marked.apply(p.scenes[0]!,marker('The decisive change 0'),6)?.preset,'source-emphasis');
+  assert.equal(marked.apply(p.scenes[0]!,marker('The decisive change 0'),6)?.preset,'type-ribbon');
   const quiet=marked.apply(p.scenes[1]!,marker('The decisive change 1'),6)!;
   assert.equal(quiet.preset,'source-emphasis');assert.equal(quiet.highlight,'The decisive change 1');
-  assert.equal(marked.apply(p.scenes[2]!,marker('Ferrari has been beaten'),6)?.preset,'source-emphasis');
-  assert.equal(marked.apply(p.scenes[3]!,marker('Money, power, control'),6)?.preset,'source-emphasis');
+  assert.equal(marked.apply(p.scenes[2]!,marker('Ferrari has been beaten'),6)?.preset,'type-echo');
+  assert.equal(marked.apply(p.scenes[3]!,marker('Money, power, control'),6)?.preset,'type-stack');
   const authored=graphic('key-point',{title:'A deliberate repeated effect',preset:'type-ribbon',startSeconds:1,durationSeconds:4});
   assert.deepEqual(marked.apply(p.scenes[4]!,authored,6),authored,'an explicit preset and timing are not overridden');
   const manual={...authored,origin:'manual' as const};assert.deepEqual(marked.apply(p.scenes[5]!,manual,6),manual);
   const intentional=createDocumentaryMotionPresetPlanner(p),same=graphic('key-point',{title:'The same recurring thesis',variant:'poster'});
-  assert.equal(intentional.apply(p.scenes[0]!,same,6)?.preset,'source-emphasis');
-  assert.equal(intentional.apply(p.scenes[1]!,same,6)?.preset,'source-emphasis','a recurring emphasis keeps the same treatment');
+  assert.equal(intentional.apply(p.scenes[0]!,same,6)?.preset,'type-slam');
+  assert.equal(intentional.apply(p.scenes[1]!,same,6)?.preset,'type-slam','a recurring emphasis keeps the same treatment');
   const examples:[DocumentaryMotionGraphic,DocumentaryMotionGraphic['preset']][]=[
-    [graphic('key-point',{title:'Ferrari has been beaten'}),'source-emphasis'],
-    [graphic('key-point',{title:'Фаворит побеждён'}),'source-emphasis'],
-    [graphic('chronology',{title:'',value:'1966'}),'source-emphasis'],
-    [graphic('chronology',{title:'',value:'June 19, 1966'}),'source-emphasis'],
-    [graphic('statistic',{title:'',hideTitle:true,value:'Only 3 of 8',showSource:false}),'source-emphasis'],
-    [graphic('statistic',{title:'',hideTitle:true,value:'40 inches',showSource:false}),'source-emphasis'],
-    [graphic('statistic',{title:'',hideTitle:true,value:'40 km/h',showSource:false}),'source-emphasis'],
+    [graphic('key-point',{title:'Ferrari has been beaten'}),'type-echo'],
+    [graphic('key-point',{title:'Фаворит побеждён'}),'type-echo'],
+    [graphic('chronology',{title:'',value:'1966'}),'date-ruler'],
+    [graphic('chronology',{title:'',value:'June 19, 1966'}),'date-calendar'],
+    [graphic('statistic',{title:'',hideTitle:true,value:'Only 3 of 8',showSource:false}),'stat-split'],
+    [graphic('statistic',{title:'',hideTitle:true,value:'40 inches',showSource:false}),'stat-ticket'],
+    [graphic('statistic',{title:'',hideTitle:true,value:'40 km/h',showSource:false}),'stat-ticket'],
     [graphic('explainer',{title:'',hideTitle:true,boardLayout:'compare',cards:[{label:'money'},{label:'control'}]}),'board-ledger'],
     [graphic('explainer',{title:'',hideTitle:true,boardLayout:'parts',cards:[{label:'brakes'},{label:'cooling'},{label:'transmission'}]}),'board-cascade'],
     [graphic('explainer',{title:'',hideTitle:true,boardLayout:'steps',cards:[{label:'prepare'},{label:'test'}]}),'board-staircase'],

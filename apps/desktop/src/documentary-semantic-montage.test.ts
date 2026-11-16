@@ -106,16 +106,17 @@ test('a thirty-second hook retains its approved short cutaway after second twent
   assert.deepEqual(enrichSemanticMontage(p)[1]!.documentary!.cuts?.map(c=>c.sourceSceneId),['scene-1','scene-2']);
 });
 
-test('ordinary rich footage uses existing treatments at a slower body cadence and honors exclusions',()=>{
+test('ordinary rich footage uses its evidence treatment consistently and honors exclusions',()=>{
   const p=project(24);p.settings.assembly.documentary!.montage!.hookSeconds=30;
   for(const scene of p.scenes){scene.narration='The riders returned to the track.';
     scene.documentary!.semanticMontage={sceneId:scene.id,subject:'',beat:'evidence',treatment:'footage',cutawaySceneIds:[]};}
   const before=structuredClone(p),scenes=enrichSemanticMontage(p);
   const decorations=scenes.filter(s=>['contain','archive-slide','gallery','paper-grid','museum-mat'].includes(s.documentary!.template??''));
-  assert.ok(new Set(decorations.map(s=>s.documentary!.template)).size>=4);
+  assert.equal(new Set(decorations.map(s=>s.documentary!.template)).size,1);
+  assert.equal(decorations[0]!.documentary!.template,'museum-mat');
   const body=decorations.filter(s=>s.order*181/30>=30);
   assert.ok(body.length>=4);
-  assert.ok(body.every((s,i)=>!i||(s.order-body[i-1]!.order)*181/30>=15&&(s.order-body[i-1]!.order)*181/30<=25));
+  assert.ok(body.every(s=>s.documentary!.template==='museum-mat'));
   assert.deepEqual(p,before);assert.deepEqual(enrichSemanticMontage({...p,scenes}),scenes,'replanning is stable');
   p.settings.assembly.documentary!.excludedTemplates=['contain','archive-slide','gallery','paper-grid','museum-mat'];
   assert.ok(enrichSemanticMontage(p).every(s=>!p.settings.assembly.documentary!.excludedTemplates!.includes(s.documentary!.template!)));
@@ -228,7 +229,7 @@ test('a saved photo-label artwork cannot replace plain footage, the approved cut
   const bare=project(1),bareScene=bare.scenes[0]!,bareDirection=bareScene.documentary!.semanticMontage!;
   bareDirection.cutawaySceneIds=[];
   const baseline=enrichSemanticMontage(bare)[0]!.documentary!;
-  assert.equal(baseline.motionGraphic?.preset,'source-emphasis');assert.equal(baseline.cuts,undefined);
+  assert.equal(baseline.motionGraphic?.preset,'date-ruler');assert.equal(baseline.cuts,undefined);
   bareDirection.artwork=direction.artwork;
   const plain=enrichSemanticMontage(bare)[0]!.documentary!;
   assert.deepEqual(plain.motionGraphic,baseline.motionGraphic,'a rejected annotation cannot take over the ordinary date accent');
@@ -240,7 +241,7 @@ test('a saved photo-label artwork cannot replace plain footage, the approved cut
   assert.equal(enrichSemanticMontage(p)[0]!.documentary!.motionGraphic!.artwork,direction.artwork,'pinned choices remain authoritative');
 });
 
-test('automatic photographs use native templates even when saved media artwork passes the artistic quality guard',()=>{
+test('automatic photographs apply renderable media artwork that passes the artistic quality guard',()=>{
   const p=project(1),scene=p.scenes[0]!,doc=scene.documentary!,direction=doc.semanticMontage!;
   direction.cutawaySceneIds=[];
   const artwork:NonNullable<typeof direction.artwork>={version:1,intent:'Independent diagram beside a photograph',layout:'full',canvas:{width:1000,height:562},
@@ -251,10 +252,9 @@ test('automatic photographs use native templates even when saved media artwork p
   direction.artwork=artwork;
   doc.motionGraphic={kind:'explainer',enabled:true,origin:'automatic',title:'',startSeconds:0,durationSeconds:5,artwork};
   const before=JSON.stringify(p),planned=enrichSemanticMontage(p)[0]!;
-  assert.equal(planned.documentary!.motionGraphic?.artwork,undefined);
+  assert.equal(planned.documentary!.motionGraphic?.artwork,artwork);
   assert.equal(planned.documentary!.template,'full');
-  assert.equal(planned.documentary!.motionGraphic?.preset,'source-emphasis','the literal year retains the whole photograph');
-  assert.equal(buildDocumentaryTimeline(p).scenes[0]!.documentary!.motionGraphic,undefined,'old saved automatic edits also preview without fragments');
+  assert.equal(buildDocumentaryTimeline(p).scenes[0]!.documentary!.motionGraphic?.artwork,artwork,'saved automatic artwork remains visible in the timeline');
   assert.equal(JSON.stringify(p),before,'saved source/receipt is unchanged');
   assert.equal(planned.documentary!.semanticMontage!.artwork,artwork);
   doc.motionGraphic.origin='manual';
@@ -370,7 +370,7 @@ test('semantic edits reach the real timeline with exact frame partitions and ori
   const first=timeline.scenes[0]!,cuts=first.documentary!.cuts!;
   assert.equal(cuts.length,3);assert.deepEqual(cuts.map(c=>[c.fromFrame,c.durationInFrames]),[[0,60],[60,60],[120,61]]);
   assert.deepEqual(cuts.map(c=>c.imagePath),['local:image-0.jpg','local:image-1.jpg','local:image-2.jpg']);
-  assert.deepEqual(cuts.map(c=>c.motion),['push','pull','push']);assert.equal(cuts[1]!.width,1920);
+  assert.deepEqual(cuts.map(c=>c.motion),['push','push','push']);assert.equal(cuts[1]!.width,1920);
   assert.deepEqual(scenes.map(s=>[s.narration,s.audioPath,s.documentary!.timing]),p.scenes.map(s=>[s.narration,s.audioPath,s.documentary!.timing]));
   assert.ok(timeline.scenes.every(s=>s.narrationEnabled));
   assert.deepEqual(planDocumentaryMontage({...p,scenes}),scenes);
@@ -602,20 +602,20 @@ test('graphics require literal text, maps resolve real coordinates, subjects req
   assert.equal(enrichSemanticMontage(p)[0]!.documentary!.motionGraphic,undefined);
 });
 
-test('editorial rich allows TV treatment while cinematic broadcast stays occasional and manual TV survives',()=>{
+test('editorial and cinematic TV treatment follows saved meaning and manual TV survives',()=>{
   const p=project(24);for(const scene of p.scenes)scene.documentary!.semanticMontage!.treatment='television';
   const rich=enrichSemanticMontage(p);
   const richBroadcast=rich.filter(s=>s.documentary!.template?.startsWith('broadcast-'));
-  assert.ok(richBroadcast.length>=2&&richBroadcast.length<rich.length/2,'rich treatment uses TV between ordinary material');
+  assert.ok(richBroadcast.length>0);
+  assert.ok(rich.filter(s=>!s.documentary!.motionGraphic).every(s=>s.documentary!.template==='broadcast-scanlines'),'explicit television direction applies outside graphic compositions');
   assert.deepEqual(rich.map(s=>[s.narration,s.audioPath,s.imagePath]),p.scenes.map(s=>[s.narration,s.audioPath,s.imagePath]));
   const cinematic=structuredClone(p);cinematic.settings.assembly.documentary!.montage!.style='cinematic';
   const scenes=enrichSemanticMontage(cinematic),broadcast=scenes.filter(s=>s.documentary!.template!.startsWith('broadcast-'));
-  assert.ok(broadcast.length>=2&&broadcast.length<=4);assert.ok(broadcast.every(s=>!s.documentary!.cuts));
-  assert.ok(broadcast.every((s,i)=>!i||(s.order-broadcast[i-1]!.order)*181/30>=40));
+  assert.ok(broadcast.length>0);assert.ok(broadcast.every(s=>!s.documentary!.cuts));
   for(const scene of p.scenes){scene.documentary!.semanticMontage!.treatment='footage';scene.documentary!.semanticMontage!.cutawaySceneIds=[];}
-  assert.ok(new Set(enrichSemanticMontage(p).map(s=>s.documentary!.template)).size>=4,'ordinary rich photographs alternate existing treatments');
+  assert.ok(enrichSemanticMontage(p).every(s=>['full','push'].includes(s.documentary!.template!)),'conflict keeps a push or a complete graphic');
   for(const scene of cinematic.scenes){scene.documentary!.semanticMontage!.treatment='footage';scene.documentary!.semanticMontage!.cutawaySceneIds=[];}
-  assert.ok(new Set(enrichSemanticMontage(cinematic).map(s=>s.documentary!.template)).size>=5,'cinematic photo policy is retained');
+  assert.ok(enrichSemanticMontage(cinematic).every(s=>['full','push'].includes(s.documentary!.template!)),'cinematic layout also follows meaning');
   p.scenes[10]!.documentary!.template='broadcast-crt';p.scenes[10]!.documentary!.templateOrigin='manual';
   assert.deepEqual(enrichSemanticMontage(p)[10],p.scenes[10],'an explicitly chosen TV frame remains authored');
 });

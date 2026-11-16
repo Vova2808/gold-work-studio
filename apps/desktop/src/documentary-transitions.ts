@@ -39,8 +39,7 @@ export function planDocumentaryTransitions(project: Project): Scene[] {
   const included = [...project.scenes].filter(s => s.includeInAssembly !== false).sort((a,b) => a.order-b.order);
   const changes = new Map<string, Scene>();
   const density = settings.montage?.intensity ?? settings.montageDensity ?? 'rich';
-  let transitions = 0;
-  let cursor = 0, lastTransition = -Infinity;
+  let cursor = 0;
   const seconds = (s: Scene) => Math.max((s.documentary?.timing?.durationInFrames ?? Math.ceil(s.durationSeconds * 30)) / 30, s.durationOverrideSeconds ?? 0);
   for (let i=0;i<included.length;i++) {
     const left=included[i]!, right=included[i+1]; cursor+=seconds(left);
@@ -51,34 +50,34 @@ export function planDocumentaryTransitions(project: Project): Scene[] {
       continue;
     }
     if (left.transition !== undefined || left.transitionDurationSeconds !== undefined) {
-      if (left.transition !== 'none' && left.transitionDurationSeconds !== 0) lastTransition=cursor;
       continue;
     }
     const l=left.documentary, r=right.documentary;
     const illustrativeInsert=l.semanticMontage?.cutawayMode==='replace'||r.semanticMontage?.cutawayMode==='replace';
     const librarySeam=[...l.effects,...r.effects].some(e=>e.kind!=='audio'&&e.boundary?.from===left.id&&e.boundary.to===right.id);
-    const {continuing,chapter,section,era,meaningful,inHook,hasMedia}=documentaryBoundaryContext(project,left,right,cursor);
+    const {continuing,chapter,section,era,semantic,meaningful,hasMedia}=documentaryBoundaryContext(project,left,right,cursor);
     const sameSection=Boolean(l.requirement.sectionTitle?.trim()&&l.requirement.sectionTitle.trim()===r.requirement.sectionTitle?.trim());
     const sameSubject=l.requirement.identities?.some(a=>r.requirement.identities?.some(b=>a.name.toLowerCase()===b.name.toLowerCase()));
     // Short blends connect related photographs without making every shot a
     // transition or overlapping/truncating narration. Real moving shots keep cuts.
     const photoLink=Boolean(left.imagePath&&right.imagePath&&!left.videoPath&&!right.videoPath&&left.imagePath!==right.imagePath
       &&!l.motionGraphic?.enabled&&!r.motionGraphic?.enabled&&(sameSection||sameSubject));
-    const ordinaryLink=density==='rich'&&hasMedia;
-    const gap=settings.montage?(inHook?(density==='rich'?6:density==='balanced'?8:10):(density==='rich'?16:density==='balanced'?22:30))
-      :density==='calm'?16:density==='rich'?5:photoLink?7:12;
-    const candidate=settings.montage?meaningful||hasMedia&&(inHook||density==='rich'):meaningful||photoLink||ordinaryLink;
-    const dissolve=!illustrativeInsert&&!librarySeam&&!continuing&&cursor-lastTransition>=gap&&Math.min(seconds(left),seconds(right))>=1.5&&candidate;
+    const beat=r.semanticMontage?.beat;
+    // Conflict/turn land on a clean cut. Chapters/era changes breathe through
+    // black; related archive photos dissolve. A timer cannot invent a boundary.
+    const hardBeat=semantic&&(beat==='conflict'||beat==='turn');
+    const candidate=!hardBeat&&(meaningful||hasMedia&&photoLink);
+    const dissolve=!illustrativeInsert&&!librarySeam&&!continuing&&Math.min(seconds(left),seconds(right))>=1.5&&candidate;
     // Preserve an explicitly selected all-film transition. This planner only
     // adds occasional accents where the global default is a straight cut.
     const global=project.settings.assembly.transitionType??'none';
-    const autoTransition=illustrativeInsert?'none':dissolve?chapter?'fade':'mix':librarySeam?'none':undefined;
-    if (dissolve||librarySeam)lastTransition=cursor;
+    const autoTransition=illustrativeInsert||hardBeat?'none':dissolve?chapter||era?'fade':'mix':librarySeam?'none':undefined;
     const nextKind=global!=='none'&&!librarySeam&&!illustrativeInsert?undefined:autoTransition;
     const nextDuration=nextKind&&nextKind!=='none'?(chapter?.45:section||era?.35:density==='rich'?.3:.2):undefined;
-    if(nextKind==='mix')transitions++;
+    const televisionChange=l.semanticMontage?.treatment!==r.semanticMontage?.treatment
+      &&(l.semanticMontage?.treatment==='television'||r.semanticMontage?.treatment==='television');
     const autoTransitionStyle=nextKind==='mix'&&density==='rich'
-      ?transitions%4===0?'glitch':transitions%3===0?'blur':undefined:undefined;
+      ?televisionChange?'glitch':semantic&&beat==='resolve'?'blur':undefined:undefined;
     if(left.autoTransition!==nextKind||left.autoTransitionDurationSeconds!==nextDuration||l.autoTransitionStyle!==autoTransitionStyle)
       changes.set(left.id,{...left,autoTransition:nextKind,autoTransitionDurationSeconds:nextDuration,documentary:{...l,autoTransitionStyle}});
   }

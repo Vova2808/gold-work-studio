@@ -11,6 +11,19 @@ import {effectFfmpeg} from './effect-media.js';
 import {montageFrames,montageHookSeconds} from './documentary-semantic-montage.js';
 import {documentaryBoundaryContext,documentaryTransitionLocked} from './documentary-transitions.js';
 
+export function documentaryEffectSummary(project:Project,assets:readonly EffectAsset[]){
+  const included=project.scenes.filter(scene=>scene.includeInAssembly!==false);
+  const effects=included.flatMap(scene=>scene.documentary?.effects.filter(e=>e.enabled&&e.origin==='automatic')??[]);
+  const sounds=effects.filter(e=>e.kind==='audio').length,visuals=effects.length-sounds;
+  const available=assets.filter(asset=>asset.state==='ready'&&asset.automatic&&asset.review==='approved'&&asset.rights==='user-confirmed'&&!asset.deletedAt);
+  const settings=project.settings.assembly.documentary;
+  const enabled=settings?.autoEffects!==false||(settings?.autoTransitions??settings?.autoEffects)!==false;
+  const emptyLibrary=enabled&&available.length===0;
+  return {sounds,visuals,available:available.length,emptyLibrary,
+    message:`Автоэффекты: звуков ${sounds}, визуальных ${visuals}.`+(emptyLibrary?' Библиотека автоматических эффектов пуста: добавьте и одобрите эффекты.'
+      :enabled&&effects.length===0?' Для текущих смысловых событий подходящие эффекты не добавлены.':'')};
+}
+
 /** Audible events follow the cut timeline, with a busy opening and quiet body. */
 export function documentaryMontageSoundEvents(project:Project):Array<{sceneId:string;seconds:number;category:'click'|'transition'}>{
   const settings=project.settings.assembly.documentary,options=settings?.montage;

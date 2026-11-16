@@ -113,7 +113,7 @@ export function createDocumentaryMotionPresetPlanner(project:Project){
       // Remember the narrative request even when it is rendered quietly, so a
       // run of routine phrases does not alternate slam/quiet/slam mechanically.
       if(ordinaryPhrase)previousPhrase={position,preferred:id,text:sourceCopy};
-      const sourceEmphasis=['key-point','chronology','statistic'].includes(graphic.kind)
+      const sourceEmphasis=graphic.kind==='key-point'&&quiet
         &&!diagram&&!graphic.argument&&!graphic.reading&&!graphic.sequenceId&&!photoBeat&&!(graphic.items?.length);
       const preset=sourceEmphasis?'source-emphasis':quiet?undefined:choices.find(p=>p.id===chosen)?.id;
       const planned:DocumentaryMotionGraphic={...graphic,preset,diagram,...(quiet?{variant:'clean' as const}:{}),

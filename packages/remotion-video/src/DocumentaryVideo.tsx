@@ -114,7 +114,7 @@ function DocumentaryFrame({ scene, timeline, visualOnly = false }: { scene: Docu
   const preset=templateVisualActive?documentaryLayoutPreset(template):undefined;
   const design = documentaryDesign(template, templateFrame, templateFrames, timeline.accentColor, doc?.templateMotion,
     !isVideo && !cut && doc?.selected?.width && doc.selected.height
-      ? { width: doc.selected.width, height: doc.selected.height, canvasWidth: timeline.width, canvasHeight: timeline.height } : undefined,doc?.caption.color);
+      ? { width: doc.selected.width, height: doc.selected.height, canvasWidth: timeline.width, canvasHeight: timeline.height } : undefined,doc?.caption.color,true);
   const {moving,direction,transform:photoTransform}=documentaryPhotoTransform(scene,cut,frame);
   const geometry=cut??doc?.selected;
   const narrow = geometry?.width && geometry.height ? geometry.width / geometry.height < timeline.width / timeline.height * 0.88 : false;
@@ -167,13 +167,13 @@ function DocumentaryFrame({ scene, timeline, visualOnly = false }: { scene: Docu
       {(cut?.imagePath || scene.imagePath) && <Img src={resolveMediaSource(cut?.imagePath || scene.imagePath!)} style={{ position: "absolute", width: doc?.layout === "compare" ? "50%" : "100%", height: "100%", objectFit: "cover" }} />}
       {doc?.layout === "compare" && doc.comparison?.imagePath && <Img src={resolveMediaSource(doc.comparison.imagePath)} style={{ position: "absolute", left: "50%", width: "50%", height: "100%", objectFit: "cover" }} />}
     </AbsoluteFill>}
-    {preset&&<DocumentaryPresetDecor template={template} frame={templateFrame} accent={accent} customBackground={effects.some(e=>e.role==='background')} motionEnabled={doc?.templateMotion?.amountPercent!==0}/>}
+    {preset&&<DocumentaryPresetDecor enhanced template={template} frame={templateFrame} accent={accent} customBackground={effects.some(e=>e.role==='background')} motionEnabled={doc?.templateMotion?.amountPercent!==0}/>}
     {graphicActive&&!motionPreset&&!effects.some(e=>e.role==='background')&&!graphic?.kind.startsWith('map-')&&<AbsoluteFill style={{background:paper?'radial-gradient(ellipse at 74% 46%,#dcebdc 0%,#f2f3eb 48%,#faf9f3 100%)':'linear-gradient(110deg,#090f16cc,#090f1688)'}}/>}
     {annotations&&graphic?.cutoutPath&&!effects.some(e=>e.role==='background')&&<><AbsoluteFill style={{background:'#080e12'}}/><Img src={resolveMediaSource(graphic.cutoutPath)} style={{position:'absolute',width:'100%',height:'100%',objectFit:'contain',transform:'scale(1.35)',filter:'blur(3px)',opacity:.12}}/><AbsoluteFill style={{background:`radial-gradient(ellipse,transparent 25%,${accent}30 100%)`}}/></>}
     {focusPanels&&graphic&&<DocumentaryFocusPanels graphic={graphic} frame={graphicFrame} localFrame={frame-graphicStart} material={material}/>}
     {board&&graphic&&<DocumentaryExplainer graphic={graphic} frame={graphicFrame} frames={graphicTotal} material={material} customBackground={effects.some(e=>e.role==='background')} motionEnabled={doc?.templateMotion?.amountPercent!==0}/>}
     {editorialScene&&<DocumentaryEditorialScene template={template} frame={templateFrame} frames={templateFrames} material={material} accent={accent} motionEnabled={doc?.templateMotion?.amountPercent!==0} customBackground={effects.some(e=>e.role==='background')}/>}
-    {studioScene&&<DocumentaryStudioScene template={template} frame={templateFrame} frames={templateFrames} material={material} accent={accent} customBackground={effects.some(e=>e.role==='background')} motionEnabled={doc?.templateMotion?.amountPercent!==0}/>}
+    {studioScene&&<DocumentaryStudioScene enhanced template={template} frame={templateFrame} frames={templateFrames} material={material} accent={accent} customBackground={effects.some(e=>e.role==='background')} motionEnabled={doc?.templateMotion?.amountPercent!==0}/>}
     {styled&&!editorialScene&&!studioScene&&<DocumentaryStyledMaterial template={template} frame={templateFrame} frames={templateFrames} material={material} motionEnabled={doc?.templateMotion?.amountPercent!==0} customBackground={effects.some(e=>e.role==='background')}/>}
     {detail&&!board&&!annotations&&source&&<DocumentaryDetail source={source} aspect={mediaAspect} frame={frame} frames={scene.durationInFrames} width={timeline.width} height={timeline.height} accent={timeline.accentColor} moving={moving}/>}
     {annotations&&<div style={{position:'absolute',inset:`${annotationInset.vertical*100}% ${annotationInset.horizontal*100}%`,opacity:clamp(graphicFrame/14),filter:graphic?.cutoutPath?'drop-shadow(0 18px 22px #000a)':undefined}}>{graphic?.cutoutPath?<Img src={resolveMediaSource(graphic.cutoutPath)} style={{width:'100%',height:'100%',objectFit:'contain'}}/>:material}</div>}

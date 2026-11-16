@@ -1,4 +1,4 @@
-import { documentaryArtworkUsesMedia, documentaryMotionTiming, documentarySceneTransition, selectedDocumentaryBackgroundIds, resolveMusicClips, type DocumentaryArtworkPreparedMaterial, type DocumentaryMotionPresetId, type DocumentarySemanticMontage, type MusicClip, type ProjectSettings } from "@gold-work/shared";
+import { documentaryMotionTiming, documentarySceneTransition, selectedDocumentaryBackgroundIds, resolveMusicClips, type DocumentaryArtworkPreparedMaterial, type DocumentaryMotionPresetId, type DocumentarySemanticMontage, type MusicClip, type ProjectSettings } from "@gold-work/shared";
 /** Structural input keeps this composition independent of the app's storage and providers. */
 export interface DocumentaryCaption {
   text: string; enabled: boolean; position: "top" | "bottom" | "center";
@@ -147,9 +147,7 @@ export function buildDocumentaryTimeline(project: DocumentaryProjectInput, media
         templateTiming: scene.documentary.templateTiming ? {...scene.documentary.templateTiming} : undefined,
         transitionStyle: scene.transition !== undefined ? scene.documentary.transitionStyle ?? 'clean'
           : (settings?.autoTransitions ?? settings?.autoEffects) !== false && scene.autoTransition !== undefined ? scene.documentary.autoTransitionStyle ?? 'clean' : 'clean',
-        texts: scene.documentary.texts?.map(text=>({...text})), motionGraphic: scene.documentary.motionGraphic
-          &&!(scene.documentary.motionGraphic.origin==='automatic'&&!scene.documentary.pinned&&scene.documentary.templateOrigin!=='manual'
-            &&documentaryArtworkUsesMedia(scene.documentary.motionGraphic.artwork)) ? {...scene.documentary.motionGraphic,
+        texts: scene.documentary.texts?.map(text=>({...text})), motionGraphic: scene.documentary.motionGraphic ? {...scene.documentary.motionGraphic,
           ...documentaryMotionTiming(scene.documentary.motionGraphic,durationInFrames/30),
           enabled:scene.documentary.motionGraphic.enabled&&!(scene.documentary.motionGraphic.kind==='annotations'&&
             (scene.documentary.cuts?.length||scene.documentary.motionGraphic.sourceChecksum&&scene.documentary.motionGraphic.sourceChecksum!==scene.documentary.checksum)),

@@ -13,6 +13,8 @@ import {compactMontageBatches} from './documentary-semantic-batches.js';
 import {sparseMontageDirection} from './documentary-hook-direction.js';
 import {createDocumentaryMotionPresetPlanner} from './documentary-motion-preset-planner.js';
 import {assessArtworkReplacement} from './documentary-artwork-quality.js';
+import {documentaryArtworkMediaIssue} from './documentary-artwork-application.js';
+import {documentaryDirectedTemplate,documentaryPauseAlignedLengths} from './documentary-montage-direction.js';
 import {documentarySourceFootageIssue,documentaryStandaloneArtworkReady} from './documentary-source-eligibility.js';
 import {applyDocumentarySourcePreservingFallback,documentarySourcePreservingFallbackReady} from './documentary-native-fallback.js';
 import {validateSceneDirection,documentarySceneDirectionSystem,directedMontageSystem} from './documentary-scene-direction.js';
@@ -858,7 +860,7 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
   if(!options)return project.scenes;
   const excluded=new Set(settings.excludedTemplates??[]),intensity=settings.montageDensity==='calm'?'calm':options.intensity,hookSeconds=montageHookSeconds(project);
   const sparse=options.graphicsDensity==='sparse';
-  let cursor=0,lastGraphicEnd=-30,lastTv=-50,composition=0,lastLayout=-30,layoutIndex=0;
+  let cursor=0,lastGraphicEnd=-30;
   const located=new Set<string>();
   const chapters=mapScriptChapters(project);
   const scenes=[...project.scenes].sort((a,b)=>a.order-b.order);
@@ -1009,24 +1011,21 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
         else if(graphic)lastGraphicEnd=Math.min(cursor,start+graphic.startSeconds+graphic.durationSeconds);
       }
     }
-    const aspect=(doc.selected?.width??16)/(doc.selected?.height??9);
-    const palettes:DocumentaryTemplate[]=options.style==='cinematic'?['full','editorial-film-gate','archive-dark','portrait-stage','contain']
-      :['full','archive-slide','editorial-orbit','museum-mat','paper-grid','gallery'];
     let template:DocumentaryTemplate='full';
     if(graphic)template='full';
     else if(expressive&&(direction?.treatment==='television'||!sparse&&intensity==='rich'&&direction?.treatment==='footage'
       &&/(?:\b(?:film|movie|television|broadcast|interview)\b|(?:^|\s)(?:фильм|телевидение|трансляция|интервью)(?:\s|[.,]))/iu.test(scene.narration))
-      &&start-lastTv>=40&&frames>=75){template='broadcast-scanlines';lastTv=start;}
-    else if(expressive&&scene.imagePath&&!scene.videoPath){template=sparse?'contain':motionPresets.active?(motionPresets.photoTemplate(scene)??'full'):(aspect<.85?'portrait-stage':palettes[composition++%palettes.length]!);}
-    else if(expressive&&direction?.treatment==='archive'&&intensity==='rich')template=motionPresets.active?'full':'editorial-film-gate';
+      &&frames>=75){template='broadcast-scanlines';}
+    else if(expressive&&scene.imagePath&&!scene.videoPath){template=sparse?'contain':documentaryDirectedTemplate(scene,options.style==='cinematic');}
+    else if(expressive&&direction?.treatment==='archive'&&intensity==='rich')template=documentaryDirectedTemplate(scene,options.style==='cinematic');
     if(excluded.has(template))template='full';
-    // Keep the commissioned drawing and its paid receipt, but never introduce
-    // this rejected photo/label/line pattern automatically, even on plain footage.
+    // Keep the commissioned drawing and its receipt. Photo viewports follow
+    // the export allowlist and structural quality policy, like standalone art.
     const factualGraphic=graphic??doc.motionGraphic;
     const preciseDiagram=factualGraphic?documentaryDiagram(scene,factualGraphic):undefined;
     // Only the editor's exact validated draft may bypass staging quality. This
     // transient map is never project data; ordinary preview/export keep the guard.
-    const artworkReplacement=direction?.artwork&&(!documentaryArtworkUsesMedia(direction.artwork)&&assessArtworkReplacement(direction.artwork).allowReplacement
+    const artworkReplacement=direction?.artwork&&(!documentaryArtworkMediaIssue(project,scene.id,direction.artwork)&&assessArtworkReplacement(direction.artwork).allowReplacement
       ||editorPreviewDrafts?.get(scene.id)===direction.artwork);
     if(settings.autoMotionGraphics!==false&&expressive&&intensity==='rich'&&direction?.artwork&&artworkReplacement&&!chapter&&!preciseDiagram&&!documentaryMontageHasEvidence(scene,scenes)){
       const artwork=direction.artwork,seconds=frames/30;
@@ -1065,7 +1064,7 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
     // A source's reviewed interval, not its full remote duration, is the limit.
     const capacity=(s:Scene)=>!s.videoPath?frames:Math.max(0,Math.floor((Math.min(s.trimEndSeconds??Infinity,s.documentary?.selected?.durationSeconds??s.trimEndSeconds??0)-(s.trimStartSeconds??0))/(s.playbackRate??1)*30));
     let cuts=doc.cutsOrigin==='automatic'?undefined:doc.cuts;
-    if(!preciseDiagram&&(!graphic||graphic.kind==='key-point'||graphic.preset==='source-emphasis')&&!template.startsWith('broadcast-')&&sources.length&&intensity!=='calm'&&frames>=90
+    if(!preciseDiagram&&(!graphic||['key-point','chronology','statistic'].includes(graphic.kind)&&graphic.showSource!==false)&&!template.startsWith('broadcast-')&&sources.length&&intensity!=='calm'&&frames>=90
       &&(hook||direction?.beat==='explain'||direction?.beat==='conflict'||direction?.beat==='turn'||direction?.beat==='evidence')){
       // Ease shot length into the body over six seconds; a scene just beyond
       // hookSeconds must not suddenly lose its otherwise usable cutaway.
@@ -1082,7 +1081,7 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
       const count=Math.min(sources.length+1,hook?3:2,Math.floor(frames/minimumShotFrames));
       const chosen=[scene,...sources.slice(0,count-1)];
       const capacities=chosen.map(capacity);
-      const lengths=Array.from({length:count},(_,i)=>Math.min(capacities[i]!,Math.floor(frames*(i+1)/count)-Math.floor(frames*i/count)));
+      let lengths=Array.from({length:count},(_,i)=>Math.min(capacities[i]!,Math.floor(frames*(i+1)/count)-Math.floor(frames*i/count)));
       // A short primary clip must not discard otherwise usable AI-approved
       // cutaways. Give its remaining frames only to sources with reviewed room.
       let remaining=frames-lengths.reduce((sum,length)=>sum+length,0);
@@ -1092,11 +1091,12 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
         const share=Math.ceil(remaining/available.length);
         for(const i of available){const add=Math.min(share,remaining,capacities[i]!-lengths[i]!);lengths[i]!+=add;remaining-=add;}
       }
+      lengths=documentaryPauseAlignedLengths(scene,lengths,capacities,minimumShotFrames);
       if(count>1&&!remaining&&lengths.every(length=>length>=minimumShotFrames)){let from=0;cuts=chosen.map((source,i)=>{
         if(hook)usedHookSources.add(sourceKey(source));
         const cut={id:`montage-${scene.id}-${i}`,fromFrame:from,durationInFrames:lengths[i]!,sourceSceneId:source.id,
           trimStartSeconds:source.trimStartSeconds??0,trimEndSeconds:source.trimEndSeconds,playbackRate:source.playbackRate??1,
-          motion:source.videoPath||project.settings.assembly.kenBurns===false||source.documentary?.templateMotion?.amountPercent===0?'none' as const:i%2?'pull' as const:'push' as const};from+=lengths[i]!;return cut;
+          motion:source.videoPath||project.settings.assembly.kenBurns===false||source.documentary?.templateMotion?.amountPercent===0?'none' as const:direction?.beat==='establish'||direction?.beat==='resolve'?'pull' as const:'push' as const};from+=lengths[i]!;return cut;
       });template='full';}
     }
     // A change of treatment is useful even without a new narrative topic.
@@ -1105,25 +1105,20 @@ export function enrichSemanticMontage(project:Project,editorPreviewDrafts?:Reado
     const shortAccent=graphic&&['key-point','chronology'].includes(graphic.kind)&&!graphic.preset&&!graphic.diagram;
     const canDress=!sparse&&options.style==='editorial'&&intensity==='rich'&&!chapter&&!preciseDiagram&&!cuts?.length&&(!graphic||shortAccent)
       &&frames>=90&&!doc.effects.some(e=>e.enabled&&e.kind!=='audio'&&e.role!=='background'&&e.origin!=='automatic');
-    if(canDress&&!template.startsWith('broadcast-')&&start-lastLayout>=(hook?6:18)){
-      const palette:DocumentaryTemplate[]=scene.videoPath
-        ?['broadcast-scanlines','editorial-film-gate','archive-dark','editorial-orbit']
-        :['contain','archive-slide','gallery','paper-grid','museum-mat'];
-      const available=palette.filter(t=>!excluded.has(t));
-      if(available.length){template=available[layoutIndex++%available.length]!;lastLayout=start;}
+    if(canDress&&!template.startsWith('broadcast-')){
+      const directed=documentaryDirectedTemplate(scene,options.style==='cinematic');
+      if(!excluded.has(directed))template=directed;
     }
-    if(template!=='full'&&!['push','pull','contain','pan-left','pan-right','detail-scan'].includes(template)
-      ||graphic&&!shortAccent)lastLayout=start;
     const photoCamera=Boolean(scene.imagePath&&!scene.videoPath&&project.settings.assembly.kenBurns!==false
       &&(!scene.kenBurnsDirection||scene.kenBurnsDirection==='auto')&&!cuts?.length&&(!graphic||shortAccent));
-    const cameraDirections=['in','pan-left','out','pan-right','pan-up','pan-down'] as const;
-    const savedDetail=photoCamera?documentaryDetailAnnotations(scene)?.annotations?.find(a=>(a.confidence??0)>=.93
-      &&scene.narration.toLocaleLowerCase().includes(a.label.toLocaleLowerCase()))?.points[0]:undefined;
+    const savedDetail=photoCamera?documentaryDetailAnnotations(scene)?.annotations?.filter(a=>(a.confidence??0)>=.8
+      &&scene.narration.toLocaleLowerCase().includes(a.label.toLocaleLowerCase())).sort((a,b)=>(b.confidence??0)-(a.confidence??0))[0]?.points[0]:undefined;
+    if(savedDetail&&!excluded.has('push')&&!excluded.has('pull'))template=direction?.beat==='establish'||direction?.beat==='resolve'?'pull':'push';
     // Use an observed point for a targeted zoom. No inferred face position or
     // extra vision request; unannotated photos still have directional movement.
-    const camera=photoCamera?{autoKenBurnsDirection:scene.autoKenBurnsDirection??cameraDirections[Math.abs(scene.order)%cameraDirections.length],
-      autoKenBurnsZoom:scene.autoKenBurnsZoom??(hook?1.14:1.1),
-      autoKenBurnsFocus:savedDetail?{x:savedDetail.x,y:savedDetail.y}:undefined}:{};
+    const camera=photoCamera?{autoKenBurnsDirection:direction?.beat==='establish'||direction?.beat==='resolve'?'out' as const:'in' as const,
+      autoKenBurnsZoom:1+Math.min(.18,Math.max(.04,frames/30*(dramatic?.022:.012))),
+      autoKenBurnsFocus:savedDetail?{x:savedDetail.x,y:savedDetail.y}:{x:50,y:50}}:{};
     if(direction?.monochrome&&direction.emphasis&&direction.monochromeStartSeconds===undefined){
       const at=scene.narration.indexOf(direction.emphasis);
       if(at>=0)direction.monochromeStartSeconds=Math.min(Math.max(0,frames/30-.9),

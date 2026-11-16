@@ -35,23 +35,24 @@ test('automatic transitions follow sections, preserve authored cuts and pins, an
   assert.equal(planDocumentaryTransitions({...p,scenes:[...scenes.slice(0,8),moved]})[8]!.autoTransition,undefined);
 });
 
-test('related photographs get short spaced blends; authored cuts and complete speech remain intact',()=>{
+test('related photographs get semantic blends; authored cuts and complete speech remain intact',()=>{
   const p=fixture();p.scenes=p.scenes.map((scene,i)=>({...scene,imagePath:`photo-${i}.jpg`,documentary:{...scene.documentary!,requirement:{...scene.documentary!.requirement,sectionTitle:'One subject'}}}));
   p.scenes[2]!.transition='none';
   const scenes=planDocumentaryTransitions(p),blends=scenes.filter(s=>s.autoTransition==='mix');
-  assert.ok(blends.length>0&&blends.length<p.scenes.length/2);
+  assert.equal(blends.length,p.scenes.length-2,'related photos blend except the authored cut and final scene');
   assert.ok(blends.every(s=>s.autoTransitionDurationSeconds===.2));
   assert.equal(scenes[2]!.transition,'none');
   assert.equal(buildDocumentaryTimeline({...p,scenes}).durationInFrames,1350);
   assert.deepEqual(scenes.map(s=>[s.audioPath,s.narration]),p.scenes.map(s=>[s.audioPath,s.narration]));
 });
 
-test('rich montage connects ordinary video with alternating clean and blur dissolves without changing speech length',()=>{
+test('rich montage keeps ordinary video cuts and uses blur for a semantic resolution without changing speech length',()=>{
   const p=fixture();p.settings.assembly.documentary!.montageDensity='rich';
   p.scenes=p.scenes.map((s,i)=>({...s,videoPath:`v${i}.mp4`,documentary:{...s.documentary!,requirement:{...s.documentary!.requirement,sectionTitle:'One subject'}}}));
   p.scenes[2]!.transition='none';
+  p.scenes[5]!.documentary!.semanticMontage={sceneId:p.scenes[5]!.id,subject:'Topic',beat:'resolve',treatment:'footage',cutawaySceneIds:[]};
   const planned=planDocumentaryTransitions(p);
-  assert.ok(planned.filter(s=>s.autoTransition==='mix').length>=5);
+  assert.equal(planned.filter(s=>s.autoTransition==='mix').length,1);
   assert.ok(planned.some(s=>s.documentary?.autoTransitionStyle==='blur'));
   assert.equal(planned[2]!.transition,'none');
   const timeline=buildDocumentaryTimeline({...p,scenes:planned});

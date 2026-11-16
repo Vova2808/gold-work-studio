@@ -6,6 +6,7 @@ import {resolveMediaSource} from './MediaSurface.js';
 import {fitDocumentaryText} from './documentary-typography.js';
 import {countValue} from './DocumentaryMotionGraphic.js';
 import {documentaryCardStages,documentaryEditorialStages,documentaryMarkerInk,documentaryPhraseWords,documentaryPhraseWordProgress,documentarySubjectSize} from './documentary-editorial.js';
+import {documentaryQuotePageRanges} from './documentary-quote-pages.js';
 
 const clamp=(n:number)=>Math.max(0,Math.min(1,n));
 function Heading({text,x,y,width,font=100,color='#fff',maxHeight=420}:{text:string;x:number;y:number;width:number;font?:number;color?:string;maxHeight?:number}){
@@ -25,8 +26,13 @@ export function DocumentaryEditorialGraphic({graphic,frame,frames,material,accen
   const circleWidth=Math.min(centered ? .54 : .4,.66/containerAspect),circleHeight=circleWidth*containerAspect;
   const subjectEnter=centered?stages.main:stages.detail,labelEnter=stages.main,leader=stages.settle;
   const speech=graphic.quoteMode!=='phrase',reading=graphic.reading?.text===title?graphic.reading.words:undefined;
-  const words=useMemo(()=>documentaryPhraseWords(title,graphic.highlight),[title,graphic.highlight]);
-  const quoteFont=useMemo(()=>fitDocumentaryText(title,76,1280,440,600),[title]);
+  const allWords=useMemo(()=>documentaryPhraseWords(title,graphic.highlight),[title,graphic.highlight]);
+  const pages=useMemo(()=>!profile&&!chart&&speech&&title.length>320?documentaryQuotePageRanges(allWords):[{from:0,to:allWords.length}],[allWords,profile,chart,speech,title.length]);
+  const spokenIndex=reading?.length?allWords.reduce((last,word,index)=>(reading[word.readingIndex]?.startSeconds??Infinity)<=frame/30?index:last,-1)
+    :Math.min(allWords.length-1,Math.floor(clamp(frame/Math.max(1,frames))*allWords.length));
+  const page=pages.find(range=>spokenIndex<range.to)??pages.at(-1)!;
+  const words=allWords.slice(page.from,page.to),pageText=words.map(word=>word.text+word.space).join('');
+  const quoteFont=useMemo(()=>fitDocumentaryText(pageText,76,1280,440,600),[pageText]);
   const bars=graphic.cards?.slice(0,5).map(c=>({...c,number:Math.max(0,Number(c.value?.match(/^\d+(?:[.,]\d+)?/u)?.[0]?.replace(',','.'))||0)}))??[];
   const max=Math.max(1,...bars.map(b=>b.number));
   // Never hide the sentence before its measured final word. Graphic-local seconds are retained.
