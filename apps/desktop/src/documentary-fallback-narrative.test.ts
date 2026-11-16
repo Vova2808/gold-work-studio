@@ -8,6 +8,7 @@ import {createDefaultProjectSettings,createDocumentarySettings,createVoiceCalibr
 import {prepareDocumentaryScript} from './documentary-plan.js';
 import {documentaryAiPlanContext} from './documentary-ai-plan-state.js';
 import {DocumentaryCachedAnalysisMissing,DocumentaryIntelligence} from './documentary-intelligence.js';
+import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {AnyModelClient,AnyModelCompletionUncertainError} from './anymodel-client.js';
 import {documentaryIllustrationApproval,documentarySavedContextIssue} from './documentary-context-approval.js';
 import {claimDocumentaryThematicRecovery,documentaryThematicDiscoveryRequirement,documentaryThematicRecoveryBinding} from './documentary-automatic-thematic-recovery.js';
@@ -55,7 +56,7 @@ function proof(project:Project,scene:Scene,status='supported',evidence='The visi
  return {version:1,binding:documentaryFallbackNarrativeContext(project,scene)!.binding,status,scriptQuote:scene.narration.trim().slice(0,160),evidence};
 }
 
-test('empty terminal video review returns ordinary uncertainty to selection, without accepting or replaying the frames',async()=>{
+test('empty terminal video review is a known failure with one automatic retry and no invented verdict',async()=>{
  const {directory,project,scene}=await fixture(cases[2]);
  let calls=0;
  const store={publicSettings:async()=>({configured:true,baseUrl:'https://fixture.test/v1',textModel:'fixture'}),apiKey:async()=>'fixture'};
@@ -65,12 +66,10 @@ test('empty terminal video review returns ordinary uncertainty to selection, wit
     {headers:{'content-type':'text/event-stream'}});
  });
  const inspect=()=>new DocumentaryIntelligence(client,()=>directory).inspectForSelection(project,scene);
- const first=await inspect();
- assert.equal(first.usedNewAnalysis,true);assert.equal(first.review.status,'uncertain');assert.match(first.review.reason,/пустым ответом/);
- assert.equal(first.review.illustrationApproval,undefined);assert.equal(first.review.targetVisibility,undefined);
+ await assert.rejects(inspect(),error=>error instanceof DocumentaryAnalysisError&&error.kind==='empty');
+ assert.equal(calls,2);
  scene.documentary!.selected!.title+=' (updated discovery metadata)';
- const replay=await inspect();
- assert.equal(replay.usedNewAnalysis,false);assert.equal(replay.review.status,'uncertain');assert.equal(calls,1);
+ await assert.rejects(inspect(),error=>error instanceof DocumentaryAnalysisError&&error.kind==='empty');assert.equal(calls,2);
 });
 
 for(const row of cases)test(`full03 scene ${row.scene}: a true simplified pixel verdict still requires original narrative fit`,async()=>{
@@ -250,10 +249,10 @@ for(const priorRevision of [1,2] as const)for(const interrupted of [false,true])
  if(interrupted)await assert.rejects(old.inspectForSelection(project,scene));else await old.inspectForSelection(project,scene);
  const dir=join(directory,'Documentary','Analysis'),[name]=await readdir(dir),bytes=await readFile(join(dir,name!),'utf8');
  const inspect=(cacheOnly=false)=>new DocumentaryIntelligence(client,()=>directory).inspectForSelection(project,scene,undefined,undefined,cacheOnly);
- await assert.rejects(inspect(true));assert.equal(calls,1);
+ if(interrupted)await assert.rejects(inspect(true));else assert.notEqual((await inspect(true)).review.status,'accepted');assert.equal(calls,1);
  if(interrupted)await assert.rejects(inspect());else{
-  assert.equal((await inspect()).review.status,'rejected');
-  assert.equal((await inspect()).review.status,'rejected');
+  assert.notEqual((await inspect()).review.status,'accepted');
+  assert.notEqual((await inspect()).review.status,'accepted');
  }
- assert.equal(calls,interrupted?1:2);assert.equal(await readFile(join(dir,name!),'utf8'),bytes);
+ assert.equal(calls,1,'Changing rule wording never buys a second vote; missing current proof remains unapproved');assert.equal(await readFile(join(dir,name!),'utf8'),bytes);
 });

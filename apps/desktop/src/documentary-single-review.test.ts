@@ -13,7 +13,7 @@ import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {documentarySavedContextIssue} from './documentary-context-approval.js';
 import {fastDocumentaryScreenInstruction,planFastDocumentaryScene} from './documentary-fast-plan.js';
 import {documentaryCheckpointKey} from './documentary-checkpoint-key.js';
-import {documentaryIllustrationQualityInstruction,documentaryIllustrationQualityInstructionV2} from './documentary-illustration-quality.js';
+import {documentaryIllustrationQualityInstruction,documentaryIllustrationQualityInstructionV2,documentaryIllustrationResponseInstruction} from './documentary-illustration-quality.js';
 
 async function fixture(t:any,seconds=8){
   const root=await mkdtemp(join(tmpdir(),'gws-single-'));
@@ -116,7 +116,7 @@ test('single historical illustration review distinguishes a modern view of the s
   assert.deepEqual(scene.documentary!.requirement.queries,originalQueries);assert.equal(calls,1);
 });
 
-for(const suitable of [false,true])test(`new contract rechecks old ${suitable?'incomplete approval':'refusal'} once without changing its receipt`,async t=>{
+for(const suitable of [false,true])test(`new contract revalidates old ${suitable?'incomplete approval':'refusal'} locally without changing its receipt`,async t=>{
   const {root,project,scene}=await fixture(t);let calls=0,captured:any;
   const client={configured:async()=>true,documentaryCompletion:async()=>{
     calls++;return JSON.stringify({description:'Existing reviewed source.',suitable,reason:'Original saved verdict'});
@@ -137,14 +137,14 @@ for(const suitable of [false,true])test(`new contract rechecks old ${suitable?'i
   const before=await readFile(previous,'utf8');
   intel=new DocumentaryIntelligence(client,()=>root);
   const replay=await intel.inspectForSelection(project,scene);
-  assert.equal(replay.review.status,suitable?'uncertain':'rejected');assert.equal(replay.usedNewAnalysis,true);
+  assert.equal(replay.review.status,suitable?'uncertain':'rejected');assert.equal(replay.usedNewAnalysis,false);
   if(suitable)assert.match(replay.review.reason,/не подтверждено, что это натурная съёмка/);
-  assert.equal(calls,2);assert.equal(await readFile(previous,'utf8'),before);
-  assert.equal((await intel.inspectForSelection(project,scene)).usedNewAnalysis,false);assert.equal(calls,2);
+  assert.equal(calls,1);assert.equal(await readFile(previous,'utf8'),before);
+  assert.equal((await intel.inspectForSelection(project,scene)).usedNewAnalysis,false);assert.equal(calls,1);
   for(const state of ['pending','partial','received']){
     await writeFile(previous,JSON.stringify({...receipt,state,result:undefined,raw:undefined}));
     await assert.rejects(new DocumentaryIntelligence(client,()=>root).inspectForSelection(project,scene),DocumentaryAnalysisError);
-    assert.equal(calls,2,'The policy change must never hide an unresolved paid request');
+    assert.equal(calls,1,'The policy change must never hide an unresolved paid request');
   }
 });
 
@@ -211,7 +211,7 @@ test('saved scene preview lookup never submits, replays a completed choice and p
   await assert.rejects(intel.cachedPreviewForScene(project,scene,candidate,preview),DocumentaryAnalysisError);assert.equal(calls,1);
 });
 
-test('simple review upgrades legacy frames once, then replays across metadata drift',async t=>{
+test('simple review reuses a legacy completed verdict across metadata drift',async t=>{
  const {root,project,scene,video}=await fixture(t);let calls=0,captured:any;
  const client={configured:async()=>true,documentaryCompletion:async(_system:string,input:string)=>{calls++;return JSON.stringify(answer(JSON.parse(input)));}};
  let intel=new DocumentaryIntelligence(client,()=>root);
@@ -223,11 +223,11 @@ test('simple review upgrades legacy frames once, then replays across metadata dr
  const receipt=JSON.parse(await readFile(join(analysis,currentKey+'.json'),'utf8'));
  await writeFile(join(analysis,legacyKey+'.json'),JSON.stringify(receipt));await rm(join(analysis,currentKey+'.json'));
  intel=new DocumentaryIntelligence(client,()=>root);
- assert.equal((await intel.inspectForSelection(project,scene)).review.status,'accepted');assert.equal(calls,2,'Changed contract inspects old frames once');
+ assert.equal((await intel.inspectForSelection(project,scene)).review.status,'accepted');assert.equal(calls,1,'Changed wording reuses the completed visual question');
  await utimes(video,new Date(),new Date(Date.now()+2000));
- assert.equal((await intel.inspectForSelection(project,scene)).review.status,'accepted');assert.equal(calls,2,'Byte-identical former revision is reused');
+ assert.equal((await intel.inspectForSelection(project,scene)).review.status,'accepted');assert.equal(calls,1,'Byte-identical former revision is reused');
  await writeFile(join(analysis,legacyKey+'.json'),JSON.stringify({...receipt,state:'pending',result:undefined}));
- await assert.rejects(()=>intel.inspectForSelection(project,scene),DocumentaryAnalysisError);assert.equal(calls,2,'An unknown legacy receipt is never resubmitted');
+ await assert.rejects(()=>intel.inspectForSelection(project,scene),DocumentaryAnalysisError);assert.equal(calls,1,'An unknown legacy receipt is never resubmitted');
 });
 
 test('one three-frame illustration review survives save/restart/search edits; file/text/end changes require a new review',async t=>{
@@ -236,7 +236,7 @@ test('one three-frame illustration review survives save/restart/search edits; fi
     calls++;const data=JSON.parse(input);assert.equal(data.singleReview,true);assert.equal(images?.length,3);
     assert.equal(data.sampleSeconds.length,3);assert.equal(data.reviewPolicyVersion,3);
     assert.match(data.visualTarget,/Canon EOS550D/);assert.equal(data.namedSubject,'Canon EOS550D');
-    assert.equal(data.narrativeContext.current.text,scene.narration);assert.equal(data.fullScript,text);
+    assert.equal(data.narrativeContext.current.text,scene.narration);assert.equal(data.fullScript,undefined);
     assert.doesNotMatch(system,/specificEvidence|sampleChecks/);assert.match(system,/"suitable":false/);
     return JSON.stringify({description:'A camera with physical controls.',suitable:true,footageOrigin:'camera',targetVisible:true,targetEvidence:'Camera body and controls are visible.',sourceText:{kind:'none',text:''},reason:'Suitable for this camera scene.'});
   }};
@@ -430,7 +430,7 @@ for(const kind of ['ocr','ctime'] as const)test(`an old false ${kind} rejected r
  // A completed current-contract response may recover a local uncertain error.
  const analysis=join(root,'Documentary','Analysis'),names=(await readdir(analysis)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name));
  assert.equal(names.length,1);const original=join(analysis,names[0]!),receiptBytes=await readFile(original);
- assert.ok(captured.system.includes(documentaryIllustrationQualityInstruction));
+ assert.ok(captured.system.includes(documentaryIllustrationResponseInstruction));
  const previous=original;
  if(kind==='ctime')await link(video,join(root,'another-scene.mp4'));
  const recoveryBefore=JSON.stringify(scene.documentary!.searchRecovery);
@@ -454,27 +454,28 @@ test('false range recovery requires complete same-task evidence and preserves re
  await writeFile(localReviewPath,JSON.stringify({review}));
  const analysis=join(root,'Documentary','Analysis'),names=(await readdir(analysis)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name));
  const receiptPath=join(analysis,names[0]!),receipt=JSON.parse(await readFile(receiptPath,'utf8'));
- const remainsRejected=async(label:string)=>{
+ const remainsRejected=async(label:string,reason=review.reason)=>{
   const result=await new DocumentaryIntelligence(client,()=>root).inspectForSelection(project,scene);
-  assert.equal(result.review.status,'rejected',label);assert.equal(result.review.reason,review.reason,label);
+  assert.equal(result.review.status,'rejected',label);assert.equal(result.review.reason,reason,label);
   assert.equal(result.usedNewAnalysis,false,label);assert.equal(calls,1,label);
  };
  for(const state of ['pending','partial','received','failed']){
   await writeFile(receiptPath,JSON.stringify({...receipt,state,result:undefined,raw:undefined}));await remainsRejected(state);
  }
  await rm(receiptPath);await remainsRejected('missing receipt');
- for(const binding of [undefined,{...receipt.singleReviewBinding,taskKey:'another-question'},{...receipt.singleReviewBinding,end:99}]){
+ for(const binding of [undefined,{...receipt.singleReviewBinding,taskKey:'another-question',verdictKey:'another-question'},{...receipt.singleReviewBinding,end:99}]){
   await writeFile(receiptPath,JSON.stringify({...receipt,singleReviewBinding:binding}));await remainsRejected('unbound/different task/range');
  }
  await writeFile(receiptPath,JSON.stringify({...receipt,result:{...receipt.result,relevant:false,reason:'The required camera is absent.'}}));
  await remainsRejected('completed negative content decision');
  await writeFile(receiptPath,JSON.stringify(receipt));
  const script=project.videoBrief!.readyScript;project.videoBrief!.readyScript+=' Different story context.';
- await remainsRejected('changed current story');project.videoBrief!.readyScript=script;
+ assert.equal((await new DocumentaryIntelligence(client,()=>root).inspectForSelection(project,scene)).review.status,'accepted','Unrelated script text does not invalidate this visual question');
+ assert.equal(calls,1);project.videoBrief!.readyScript=script;
  for(const savedReview of [{...review,status:'rejected'},{...review,reason:'The required camera is absent.'}]){
-  await writeFile(localReviewPath,JSON.stringify({review:savedReview}));await remainsRejected('real local refusal');
+  await writeFile(localReviewPath,JSON.stringify({review:savedReview}));await remainsRejected('real local refusal',savedReview.reason);
  }
- await rm(localReviewPath);await remainsRejected('missing local uncertainty evidence');
+ await rm(localReviewPath);await remainsRejected('missing local uncertainty evidence','Этот отрезок уже отклонён; отдельная причина для него не записана в старом кэше. Исходные AI-ответы сохранены, повторный просмотр не отправлен.');
 });
 
 test('false ctime range recovery cannot approve a same-size edit to the supplied original',async t=>{
@@ -514,13 +515,13 @@ test('hardlink ctime drift reuses the exact complete review only for unchanged s
  assert.deepEqual(restored.review.illustrationApproval,first.review.illustrationApproval);
  assert.deepEqual(await readFile(receiptPath),receiptBytes,'Original complete receipt is never rewritten/restamped');
  assert.equal((await readdir(analysis)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name)).length,1);
- // Deliberately corrupt only the old cached frame: source checksum alone must
- // not manufacture equivalence of the actual image inputs in the old request.
+ // The source checksum and interval own the completed verdict. Damaged derived
+ // thumbnails do not invalidate the model's saved answer about unchanged bytes.
  const revision=first.review.localReview!,revisionKey=createHash('sha256').update(JSON.stringify({size:revision.size,mtimeNs:revision.mtimeNs,ctimeNs:revision.ctimeNs})).digest('hex');
  const oldFrame=join(root,'Documentary','Frames',scene.documentary.checksum+'-'+revisionKey,first.review.sampleSeconds[0]!.toFixed(3)+'.jpg');
  await writeFile(oldFrame,Buffer.from('different cached bytes'));
  const offline=new DocumentaryIntelligence({configured:async()=>true,documentaryCompletion:async()=>assert.fail('No paid callback in cache-only negative')},()=>root);
- await assert.rejects(offline.inspectForSelection(project,scene,()=>{},()=>false,true),DocumentaryCachedAnalysisMissing);
+ assert.equal((await offline.inspectForSelection(project,scene,()=>{},()=>false,true)).review.status,'accepted');assert.equal(calls,1);
 });
 
 test('unknown same-interval review survives ctime drift even without a saved visualReview',async t=>{

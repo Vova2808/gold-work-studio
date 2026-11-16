@@ -1451,7 +1451,7 @@ export class DocumentaryIntelligence {
       writing = atomicWrite(path, JSON.stringify({ state: "partial", purpose, ...previewMetadata, model, overviewSamplingVersion, raw, createdAt }))
         .catch(error => { writeFailure = error; }).finally(() => { writing = undefined; });
     };
-    let requestSignal:AbortSignal|undefined;
+    let requestSignal:AbortSignal|undefined,clientEntered=false;
     try {
       // Cache and unknown-receipt gates have passed; record eligibility before
       // dispatching a genuinely new initial artwork request.
@@ -1517,6 +1517,7 @@ export class DocumentaryIntelligence {
       // Grounded reviews also return scriptFit and identity evidence; a real
       // 1,200-token request ended with length before closing its JSON. This
       // dispatch-only allowance leaves saved partial/unknown receipts guarded.
+      clientEntered=true;
       const raw = purpose==='candidate-relevance'&&!images.length&&Array.isArray(words.candidates)&&words.candidates.length>0
         ?await this.rankingBatch.request(projectId,model,system,input,savePartial,(batchFile,batchMember)=>atomicWrite(path,JSON.stringify({state:'pending',purpose,model,createdAt,batchFile,batchMember})))
         :await this.client.documentaryCompletion(requestSystem, requestInput, images, requestSignal, savePartial,model,revision?9000:concepts?5000:artwork?14000:purpose==='semantic-montage'?9000:purpose==='visual-illustration'?(selectionRetry==='empty'?5600:words.scriptGrounding?2800:words.namedSubject?1800:1200):purpose==='search-plan'?9000:words.singleReview===true?4000:words.fixedNamedInterval===true?2800:ordinaryVisual?2200:undefined,ordinaryVisual||purpose==='visual-illustration',purpose==='semantic-montage'?{purpose:'semantic-montage',...(oneShotRecovery||artwork||revision||concepts||options.explanationFeedback?{singleAttempt:true}:{})}:purpose==='visual-illustration'?{purpose:'visual-illustration',...(selectionRetry?{singleAttempt:true}:{}),onTerminal:metadata=>{completionMetadata=metadata;}}:undefined);
@@ -1640,8 +1641,9 @@ export class DocumentaryIntelligence {
         const checkpoint=await readAnalysisCheckpoint(path);
         if(checkpoint)await atomicWrite(path,JSON.stringify({...checkpoint,completion:completionMetadata}));
       }
-      throw new DocumentaryAnalysisError(`Анализ материала не завершён: ${error instanceof Error ? error.message : String(error)}${partial ? ` Сохранено ${partial.length} знаков ответа.` : ""}`, kind, purpose,retryableTerminal,(retryableTerminal||artwork||revision)&&error instanceof AnyModelProviderResponseError&&error.terminalStatus===503,
-        error instanceof AnyModelProviderResponseError?error.retryAfterMs:undefined).forSubmittedRequest(key);
+      const failure=new DocumentaryAnalysisError(`Анализ материала не завершён: ${error instanceof Error ? error.message : String(error)}${partial ? ` Сохранено ${partial.length} знаков ответа.` : ""}`, kind, purpose,retryableTerminal,(retryableTerminal||artwork||revision)&&error instanceof AnyModelProviderResponseError&&error.terminalStatus===503,
+        error instanceof AnyModelProviderResponseError?error.retryAfterMs:undefined);
+      throw clientEntered?failure.forSubmittedRequest(key):failure;
     }
     } finally { releaseAnalysis(); }
   }
@@ -2943,6 +2945,7 @@ export class DocumentaryIntelligence {
         &&(saved.reason==='Локальный файл изменился во время просмотра.'
           ||saved.reason==='Не определён характер видимой надписи исходника; материал не подтверждён.'
             &&saved.sourceText?.kind==='uncertain'&&saved.sourceText.text==='');
+      if(saved?.trimStartSeconds===start&&saved.trimEndSeconds===end&&saved.reason)rejected.reason=saved.reason;
       if(knownUncertain&&!recoveringUncertainRange){
         const retry={...scene,trimStartSeconds:start,trimEndSeconds:end,documentary:{...doc,
           searchRecovery:{...doc.searchRecovery!,rejectedRanges:doc.searchRecovery!.rejectedRanges.filter(range=>!sameRejectedRange(range))}}};
@@ -3044,7 +3047,7 @@ export class DocumentaryIntelligence {
         catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
       }));
       if(oldImages.every((image,index)=>image===images[index])&&JSON.stringify(await revisionOf(file))===JSON.stringify(revision)){
-        inspection.byteVerifiedPreviousRevision={checksum:doc.checksum!,start,end,revision:former};break;
+        inspection.byteVerifiedPreviousRevision={checksum:doc.checksum!,start,end,revision:former,...(stableReview?{used:true}:{})};break;
       }
     }
     progress(video?'Один просмотр трёх кадров видео…':'Один просмотр фотографии…');
@@ -3171,6 +3174,17 @@ export class DocumentaryIntelligence {
       const prior=JSON.parse(previous.input);if(!prior.analysisModel)continue;
       delete prior.analysisModel;previousRequests.push({system:previous.system,input:JSON.stringify(prior)});
     }
+    // A saved search hint can reconstruct this source's exact old attribution;
+    // unlike an unbound project-wide receipt, that proves which request is ours.
+    if(source.previousFrameSearchHint){
+      const formerSource={...source,description:`Previous frame review, a search hint requiring new visual verification: ${source.previousFrameSearchHint}\nOriginal source description:\n${source.description??''}`};
+      for(const previous of [{system:qualitySystem,input:qualityInput},...previousRequests]){
+        const prior=JSON.parse(previous.input);
+        previousRequests.push({system:previous.system,input:JSON.stringify({...prior,
+          ...(prior.sourceHint?{sourceHint:{...prior.sourceHint,description:formerSource.description.slice(0,800)}}:{}),
+          ...(prior.sourceEvidence?{sourceEvidence:documentarySourceEvidence(formerSource)}:{})})});
+      }
+    }
     // Earlier prompts could omit an explicit target condition. Their completed
     // verdicts do not answer this contract; unresolved requests remain guarded.
     const supersededTargetContract=(await Promise.all(previousRequests.filter(request=>request.system!==qualitySystem
@@ -3180,7 +3194,13 @@ export class DocumentaryIntelligence {
     // The original-meaning criterion is a genuinely new visual question. An
     // explicit inspection may submit it once; passive/cache-only inspection
     // cannot. Its own receipt and unknown guards are independent of the old task.
-    const readReview=()=>stableReview?Promise.resolve(stableReview):this.complete(project.id,'visual-illustration',qualitySystem,qualityInput,images,previousRequests);
+    const readReview=()=>{
+      if(stableReview){
+        const retry=documentarySelectionRetry.getStore();if(retry&&'cached' in retry)retry.cached.matched=true;
+        return Promise.resolve(stableReview);
+      }
+      return this.complete(project.id,'visual-illustration',qualitySystem,qualityInput,images,previousRequests);
+    };
     // Another catalogue page may be pending after this exact cut was reviewed.
     // Only a cached answer can be used until the catalogue request is resolved.
     const value:Record<string,unknown>=pendingCatalog||!supersededTargetContract&&(previousUnprovedVideo||previousQualityReview)?await this.inspection.run({...inspection!,cacheOnly:true},readReview).catch(error=>{

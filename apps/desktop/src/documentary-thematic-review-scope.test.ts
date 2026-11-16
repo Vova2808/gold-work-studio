@@ -67,7 +67,7 @@ for(const number of [31,45] as const)test(`actual final payload for generic them
   assert.match(system,/all conditions are required/);assert.match(system,/actual camera footage/);assert.match(system,/sourceText/);
   assert.equal(input.visualTarget,scene.documentary!.requirement.aiSearchPlan!.fallbackVisualTarget);assert.equal(input.sourcePolicy,'background');
   assert.equal(input.namedSubject,undefined);assert.equal(input.requiredSubject,undefined);assert.deepEqual(input.requiredYears,[]);
-  assert.equal(input.narration,scene.narration);assert.equal(input.fullScript,project.videoBrief!.readyScript);assert.match(JSON.stringify(input.narrativeContext),/Cutty Sark/);
+  assert.equal(input.narration,scene.narration);assert.equal(input.fullScript,undefined);assert.match(JSON.stringify(input.narrativeContext),/Cutty Sark/);
  });
  const result=await new DocumentaryIntelligence(fake,()=>directory).inspectForSelection(project,scene);
  assert.equal(result.review.status,'rejected');assert.equal(fake.calls,1);assert.deepEqual(project,before);
@@ -198,7 +198,7 @@ async function receiptWithoutModelInput(){
  assert.equal(receipt.model,'model-A');return {...f,analysis,path,bytes,receipt};
 }
 
-test('single review model A completion cannot approve model B; B sends once and resumes its own receipt',async()=>{
+test('completed visual verdict survives a model change without paying for the same question again',async()=>{
  const f=await receiptWithoutModelInput();
  const same=client(()=>{},answer({suitable:false}));Reflect.set(same,'documentaryAnalysisModel',async()=> 'model-A');
  assert.equal((await new DocumentaryIntelligence(same,()=>f.directory).inspectForSelection(f.project,f.scene)).review.status,'accepted');
@@ -206,16 +206,14 @@ test('single review model A completion cannot approve model B; B sends once and 
  const next=client((_system,input)=>assert.equal(input.analysisModel,'model-B'),answer({suitable:false,targetVisible:false}));
  Reflect.set(next,'documentaryAnalysisModel',async()=> 'model-B');
  const intel=new DocumentaryIntelligence(next,()=>f.directory),first=await intel.inspectForSelection(f.project,f.scene);
- assert.equal(first.review.status,'rejected');assert.equal(first.usedNewAnalysis,true);assert.equal(next.calls,1);
+ assert.equal(first.review.status,'accepted');assert.equal(first.usedNewAnalysis,false);assert.equal(next.calls,0);
  const resumed=await new DocumentaryIntelligence(next,()=>f.directory).inspectForSelection(f.project,f.scene);
- assert.equal(resumed.review.status,'rejected');assert.equal(resumed.usedNewAnalysis,false);assert.equal(next.calls,1);
+ assert.equal(resumed.review.status,'accepted');assert.equal(resumed.usedNewAnalysis,false);assert.equal(next.calls,0);
  assert.equal(await readFile(f.path,'utf8'),f.bytes,'The former completed receipt is immutable');
- const files=(await readdir(f.analysis)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name));assert.equal(files.length,2);
- const newer=JSON.parse(await readFile(join(f.analysis,files.find(name=>join(f.analysis,name)!==f.path)!),'utf8'));
- assert.equal(newer.model,'model-B');assert.notEqual(newer.singleReviewBinding.taskKey,f.receipt.singleReviewBinding.taskKey);
+ const files=(await readdir(f.analysis)).filter(name=>/^[a-f0-9]{64}\.json$/.test(name));assert.equal(files.length,1);
 });
 
-test('same-model unknown single review remains blocked across model-key migration; another model is independent',async()=>{
+test('unknown single review remains blocked across prompt and model changes',async()=>{
  const f=await receiptWithoutModelInput(),same=client();Reflect.set(same,'documentaryAnalysisModel',async()=> 'model-A');
  for(const state of ['pending','partial','received']){
   const bytes=JSON.stringify({...f.receipt,state,result:undefined,raw:state==='partial'?'unfinished':undefined});await writeFile(f.path,bytes);
@@ -223,15 +221,8 @@ test('same-model unknown single review remains blocked across model-key migratio
   assert.equal(same.calls,0);assert.equal(await readFile(f.path,'utf8'),bytes);
  }
  const oldBytes=await readFile(f.path,'utf8'),next=client(()=>{},answer({suitable:true}));Reflect.set(next,'documentaryAnalysisModel',async()=> 'model-B');
- assert.equal((await new DocumentaryIntelligence(next,()=>f.directory).inspectForSelection(f.project,f.scene)).review.status,'accepted');
- assert.equal(next.calls,1);assert.equal(await readFile(f.path,'utf8'),oldBytes);
- const name=(await readdir(f.analysis)).find(name=>/^[a-f0-9]{64}\.json$/.test(name)&&join(f.analysis,name)!==f.path)!;
- const path=join(f.analysis,name),receipt=JSON.parse(await readFile(path,'utf8'));
- for(const state of ['pending','partial','received']){
-  const bytes=JSON.stringify({...receipt,state,result:undefined});await writeFile(path,bytes);
-  await assert.rejects(new DocumentaryIntelligence(next,()=>f.directory).inspectForSelection(f.project,f.scene),DocumentaryAnalysisError);
-  assert.equal(next.calls,1);assert.equal(await readFile(path,'utf8'),bytes);
- }
+ await assert.rejects(new DocumentaryIntelligence(next,()=>f.directory).inspectForSelection(f.project,f.scene),error=>error instanceof DocumentaryAnalysisError&&error.requestSent);
+ assert.equal(next.calls,0);assert.equal(await readFile(f.path,'utf8'),oldBytes);
 });
 
 for(const [name,value] of [
