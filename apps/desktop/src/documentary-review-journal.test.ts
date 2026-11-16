@@ -10,7 +10,7 @@ import {DocumentaryAnalysisError} from './documentary-analysis-error.js';
 import {AnyModelOutputFormatError} from './anymodel-client.js';
 import {documentaryVisualVerdictKey} from './documentary-checkpoint-key.js';
 import {readDocumentaryRequestJournal} from './documentary-request-journal.js';
-import {listDocumentaryRecovery,DocumentaryRetryPermissions,readDocumentarySelectionRetryGrant,documentarySelectionRetry} from './documentary-retry.js';
+import {listDocumentaryRecovery,DocumentaryRetryPermissions,readDocumentarySelectionRetryGrant,readDocumentarySelectionRetryEvidence,checkDocumentarySelectionRetry,documentarySelectionRetry} from './documentary-retry.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(typeof value==='string'?value:JSON.stringify(value)).digest('hex');
 const rejected={suitable:false,targetVisible:false,description:'No bird is visible.',reason:'The required bird is absent.',sourceText:{kind:'none',text:''}};
@@ -128,4 +128,21 @@ for(const automatic of [true,false])test(`known empty has an actionable single r
   await assert.rejects(new DocumentaryIntelligence(client,()=>f.root).inspectForSelection(f.project,f.scene));
   assert.equal(tokens.length,2,'Restart cannot create a third automatic payment');
   const entries=await readDocumentaryRequestJournal(f.directory);assert.ok(entries.some(row=>row.receipt?.rejection==='empty-response'));
+});
+
+test('a known-empty grant can follow the configured model but its one retry remains spent across models',async t=>{
+  const f=await fixture(t),id='b'.repeat(64),binding={checksum:f.checksum,start:0,end:0,taskKey:'c'.repeat(64),quality:{version:1,target:'A bird',narration:f.scene.narration,sceneId:f.scene.id}};
+  await writeFile(join(f.directory,id+'.json'),JSON.stringify({state:'rejected',rejection:'empty-response',purpose:'visual-illustration',model:'old-model',
+    raw:'',completion:{disposition:'empty',receivedCharacters:0},completedAt:'2026-11-12T00:00:00.000Z',singleReviewBinding:binding}));
+  await new DocumentaryRetryPermissions().authorize(f.root,await listDocumentaryRecovery(f.root));
+  const evidence=await readDocumentarySelectionRetryEvidence(f.root,'current-model'),grant=evidence.grants[0]!;
+  assert.equal(grant.priorState,'empty');
+  const request={id:'d'.repeat(64),purpose:'visual-illustration',model:'current-model',binding:{...binding,taskKey:'e'.repeat(64)},existing:false,
+    visualQuestion:{target:'A bird',narration:f.scene.narration}};
+  await documentarySelectionRetry.run({grant,probe:false},async()=>{
+    assert.equal(await checkDocumentarySelectionRetry(f.directory,request),'empty');
+    await writeFile(join(f.directory,request.id+'.json'),JSON.stringify({state:'pending',purpose:request.purpose,model:'current-model',
+      singleReviewBinding:{...request.binding,groundedRetryOrigin:grant.id}}));
+    await assert.rejects(checkDocumentarySelectionRetry(f.directory,{...request,id:'f'.repeat(64),model:'third-model'}),/не совпадает/);
+  });
 });

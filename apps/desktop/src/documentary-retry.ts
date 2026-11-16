@@ -149,7 +149,7 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
   if(!scope||!('grant' in scope))return;
   const {grant}=scope,binding=request.binding;
   const mismatch=()=>new DocumentaryAnalysisError('Разрешение повтора не совпадает с текущим запросом проверки материала. Оплата не выполнена.','pending',request.purpose);
-  if(request.purpose!=='visual-illustration'||request.model!==grant.model||!binding
+  if(request.purpose!=='visual-illustration'||request.model!==grant.model&&grant.priorState!=='empty'||!binding
     ||binding.checksum!==grant.binding.checksum||binding.start!==grant.binding.start||binding.end!==grant.binding.end)throw mismatch();
   const exact=request.id===grant.id&&binding.taskKey===grant.binding.taskKey;
   const empty=grant.priorState==='empty'&&Boolean(grant.visualQuestion)&&Boolean(request.visualQuestion)
@@ -174,9 +174,9 @@ export async function checkDocumentarySelectionRetry(directory:string,request:Re
     for(const {key,receipt} of await readDocumentaryRequestJournal(directory)){
       if(!receipt||await documentaryAdmissionNotDispatched(directory,key,receipt))continue;
       const prior=receipt?.singleReviewBinding;
-      if(receipt?.purpose===request.purpose&&receipt.model===request.model&&prior?.checksum===binding.checksum
+      if(receipt?.purpose===request.purpose&&prior?.checksum===binding.checksum
         &&prior.start===binding.start&&prior.end===binding.end
-        &&(prior.groundedRetryOrigin===grant.id||!exact&&prior.taskKey===binding.taskKey))throw mismatch();
+        &&(prior.groundedRetryOrigin===grant.id||receipt.model===request.model&&!exact&&prior.taskKey===binding.taskKey))throw mismatch();
     }
   }
   if(scope.probe)throw new DocumentarySelectionRetryProbePassed();
@@ -192,7 +192,7 @@ export async function readDocumentarySelectionRetryEvidence(root:string,model:st
   const unsettledExact:Array<{id:string;narration?:string}>=[];
   const cachedChecksums=new Set<string>();
   for(const authorization of await Promise.all(ids.map(id=>readSelectionAuthorization(directory,id)))){
-    if(!authorization||authorization.grant.model!==model)continue;
+    if(!authorization||authorization.grant.model!==model&&authorization.grant.priorState!=='empty')continue;
     const {grant,available,completed}=authorization;
     if(available)grants.push(grant);
     if(authorization.exactCompletedNarration)exactCompletions.push({grant,narration:authorization.exactCompletedNarration});
