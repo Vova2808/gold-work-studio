@@ -178,8 +178,10 @@ test('source-grounded plans keep history separate from visible requirements acro
   const scenes=scenesOf(...cases.map(item=>item.quote));scenes[0]!.audioPath='retained-original-audio.mp3';
   const project=projectOf(scenes);project.videoBrief!.readyScript=cases.map(item=>item.quote).join('\n');
   const before=structuredClone(project);
-  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map((scene,index)=>
-    groundedEntry(scene.sceneId,cases[index]!.subject,cases[index]!.quote))}));
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>{
+    const item=cases[scenes.findIndex(current=>current.id===scene.sceneId)]!;
+    return groundedEntry(scene.sceneId,item.subject,item.quote);
+  })}));
   const plans=await f.planner().plan(project,scenes);
   assert.equal(plans.size,cases.length);assert.deepEqual(project,before);
   for(const [index,scene] of scenes.entries()){
@@ -451,7 +453,7 @@ test('every batch includes complete source, unchanged ids and context; no mutati
   const snapshot = structuredClone(project);
   const plans = await f.planner().plan(project, scenes);
   assert.equal(plans.size, 19);
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 5);
   for (const call of f.calls) {
     assert.equal(call.data.originalScript, project.videoBrief!.readyScript);
     assert.deepEqual(call.data.contextScenes, scenes.map(scene => ({ sceneId: scene.id, narration: scene.narration })));
@@ -468,10 +470,10 @@ test('every batch includes complete source, unchanged ids and context; no mutati
   assert.equal(first.aiSearchPlan!.inputHash.length, 64);
   assert.ok(first.queries.every(query => !query.includes('ocean liner')));
   await f.planner().plan(project, scenes);
-  assert.equal(f.calls.length, 3, 'new planner instance reuses persistent cache');
+  assert.equal(f.calls.length, 5, 'new planner instance reuses persistent cache');
   const cache = JSON.parse(await readFile(path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!), 'utf8'));
   assert.equal(cache.attempts[0].responseState, 'complete');
-  assert.equal(cache.attempts[0].rawResponse, response(scenes.slice(0, 8).map(scene => scene.id)));
+  assert.equal(cache.attempts[0].rawResponse, response(scenes.slice(0, 4).map(scene => scene.id)));
   assert.deepEqual(JSON.parse(cache.attempts[0].request.payload), f.calls[0]!.data);
   assert.equal(cache.attempts[0].request.system, f.calls[0]!.system);
 });
@@ -486,10 +488,10 @@ test('two disjoint planning batches overlap and both paid markers are durable be
     assert.equal(arrived,2,'The second batch must start while the first is waiting');
     return response(call.data.requestedScenes.map(scene=>scene.sceneId));
   });
-  const scenes=scenesOf(...Array.from({length:16},(_,i)=>`Ship scene ${i}.`));
+  const scenes=scenesOf(...Array.from({length:8},(_,i)=>`Ship scene ${i}.`));
   const plans=await f.planner().plan(projectOf(scenes),scenes);
-  assert.equal(plans.size,16);assert.equal(f.calls.length,2);
-  assert.equal(new Set(f.calls.flatMap(call=>call.data.requestedScenes.map(scene=>scene.sceneId))).size,16);
+  assert.equal(plans.size,8);assert.equal(f.calls.length,2);
+  assert.equal(new Set(f.calls.flatMap(call=>call.data.requestedScenes.map(scene=>scene.sceneId))).size,8);
   const cache=JSON.parse(await readFile(path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!),'utf8'));
   assert.equal(cache.attempts.length,2);assert.ok(cache.attempts.every((attempt:{status:string})=>attempt.status==='complete'));
   await f.planner().plan(projectOf(scenes),scenes);assert.equal(f.calls.length,2);
@@ -503,10 +505,10 @@ test('one closed empty response gets one successor while the other completed bat
   });
   const scenes=scenesOf(...Array.from({length:16},(_,i)=>`Ship scene ${i}.`)),project=projectOf(scenes);
   assert.equal((await f.planner().plan(project,scenes)).size,16);
-  assert.equal(f.calls.length,3);assert.equal(f.calls.filter(call=>call.data.requestedScenes[0]!.sceneId==='scene-8').length,1);
+  assert.equal(f.calls.length,5);assert.equal(f.calls.filter(call=>call.data.requestedScenes[0]!.sceneId==='scene-4').length,1);
   const cache=JSON.parse(await readFile(path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!),'utf8'));
   assert.equal(cache.attempts[0].status,'uncertain');assert.equal(cache.attempts[0].emptyResponse,true);
-  await f.planner().plan(project,scenes);assert.equal(f.calls.length,3);
+  await f.planner().plan(project,scenes);assert.equal(f.calls.length,5);
 });
 
 test('repeated closed empty responses stop after one retry and a restart does not reset that limit',async t=>{
@@ -514,6 +516,76 @@ test('repeated closed empty responses stop after one retry and a restart does no
   const scenes=scenesOf('A ship crosses the ocean.'),project=projectOf(scenes);
   await assert.rejects(f.planner().plan(project,scenes));assert.equal(f.calls.length,2);
   await assert.rejects(f.planner().plan(project,scenes));assert.equal(f.calls.length,2);
+  const [issue]=await f.planner().readIssues(project,scenes);assert.ok(issue?.retryToken);
+  await assert.rejects(f.planner().plan(project,scenes,{retryToken:issue.retryToken}));
+  assert.equal(f.calls.length,3,'One explicit click authorizes one additional completion');
+  await assert.rejects(f.planner().plan(project,scenes));assert.equal(f.calls.length,3);
+});
+
+test('scene-owned plans survive model, title and distant edits; changed local narration requires planning',async t=>{
+  const f=await fixture(t),scenes=scenesOf('First.','Second.','Third.','Fourth.','Fifth.'),project=projectOf(scenes);
+  const planned=await f.planner().plan(project,scenes);
+  for(const scene of scenes)scene.documentary={requirement:planned.get(scene.id)!} as Scene['documentary'];
+  const original=scenes[0]!.documentary!.requirement.aiSearchPlan!.inputHash;
+  f.state.model='fixture/replacement-model';project.title='Edited title';scenes[4]!.narration='Distant edited ending.';
+  project.videoBrief!.readyScript+=' Distant edited ending.';
+  const reused=await f.planner().plan(project,[scenes[0]!]);
+  assert.equal(f.calls.length,2,'Two original four-scene batches only');
+  assert.equal(reused.get(scenes[0]!.id)!.aiSearchPlan!.inputHash,original,'Paid receipt identity is unchanged');
+  assert.ok(currentDocumentaryAiSearchPlan(project,scenes[0]!));
+  assert.deepEqual(await f.planner().readIssues(project,[scenes[0]!]),[]);
+  scenes[0]!.narration+=' New local detail.';
+  assert.equal(currentDocumentaryAiSearchPlan(project,scenes[0]!),undefined);
+  await f.planner().plan(project,[scenes[0]!]);assert.equal(f.calls.length,3);
+});
+
+test('legacy scene plan migrates from the exact paid request after unrelated context changes without rewriting it',async t=>{
+  const f=await fixture(t),scenes=scenesOf('First.','Second.','Third.','Fourth.'),project=projectOf(scenes);
+  const planned=await f.planner().plan(project,scenes),scene=scenes[0]!;
+  scene.documentary={requirement:planned.get(scene.id)!} as Scene['documentary'];
+  delete scene.documentary!.requirement.aiSearchPlan!.sceneInputHash;
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!),before=await readFile(file,'utf8');
+  project.title='New title';f.state.model='fixture/new-model';scenes[3]!.narration='Changed faraway ending.';
+  const cached=await f.planner().readCached(project,[scene]);
+  assert.ok(cached.get(scene.id)?.aiSearchPlan?.sceneInputHash);
+  scene.documentary!.requirement=cached.get(scene.id)!;
+  await f.planner().plan(project,[scene]);assert.equal(f.calls.length,1);
+  assert.equal(await readFile(file,'utf8'),before,'Do not rewrite the old receipt during migration');
+});
+
+test('an unknown prior plan cannot be resubmitted through a model/title/distant-script cache change',async t=>{
+  const f=await fixture(t,async()=>{throw Error('Connection lost');});
+  const scenes=scenesOf('First.','Second.','Third.'),project=projectOf(scenes);
+  await assert.rejects(f.planner().plan(project,[scenes[0]!]));
+  project.title='New title';f.state.model='fixture/new-model';scenes[2]!.narration='New ending.';
+  await assert.rejects(f.planner().plan(project,[scenes[0]!]),/неизвестный результат/);
+  assert.equal(f.calls.length,1);
+});
+
+test('Stop drains sent planning responses and prevents the next batch',async t=>{
+  const controller=new AbortController();
+  let release!:()=>void;
+  const pending=new Promise<void>(resolve=>{release=resolve;});
+  const f=await fixture(t,async call=>{controller.abort();await pending;return response(call.data.requestedScenes.map(scene=>scene.sceneId));});
+  const scenes=scenesOf(...Array.from({length:12},(_,index)=>`Scene ${index}.`)),project=projectOf(scenes);
+  const job=f.planner().plan(project,scenes,{signal:controller.signal});
+  const outcome=assert.rejects(job,/abort/i);
+  await new Promise(resolve=>setTimeout(resolve,25));release();await outcome;
+  assert.ok(f.calls.length<=2);
+  const cached=await f.planner().readCached(project,scenes);
+  assert.equal(cached.size,f.calls.length*4,'Every already sent response was saved');
+});
+
+test('planner returns generic object class, excluded classes and uncertain availability in the existing response',async t=>{
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>entry(scene.sceneId,{
+    objectClass:'ocean liner',excludedClasses:['aircraft','person portrait'],
+    availability:{status:'limited',note:'Historical state may need archival art.',representations:['archival drawing']}
+  }))}));
+  const scenes=scenesOf('A liner.'),planned=await f.planner().plan(projectOf(scenes),scenes);
+  const plan=planned.get(scenes[0]!.id)!.aiSearchPlan!;
+  assert.equal(plan.objectClass,'ocean liner');assert.deepEqual(plan.excludedClasses,['aircraft','person portrait']);
+  assert.equal(plan.availability?.status,'limited');assert.equal(f.calls.length,1);
+  assert.match(f.calls[0]!.system,/search hypotheses/);
 });
 
 test('context-only scenes are included and a subset reuses the same scene cache', async t => {
@@ -967,7 +1039,7 @@ test('cache-only read does not wait for a pending completion to settle', async t
   assert.equal((await running).size, 2);
 });
 
-test('prompt revision 14 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
+test('prompt revision 15 separates narrated history from required pixels and preserves primary versus thematic lanes', async t => {
   const expected = [
     entry('scene-0', { subject: 'Yamaha YZR-M1', visualTarget: 'Yamaha YZR-M1 motorcycle cornering', years: ['2003'],
       imageQueries: ['Yamaha YZR-M1 2003 cornering'], videoQueries: ['Yamaha YZR-M1 2003 race footage'],
@@ -1016,7 +1088,7 @@ test('prompt revision 14 separates narrated history from required pixels and pre
   const file = path.join(f.root, 'documentary-ai-query-plans', (await f.cacheFiles())[0]!);
   const cache = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(cache.version, 1, 'Prompt change does not silently invalidate already paid v1 receipts');
-  assert.equal(cache.attempts[0].request.promptRevision, 14);
+  assert.equal(cache.attempts[0].request.promptRevision, 15);
   assert.equal(cache.attempts[0].request.system, prompt);
 });
 
@@ -1384,7 +1456,7 @@ test('an image plan with an unused reserve keeps its primary searches and replay
   const requirement = result.get(image.sceneId)!;
   const { sceneId, ...fields } = image;
   assert.deepEqual(requirement.aiSearchPlan, { ...fields, version: 1, inputHash: requirement.aiSearchPlan!.inputHash,
-    model: MODEL, fallbackVisualTarget: '' });
+    model: MODEL, fallbackVisualTarget: '',sceneInputHash:requirement.aiSearchPlan!.sceneInputHash });
   assert.deepEqual(requirement.queries, image.imageQueries);
   assert.equal(f.calls.length, 1, 'The original response needs no repair');
 
@@ -1451,7 +1523,7 @@ test('completed decade receipts recover beside saved plans even after repair exh
   const before = await readFile(file, 'utf8');
   const cached = await f.planner().readCached(project, scenes);
   assert.equal(cached.size, 3);
-  assert.deepEqual(cached.get('scene-0')!.aiSearchPlan, preserved);
+  assert.deepEqual(cached.get('scene-0')!.aiSearchPlan, {...preserved,sceneInputHash:cached.get('scene-0')!.aiSearchPlan!.sceneInputHash});
   assert.deepEqual(cached.get('scene-1')!.aiSearchPlan!.years, ['1860-1869', '1870-1879']);
   assert.deepEqual(await f.planner().plan(project, scenes), cached);
   assert.equal(f.calls.length, 1, 'Already completed responses are reused even when repair attempts are exhausted');

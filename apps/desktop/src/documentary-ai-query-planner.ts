@@ -7,14 +7,15 @@ import {AnyModelCompletionUncertainError,type AnyModelClient} from './anymodel-c
 import {parseDocumentaryJson} from './documentary-json.js';
 import { ProxyConnectError } from './proxy-utils.js';
 import {documentaryBoundFallbackNarrativeFit,documentaryFallbackNarrativeRevisions,documentaryFallbackNarrativeTask} from './documentary-fallback-narrative.js';
+import {currentDocumentaryAiSearchPlan,documentaryAiScenePlanHash,documentaryAiScenePlanContextHash} from './documentary-ai-plan-state.js';
 
 const VERSION = 1 as const;
 // The request revision records instructions without changing the project context or paid cache key.
-const PROMPT_REVISION = 14 as const;
+const PROMPT_REVISION = 15 as const;
 // Consistency wording is for future requests. A usable contextual revision-13
 // plan is not a reason to pay again during ordinary resume.
 const CONTEXTUAL_PROMPT_REVISION = 13;
-const BATCH_SIZE = 8;
+const BATCH_SIZE = 4;
 const MAX_ATTEMPTS = 2;
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const locks = new Map<string, Promise<unknown>>();
@@ -88,7 +89,8 @@ function queryIssue(cache: Cache, scene: Scene): DocumentaryQueryPlanIssue | und
   if (attempts.some(a => a.status === 'complete')) return { ...row,
     reason: 'В кеше отмечен готовый ответ, но его план недоступен. Повторная отправка заблокирована.' };
   if(attempts.length>=MAX_ATTEMPTS&&attempts.some(closedEmptyResponse))return {...row,
-    reason:'Сервис закрыл пустой ответ; одна дополнительная попытка уже использована. Полученные планы сохранены.'};
+    reason:'Сервис закрыл пустой ответ; одна дополнительная попытка уже использована. Полученные планы сохранены.',
+    retryToken:hash([cache.inputHash,scene.id,related.length])};
   if (attempts.length >= MAX_ATTEMPTS) return { ...row,
     reason: `Завершённых ответов: ${attempts.length}. Модель пропустила сцену или вернула план с неподходящими данными. Автоматические попытки исчерпаны.`,
     retryToken: hash([cache.inputHash, scene.id, related.length]) };
@@ -155,8 +157,8 @@ const TOPIC_BROLL_SYSTEM = `${TOPIC_BROLL_SYSTEM_V3} ${QUERY_TARGET_AGREEMENT}`;
 const CORRECT_LEGACY_RESERVE = ' The supplied rejectedReserve is the actual previous search that failed the original-scene meaning check. Replace its target and all queries with a grounded alternative or an empty reserve. Read lastRejection as the evidence for what meaning was lost.';
 
 const normalized = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-function primaryOnly(plan: DocumentaryAiSearchPlan): Omit<DocumentaryAiSearchPlan, 'fallbackVideoQueries' | 'fallbackVisualTarget'> {
-  const { fallbackVideoQueries: _queries, fallbackVisualTarget: _target, ...primary } = plan;
+function primaryOnly(plan: DocumentaryAiSearchPlan): Omit<DocumentaryAiSearchPlan, 'fallbackVideoQueries' | 'fallbackVisualTarget' | 'sceneInputHash'> {
+  const { fallbackVideoQueries: _queries, fallbackVisualTarget: _target,sceneInputHash:_local, ...primary } = plan;
   return primary;
 }
 function fallbackSources(project: Project, scenes: Scene[]): Record<string, DocumentaryAiSearchPlan> {
@@ -412,11 +414,12 @@ Geographic connections and narrated advantages describe why the subject matters;
 For a physical feature, configuration or measured surface, require that feature to be visible or clearly depicted. Put it in mandatory as a separate condition alongside identity; the exact numerical value need not be proved by pixels.
 Bind subject, visualTarget and mandatory to this chosen representation. illustrations may offer archival, drawn or modern representations of that SAME subject, each explaining its script-supported connection. Do not mix different depicted subjects under one mandatory identity. All primary and reserve queries must satisfy their corresponding target. Never mark the line's central feature optional.
 Before returning an entry, check EVERY offered illustration against EVERY mandatory condition. Remove any illustration that cannot satisfy the mandatory identity or feature; never weaken a required fact to accommodate an available illustration. An ordinary modern component does not depict a specifically required improvised historical component. Generic people or a similar group cannot stand for a specifically identified person or crew. A disclaimer cannot make either substitution valid. For ordinary subject-context narration choose a truthful view of the same subject first, then require only what that representation must show; do not also require a different event or component that its illustrations omit.
-subject names the physical person, object, place or component, not an event, date or assessment. A different named subject or a broad thematic association is not a substitute. An attributed physical model or accurate diagram may illustrate the same subject/feature when appropriate; label it honestly, never as a photograph of the real object or historical event. Do not adapt requirements to available candidates. Explicit visual comparisons must preserve both subjects and the relevant difference; a narrated consequence alone does not require a comparison diagram. Never invent ports or borrow unrelated journey details from elsewhere in the script.
+subject names the physical person, object, place or component, not an event, date or assessment. A different named subject or a broad thematic association is not a substitute. An attributed physical model or accurate diagram may illustrate the same subject/feature when appropriate; label it honestly, never as a photograph of the real object or historical event. Preserve explicit facts, while choosing a feasible honest representation before freezing requirements. Explicit visual comparisons must preserve both subjects and the relevant difference; a narrated consequence alone does not require a comparison diagram. Never invent ports or borrow unrelated journey details from elsewhere in the script.
 In visualPolicy.mode=subject-illustration or thematic, narrated biography, an end of trade or a past voyage does not require a historical event photo, loading or characteristic activity. Require a visible action only when the script makes showing it the point. Use visualScope=illustrative for honest subject illustrations; exact for literal visual tasks. visualPolicy.mode=literal requires the specifically narrated event, state and period. years contains ONLY a visibly required period/capture year with a grounded era check; otherwise []. Dates may help archival queries without becoming required pixels. Targets must be checkable from a photograph or three sparse video samples.
 grounding is required for EVERY entry, including repairs. Each mandatory identity, era, geography, action or condition needs an exact unchanged scriptQuote from originalScript. Include identity or geography for the chosen subject, and a separate condition for every central physical feature. aliases may contain only alternative identity names explicitly present in the script. A source quote establishes provenance, not an automatic requirement that its entire event be visible. optionalDetails contains only nonessential staging, capture date or viewpoint.
 Return ONLY {"scenes":[{"sceneId":"unchanged id","subject":"canonical physical subject","visualTarget":"subject with the required visible feature","years":[],"visualScope":"illustrative","preferredKind":"image","reservePolicy":"thematic","imageQueries":["precise subject and feature search"],"videoQueries":["precise subject and feature search"],"fallbackVisualTarget":"same subject and necessary feature","fallbackVideoQueries":["same subject feature search"],"grounding":{"version":1,"mandatory":[{"kind":"identity","required":"canonical subject name","scriptQuote":"exact identity source quote"},{"kind":"condition","required":"the visible physical feature discussed by this line","scriptQuote":"exact feature source quote"}],"illustrations":["representation of this subject and its specific connection to the line"],"optionalDetails":["nonessential staging"]}}]}. The sample condition is for a physical-feature line; omit it for ordinary subject-context narration that does not require one.
-Author normally 1-2 concise queries per media type, retaining full names and essential features. Separate archival image/artwork and present-day video searches. A lane may be [] when it cannot honestly show the target; preferredKind must have a nonempty lane. Do not claim archive availability.
+Also return objectClass (one short English physical class), excludedClasses (0-6 clearly different physical classes or common namesakes that would be wrong for this representation), and availability:{status:"unknown"|"likely"|"limited",note:"brief uncertainty and representation limits",representations:["honest archival, drawn or present-day views"]}. These are search hypotheses, not claims that an archive contains a file. Use unknown when availability is not established. For limited historical states, plan archival art or an accurate diagram when a present-day photograph cannot show the required state; never repeatedly query modern footage for an impossible historical configuration. In subject-illustration mode ordinary narration about a past event may use a clearly labelled present-day view of the same subject, without claiming that it shows the past event. In literal mode keep the explicit visual task and leave impossible lanes empty. Never silently drop a script-required feature or fabricate availability.
+Author normally 1-2 concise queries per media type, retaining full names and essential features. Separate archival image/artwork and present-day video searches. A lane may be [] when it cannot honestly show the target; preferredKind must have a nonempty lane. Put source-type words such as archival photograph in image queries only; video queries describe concrete visible subjects and actions, without search-provider boilerplate.
 fallbackVideoQueries/fallbackVisualTarget are THEMATIC B-ROLL after primary discovery fails, kept separate from primary lanes. They must retain the chosen subject, necessary geography and central visible features; do not release them because material is unavailable. Set reservePolicy=primary-only and fallbackVisualTarget:"",fallbackVideoQueries:[] when no honest reserve exists or a required diagram/comparison cannot use ordinary footage. Otherwise use reservePolicy=thematic. No generated-image prompts, extra narration, explanations or markdown.`;
 
 /** Preserve the exact paragraph, never attach a repeated fragment to an
@@ -511,6 +514,14 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
     || (value.fallbackVisualTarget === '' ? fallbackVideoQueries.length > 0 : !shortText(value.fallbackVisualTarget, 500))) return;
   return {
     version: VERSION, inputHash, model, visualTarget: value.visualTarget.trim(), subject: value.subject.trim(),
+    ...(typeof value.sceneInputHash==='string'&&/^[a-f0-9]{64}$/.test(value.sceneInputHash)?{sceneInputHash:value.sceneInputHash}:{}),
+    ...(shortText(value.objectClass,120)?{objectClass:value.objectClass.trim()}:{}),
+    ...(Array.isArray(value.excludedClasses)&&value.excludedClasses.length<=12&&value.excludedClasses.every(item=>shortText(item,120))
+      ?{excludedClasses:(value.excludedClasses as string[]).map(item=>item.trim())}:{}),
+    ...(record(value.availability)&&['unknown','likely','limited'].includes(String(value.availability.status))
+      &&shortText(value.availability.note,500)&&Array.isArray(value.availability.representations)
+      &&value.availability.representations.length<=8&&value.availability.representations.every(item=>shortText(item,300))
+      ?{availability:structuredClone(value.availability) as unknown as DocumentaryAiSearchPlan['availability']}:{}),
     ...(record(value.grounding) ? {grounding: structuredClone(value.grounding) as unknown as DocumentaryAiSearchPlan['grounding']} : {}),
     // Models also use unambiguous decade notation; keep its full interval rather than buying a repair.
     years: [...new Set((value.years as string[]).map(year => /^\d{3}0s$/.test(year)
@@ -524,7 +535,7 @@ function validate(value: unknown, inputHash: string, model: string): Documentary
   };
 }
 
-function requirement(scene: Scene, plan: DocumentaryAiSearchPlan): DocumentaryRequirement {
+function requirement(scene: Scene, plan: DocumentaryAiSearchPlan, project?:Project): DocumentaryRequirement {
   const identities = plan.grounding?.mandatory.filter(check => check.kind === 'identity')
     .map(check => ({name:check.required,aliases:[...(check.aliases ?? [])]}));
   return {
@@ -534,7 +545,7 @@ function requirement(scene: Scene, plan: DocumentaryAiSearchPlan): DocumentaryRe
     visualScope: plan.visualScope, plannedBy: 'semantic',
     queries: [...new Set(plan.preferredKind === 'video'
       ? [...plan.videoQueries, ...plan.imageQueries] : [...plan.imageQueries, ...plan.videoQueries])],
-    aiSearchPlan: structuredClone(plan),
+    aiSearchPlan: {...structuredClone(plan),...(project?{sceneInputHash:documentaryAiScenePlanHash(project,scene)}:{})},
   };
 }
 
@@ -542,6 +553,52 @@ function planningContext(project: Project, scenes: Scene[]) {
   const currentScenes = new Map((project.scenes ?? []).map(scene => [scene.id, scene]));
   for (const scene of scenes) currentScenes.set(scene.id, scene);
   return documentaryAiPlanContext({...project,scenes:[...currentScenes.values()]});
+}
+
+/** Migrate only an owned plan proved by its original saved request. A title,
+ * model, or distant edit may change the disk address without changing this task.
+ * Unknown old submissions are held even when the global cache address changed. */
+async function reusableScenePlans(project:Project,scenes:Scene[],root:string,currentHash:string) {
+  const plans=new Map<string,DocumentaryAiSearchPlan>(),held=new Set<string>();
+  for(const scene of scenes){
+    const current=currentDocumentaryAiSearchPlan(project,scene);
+    if(current)plans.set(scene.id,{...current,sceneInputHash:documentaryAiScenePlanHash(project,scene)});
+  }
+  const directory=path.join(root,'documentary-ai-query-plans');
+  const files=await readdir(directory).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error;});
+  for(const name of files.filter(name=>/^[a-f0-9]{64}\.json$/.test(name)&&name!==`${currentHash}.json`)){
+    const saved:unknown=await readFile(path.join(directory,name),'utf8').then(text=>JSON.parse(text));
+    if(!record(saved)||saved.version!==VERSION||typeof saved.model!=='string'||typeof saved.inputHash!=='string'
+      ||!Array.isArray(saved.attempts))continue;
+    const cache=saved as unknown as Cache;
+    const completed=completedRawPlans(cache,cache.inputHash,cache.model);
+    for(const scene of scenes){
+      const owned=scene.documentary?.requirement?.aiSearchPlan;
+      const replaced=owned?replacedUnknownPlanAttempts(cache,scene,owned):new Set<Attempt>();
+      for(const attempt of cache.attempts){
+        if(!record(attempt)||!Array.isArray(attempt.ids)||!attempt.ids.includes(scene.id)||!attempt.request?.payload)continue;
+        let input:Record<string,unknown>;
+        try{input=JSON.parse(attempt.request.payload);}catch{continue;}
+        if(!record(input)||!Array.isArray(input.contextScenes)||!input.contextScenes.every(item=>record(item)
+          &&typeof item.sceneId==='string'&&typeof item.narration==='string'))continue;
+        const oldContext={language:input.language,contextScenes:input.contextScenes as Array<{sceneId:string;narration:string}>,
+          ...(record(input.visualPolicy)?{visualPolicy:input.visualPolicy as {mode:unknown}}:{})};
+        const sameScene=oldContext.contextScenes.some(item=>item.sceneId===scene.id&&item.narration===scene.narration);
+        if(!sameScene)continue;
+        if(!replaced.has(attempt)&&!closedEmptyResponse(attempt)&&unsettledReserveAttempt(attempt)){
+          held.add(scene.id);continue;
+        }
+        if(plans.has(scene.id)||!owned||scene.documentary?.requirement?.text!==scene.narration
+          ||owned.inputHash!==hash({inputHash:cache.inputHash,sceneId:scene.id})
+          ||documentaryAiScenePlanContextHash(oldContext,scene.id)!==documentaryAiScenePlanHash(project,scene))continue;
+        const proved=completedExplicitQueryPlan(cache,scene)?.plan??completed.get(scene.id);
+        if(proved&&hash(primaryOnly(proved))===hash(primaryOnly(owned)))plans.set(scene.id,
+          {...owned,sceneInputHash:documentaryAiScenePlanHash(project,scene)});
+      }
+    }
+  }
+  for(const id of held)plans.delete(id);
+  return {plans,held};
 }
 
 function cachedPlan(value: unknown, inputHash: string, model: string): DocumentaryAiSearchPlan | undefined {
@@ -635,18 +692,19 @@ export class DocumentaryAiQueryPlanner {
       }
     }
     const result = new Map<string, DocumentaryRequirement>();
+    const reusable=await reusableScenePlans(project,scenes,path.resolve(this.rootFor(project.id)),inputHash);
     let rawPlans: Map<string, DocumentaryAiSearchPlan> | undefined;
     const refreshed = completedRawPlans(savedCache, inputHash, model, 'refresh');
     for (const scene of scenes) {
       const sceneHash = hash({ inputHash, sceneId: scene.id });
       let plan = completedExplicitQueryPlan(savedCache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? cachedPlan(plans[scene.id], sceneHash, model)
-        ?? cachedPlan(scene.documentary?.requirement?.aiSearchPlan, sceneHash, model);
+        ?? cachedPlan(scene.documentary?.requirement?.aiSearchPlan, sceneHash, model)??reusable.plans.get(scene.id);
       if (!plan && !Object.hasOwn(plans, scene.id)) {
         // A rejected old response may fill a missing entry, never hide a corrupt canonical plan.
         rawPlans ??= completedRawPlans(savedCache, inputHash, model);
         plan = rawPlans.get(scene.id);
       }
-      if (plan && (!plan.grounding || !documentaryAiPlanGroundingIssue(plan, context.originalScript))) result.set(scene.id, requirement(scene, plan));
+      if (!reusable.held.has(scene.id)&&plan && (!plan.grounding || !documentaryAiPlanGroundingIssue(plan, context.originalScript))) result.set(scene.id, requirement(scene, plan,project));
     }
     return this.overlayFallbacks(project, scenes, result);
   }
@@ -786,7 +844,13 @@ export class DocumentaryAiQueryPlanner {
     };
     const acceptPlan = (value: unknown, id: string, cached = false): DocumentaryAiSearchPlan | undefined => {
       if (!fallbackOnly) {
-        const plan = cached ? cachedPlan(value, sceneHash(id), model) : validate(value, sceneHash(id), model);
+        const scene=scenes.find(scene=>scene.id===id),owned=scene&&currentDocumentaryAiSearchPlan(project,scene);
+        const migrated=cached&&record(value)&&typeof value.inputHash==='string'&&typeof value.model==='string'
+          &&scene&&owned&&value.sceneInputHash===documentaryAiScenePlanHash(project,scene)
+          ?validate(value,value.inputHash,value.model):undefined;
+        const plan = cached ? cachedPlan(value, sceneHash(id), model)
+          ??(migrated&&hash(primaryOnly(migrated))===hash(primaryOnly(owned!))?migrated:undefined)
+          : validate(value, sceneHash(id), model);
         // Legacy cached plans retain their receipts and need an explicit guarded refresh.
         // Newly purchased output cannot bypass source grounding, including streamed entries.
         if (plan && (!cached || plan.grounding) && documentaryAiPlanGroundingIssue(plan, context.originalScript)) return;
@@ -848,6 +912,8 @@ export class DocumentaryAiQueryPlanner {
     const legacyFeedback = new Map<string, { checkedAt: string; evidence: string }>();
     let rejectedLegacyScenes: Scene[] = [];
     const unchangedReserves: string[] = [];
+    const reusable=fallbackOnly?{plans:new Map<string,DocumentaryAiSearchPlan>(),held:new Set<string>()}
+      :await reusableScenePlans(project,scenes,root,inputHash);
     const attemptsFor = (id: string) => cache.attempts.filter(attempt => attempt.ids.includes(id));
     if (legacyPlans) {
       const revised = completedRawFallbackPlans(cache as FallbackCache, context, 'corrected');
@@ -885,7 +951,7 @@ export class DocumentaryAiQueryPlanner {
     for (const scene of fallbackOnly ? [] : scenes) {
       const saved = scene.documentary?.requirement?.aiSearchPlan;
       if (!Object.hasOwn(cache.plans, scene.id)) {
-        const plan = cachedPlan(saved, sceneHash(scene.id), model);
+        const plan = cachedPlan(saved, sceneHash(scene.id), model)??reusable.plans.get(scene.id);
         if (plan) cache.plans[scene.id] = plan;
       }
     }
@@ -919,7 +985,9 @@ export class DocumentaryAiQueryPlanner {
       }
     }
     const missing = () => scenes.filter(scene => !Object.hasOwn(workPlans, scene.id));
-    const primaryIssues = () => missing().flatMap(scene => queryIssue(cache, scene) ?? []);
+    const primaryIssues = () => missing().flatMap(scene => reusable.held.has(scene.id)
+      ?{sceneId:scene.id,sceneNumber:scene.order+1,reason:'Прежний оплаченный запрос плана имеет неизвестный результат. Изменение контекста не разрешает автоматический повтор.'}
+      :queryIssue(cache, scene) ?? []);
     const guarded = scenes.filter(scene => !Object.hasOwn(workPlans, scene.id) || refreshIds.has(scene.id) || proposed.has(scene.id));
     if(!fallbackOnly&&guarded.length){
       const {queryContractVersion:_revision,visualPolicy:_policy,...legacyContext}=context;
@@ -945,7 +1013,7 @@ export class DocumentaryAiQueryPlanner {
         if(inspect){
           for(const scene of scenes)if(Object.hasOwn(cache.plans,scene.id)){
             const req=scene.documentary?.requirement;
-            if(req?.text!==scene.narration||!cachedPlan(req.aiSearchPlan,sceneHash(scene.id),model))
+            if(req?.text!==scene.narration||!currentDocumentaryAiSearchPlan(project,scene))
               rows.push({sceneId:scene.id,sceneNumber:scene.order+1,cached:true,
                 reason:'Ответ уже сохранён. Продолжите подготовку, чтобы применить его к сцене без нового запроса.'});
           }
@@ -984,7 +1052,7 @@ export class DocumentaryAiQueryPlanner {
             continue;
           }
           const req = scene.documentary?.requirement;
-          if (req?.text !== scene.narration || !cachedPlan(req.aiSearchPlan, sceneHash(scene.id), model)
+          if (req?.text !== scene.narration || !currentDocumentaryAiSearchPlan(project,scene)
             ||hash(primaryOnly(req.aiSearchPlan!))!==hash(primaryOnly(active))) {
             rows.push({ ...row, cached: true, reason: 'Ответ уже сохранён. Продолжите подготовку, чтобы применить его к сцене без нового запроса.' });
           }
@@ -1013,7 +1081,7 @@ export class DocumentaryAiQueryPlanner {
     if (migratedIncompleteAttempt) await save();
     const result = () => new Map(scenes.filter(scene => Object.hasOwn(workPlans, scene.id)).map(scene => [scene.id, fallbackOnly
       ? fallbackRequirement(scene, workPlans[scene.id]!) : requirement(scene,
-        proposed.get(scene.id) ?? completedExplicitQueryPlan(cache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? workPlans[scene.id]!)]));
+        proposed.get(scene.id) ?? completedExplicitQueryPlan(cache,scene)?.plan ?? adoptedPrimaryRefresh(scene, refreshed.get(scene.id)) ?? workPlans[scene.id]!,project)]));
     const blocked = () => missing().filter(scene => cache.attempts.some(attempt => attempt.ids.includes(scene.id)
       && (attempt.status === 'pending' || attempt.status === 'uncertain'&&!closedEmptyResponse(attempt))));
     let retryToken = options.retryToken;
@@ -1116,7 +1184,9 @@ export class DocumentaryAiQueryPlanner {
       let partial = '';
       let persistedCharacters = 0;
       try {
-        const response = await this.client.documentaryCompletion(system, payload, [], options.signal, content => {
+        // Stop prevents the next batch. Let a submitted paid response drain so
+        // its completed entries and receipt are not converted into unknown work.
+        const response = await this.client.documentaryCompletion(system, payload, [], undefined, content => {
           partial = content;
           attempt.rawResponse = content;
           attempt.responseState = 'partial';

@@ -3,6 +3,7 @@ import {documentaryFuseModelSuffix} from './documentary-search.js';
 import {documentaryRequiredVisiblePart,documentaryRivalryTarget} from './documentary-detail-evidence.js';
 import {documentaryProjectionIssue,documentarySpecificIdentity} from './documentary-visual-relevance.js';
 import {documentaryExplicitModelYear} from './documentary-model-year.js';
+import {documentaryShortMetadata,documentaryMetadataRelevance} from './documentary-metadata-relevance.js';
 
 const normalized=(text:string)=>` ${documentaryFuseModelSuffix(text).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()} `;
 const has=(text:string,name:string)=>normalized(text).includes(normalized(name));
@@ -325,7 +326,7 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
     // Explicitly synthetic/irrelevant titles do not deserve paid inspection.
     if(documentaryNamedMetadataIssue(candidate)||documentaryCandidateSubjectIssue(candidate,requirement,narration,rejectPortraitObjects))return false;
     const metadata=`${candidate.title} ${candidate.description}`;
-    const subject=primarySubjectMetadata(candidate);
+    const caption=documentaryShortMetadata(candidate),subject=`${caption.title} ${caption.description}`;
     if(names.length&&![...names,...modelNames].some(name=>has(subject,name)))return false;
     const period=requirement.historicalIllustration;
     // This shortcut otherwise favours an undated building with several brand
@@ -355,5 +356,7 @@ export function documentaryNamedMetadataShortlist(candidates:DocumentaryCandidat
     const mixedAction=vehicleAction?(/\b(?:walk[ -]?around|cold start|startup|start up)\b/iu.test(title)?20:/\bvlog\b/iu.test(title)?6:0):0;
     return actionScore(title)*8+titleMatches*6+date+detail+short+face-bystanders-mixedAction;
   };
-  return useful.sort((a,b)=>score(b)-score(a)).slice(0,3);
+  const target={subject:primary?.name??identities[0]?.name,visualTarget:requirement.aiSearchPlan?.visualTarget??requirement.detail,
+    queries:requirement.queries};
+  return useful.sort((a,b)=>documentaryMetadataRelevance(b,target)-documentaryMetadataRelevance(a,target)||score(b)-score(a)).slice(0,3);
 }

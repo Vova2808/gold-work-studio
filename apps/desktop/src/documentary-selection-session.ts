@@ -4,6 +4,7 @@ import {documentaryWorkLimits,DocumentaryBudgetExhausted} from './documentary-wo
 import {documentaryDiscoveryName} from './documentary-named-search.js';
 
 const transferRecoveryDelayMs=5*60_000;
+export type DocumentarySelectionBudgetSnapshot=Array<{key:string;attempts:number;analyses:number;searchMs:number}>;
 
 /** Share a timed-out original between scenes, with one late read-only recovery. */
 export class DocumentaryTransferFailures {
@@ -43,13 +44,26 @@ export class DocumentarySelectionSession {
   private sceneStarted=new Map<string,number>();
   private blockedPhotoFallbacks=new Set<string>();
   private timedOutDownloads=new Set<string>();
+  private debitWrites=Promise.resolve();
   /** Network failures expire with the run; a repaired proxy may retry next time. */
   readonly failedTransfers:DocumentaryTransferFailures;
   rememberDownloadTimeout(sceneId:string,provider:DocumentaryCandidate['provider']) {this.timedOutDownloads.add(`${sceneId}:${provider}`);}
   downloadTimedOut(sceneId:string,provider:DocumentaryCandidate['provider']) {return this.timedOutDownloads.has(`${sceneId}:${provider}`);}
   blockPhotoFallback(sceneId:string) {this.blockedPhotoFallbacks.add(sceneId);}
   photoFallbackBlocked(sceneId:string) {return this.blockedPhotoFallbacks.has(sceneId);}
-  constructor(private readonly now=Date.now) {this.failedTransfers=new DocumentaryTransferFailures(now);}
+  constructor(private readonly now=Date.now,persisted?:unknown,
+    private readonly onDebit?:(snapshot:DocumentarySelectionBudgetSnapshot)=>Promise<void>) {
+    this.failedTransfers=new DocumentaryTransferFailures(now);
+    if(persisted===undefined)return;
+    if(!Array.isArray(persisted))throw new DocumentaryBudgetExhausted('Сохранённый бюджет подбора повреждён; платный запрос не отправлен.');
+    for(const row of persisted){
+      if(!row||typeof row.key!=='string'||!/^.+:(?:image|video)$/.test(row.key)
+        ||![row.attempts,row.analyses].every(value=>Number.isSafeInteger(value)&&value>=0)
+        ||this.budgets.has(row.key))throw new DocumentaryBudgetExhausted('Сохранённый бюджет подбора повреждён; платный запрос не отправлен.');
+      // Downtime is not active work, and provider search time is per run.
+      this.budgets.set(row.key,{started:now(),attempts:row.attempts,analyses:row.analyses,searchMs:0});
+    }
+  }
   group(requirement:DocumentaryRequirement,kind:'image'|'video') {
     const names=[...(requirement.identities?.map(documentaryDiscoveryName)??[])].map(name=>name.trim().toLowerCase());
     const query=names.length?names[0]:requirement.queries[0]?.trim();
@@ -142,12 +156,19 @@ export class DocumentarySelectionSession {
     for(const kind of ['video','image'] as const){const value=this.budgets.get(`${sceneId}:${kind}`);if(value)value.started+=this.now()-paused;}
     this.paused.delete(sceneId);
   }
-  takeAnalysis(sceneId:string,kind:'image'|'video') {
+  async takeAnalysis(sceneId:string,kind:'image'|'video') {
     const budget=this.budget(sceneId,kind);
     if(this.remaining(sceneId,kind)<=0||budget.analyses>=documentaryWorkLimits[kind].analyses)throw new DocumentaryBudgetExhausted();
     budget.analyses++;
+    // Persist the reservation before a paid dispatch. Keep failed debits spent:
+    // an uncertain disk/network boundary must never silently replenish money.
+    if(this.onDebit){
+      const snapshot=this.snapshot();
+      this.debitWrites=this.debitWrites.then(()=>this.onDebit!(snapshot));
+      await this.debitWrites;
+    }
   }
-  snapshot() {return [...this.budgets].map(([key,value])=>({key,attempts:value.attempts,analyses:value.analyses,searchMs:value.searchMs}));}
+  snapshot():DocumentarySelectionBudgetSnapshot {return [...this.budgets].map(([key,value])=>({key,attempts:value.attempts,analyses:value.analyses,searchMs:value.searchMs}));}
   searchRemaining(sceneId:string,kind:'image'|'video') {
     return Math.max(0,documentaryWorkLimits[kind].searchMs-this.budget(sceneId,kind).searchMs);
   }

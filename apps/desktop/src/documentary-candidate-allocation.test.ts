@@ -16,6 +16,13 @@ function candidate(id:string,kind:'image'|'video'='image'):DocumentaryCandidate{
     localPath:`/fixtures/${id}.${kind==='image'?'png':'mp4'}`,author:'fixture',attribution:'fixture',license:'Pexels',licenseUrl:'https://www.pexels.com/license/',
     rights:'licensed',query:'car',retrievedAt:'now',width:1600,height:900,durationSeconds:30,match:'unverified',concerns:[]};
 }
+
+test('relevance precedes novelty so a reused correct source beats an unrelated fresh source',()=>{
+  const used=candidate('correct','video'),fresh=candidate('fresh','video');
+  const target=scene('target',1),donor=scene('donor',0,used);donor.documentary!.verified=true;
+  assert.equal(preferUnusedDocumentaryCandidates(project([donor,target]),target,[fresh,used],false,
+    item=>item.id==='correct'?1:.2)[0]!.id,'correct');
+});
 function scene(id:string,order:number,selected?:DocumentaryCandidate,checksum=selected?.id):Scene{
   return {id,order,title:id,imagePrompt:'car',animationPrompt:'',status:'ready',narration:`speech ${id}`,durationSeconds:5,audioPath:`voice-${id}.wav`,imagePath:selected?.localPath,
     videoPath:selected?.kind==='video'?selected.localPath:undefined,

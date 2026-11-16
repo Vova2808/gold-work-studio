@@ -1,4 +1,5 @@
-/** Limits are shared by discovery, recovery and fallback within one user run. */
+/** Counts survive runs; active/search milliseconds apply only to this run.
+ * Discovery, recovery, quota completion and fallback share the same scene debit. */
 export const documentaryWorkLimits = {
   sceneMs: 150_000,
   memoryWaitMs: 45_000,

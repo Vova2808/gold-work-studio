@@ -45,9 +45,9 @@ export function preferUnusedDocumentaryCandidates(project:Project,scene:Scene,ca
       quality:fallback?documentaryFallbackSuitability(project,scene,candidate):0,distance:fallback?aspectDistance(project,candidate):0,
       relevance:relevance?.(candidate)??0};
   });
-  return scored.sort((a,b)=>a.quality-b.quality
+  return scored.sort((a,b)=>a.quality-b.quality||b.relevance-a.relevance
     ||Number(a.uses>0)-Number(b.uses>0)||a.adjacent-b.adjacent||a.uses-b.uses
-    ||b.relevance-a.relevance||(a.distance===b.distance?0:a.distance-b.distance)||a.index-b.index).map(item=>item.candidate);
+    ||(a.distance===b.distance?0:a.distance-b.distance)||a.index-b.index).map(item=>item.candidate);
 }
 
 /** Allocate in source coordinates, then return times in the prepared file. */

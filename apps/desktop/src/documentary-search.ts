@@ -7,6 +7,7 @@ import { atomicWrite } from "./fs-utils.js";
 import type { DocumentaryYouTube } from "./documentary-youtube.js";
 import { documentaryCandidateKey } from "./documentary-reuse.js";
 import {recordDiagnosticEvent} from './diagnostics.js';
+import {documentaryShortMetadata,documentaryMetadataRelevance} from './documentary-metadata-relevance.js';
 
 type Fetcher = typeof globalThis.fetch;
 type RecordValue = Record<string, unknown>;
@@ -123,7 +124,8 @@ export function rankDocumentaryCandidates(candidates: DocumentaryCandidate[], in
     if (unique.has(key)) return false;
     unique.add(key); return true;
   }).map(candidate => {
-    const metadata = `${candidate.title} ${candidate.description} ${candidate.capturedAt ?? ""}`;
+    const caption=documentaryShortMetadata(candidate);
+    const metadata = `${caption.title} ${caption.description} ${candidate.capturedAt ?? ""}`;
     const missing = (input.entities ?? []).filter(entity => !metadataHas(metadata, entity));
     const years = (input.years ?? []).filter(year => !metadataHas(metadata, year));
     const titleShips = candidate.title.match(/\b[A-Z][a-z]+ of the Seas\b/g) ?? [];
@@ -136,7 +138,9 @@ export function rankDocumentaryCandidates(candidates: DocumentaryCandidate[], in
         "Содержание изображения / фрагмента нужно проверить визуально",
         ...(candidate.rights === "unknown" ? ["Условия использования не подтверждены"] : [])])]
     };
-  }).sort((a, b) => Number(b.match === "exact-metadata") - Number(a.match === "exact-metadata") || a.concerns.length - b.concerns.length);
+  }).sort((a, b) => documentaryMetadataRelevance(b,{visualTarget:input.query,subject:input.entities?.[0]})
+    -documentaryMetadataRelevance(a,{visualTarget:input.query,subject:input.entities?.[0]})
+    ||Number(b.match === "exact-metadata") - Number(a.match === "exact-metadata") || a.concerns.length - b.concerns.length);
 }
 
 function commonsAttributionLicense(candidate: DocumentaryCandidate): DocumentaryCandidate {

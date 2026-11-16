@@ -51,8 +51,9 @@ test('passenger-ship discovery and saved pixel descriptions reject cargo and com
  assert.ok(fastDocumentaryProviders(plans[1]!,'video').includes('local'),'Saved local sources must be available before another transfer');
  const oldFallback={...scenes[1]!,documentary:{requirement:{text:scenes[1]!.narration,footageFallback:{version:1,target:'ship',queries:['ship'],reason:'No exact source',originalTarget:'liner'}}}} as Scene;
  assert.equal(planFastDocumentaryScene({...project,scenes:[scenes[0]!,oldFallback]},oldFallback).visualTarget,'passenger ship');
- assert.ok(fastDocumentaryCandidateMetadataIssue(plans[0]!,{title:'Container cargo ship at sea',description:''}));
- assert.ok(fastDocumentaryCandidateMetadataIssue(plans[0]!,{title:'RMS liner memorial plaque',description:''}));
+ const classified={...plans[0]!,objectClass:'cruise ship',excludedClasses:['cargo ship','memorial plaque']};
+ assert.ok(fastDocumentaryCandidateMetadataIssue(classified,{title:'Container cargo ship at sea',description:''}));
+ assert.ok(fastDocumentaryCandidateMetadataIssue(classified,{title:'RMS liner memorial plaque',description:''}));
  assert.equal(fastDocumentaryCandidateMetadataIssue(plans[0]!,{title:'Cruise ship sailing',description:''}),undefined);
  const verdict={target:'passenger ship',relevant:true,evidence:'A ship is visibly sailing on the sea.'};
  assert.equal(fastDocumentaryIllustrationVerdict({...verdict,description:'A large cargo ship loaded with containers.'},verdict.target).status,'uncertain');
@@ -63,7 +64,8 @@ test('passenger-ship discovery and saved pixel descriptions reject cargo and com
 
 test('sailing discovery orders explicit motor-vessel substitutes behind plausible sailing footage',()=>{
  const visualTarget='sailing ship under sail at sea with crew on deck, illustrating continued forward motion despite loss of steering';
- const plan={visualTarget,queries:[],preferredKind:'video' as const,sourcePolicy:'background' as const};
+ const plan={visualTarget,queries:[],preferredKind:'video' as const,sourcePolicy:'background' as const,
+  objectClass:'sailing ship',excludedClasses:['cruise ship','container ship','motor vessel']};
  const scene={id:'s',order:0,narration:visualTarget,durationSeconds:5} as Scene;
  const project={scenes:[scene],aspectRatio:'16:9'} as Project;
  const candidate=(id:string,title:string)=>({id,title,description:title,kind:'video',provider:'local',durationSeconds:10,width:1920,height:1080} as DocumentaryCandidate);
@@ -231,13 +233,13 @@ test('single review retains explicit train action, river and waiting passengers'
   }
 });
 
-test('discovery rejects a plainly abandoned engine and prefers specific metadata without paid ranking',()=>{
+test('discovery prefers specific action metadata while ambiguous state still needs actual-file review',()=>{
   const scene={id:'s',narration:'A steam locomotive pulls a train along the railway.'} as Scene;
   const plan=planFastDocumentaryScene({scenes:[scene]} as Project,scene);
-  assert.ok(fastDocumentaryCandidateMetadataIssue(plan,{title:'train railway old abandoned outdated steam locomotive',description:''}));
+  assert.equal(fastDocumentaryCandidateMetadataIssue(plan,{title:'train railway old abandoned outdated steam locomotive',description:''}),undefined);
   const generic={title:'train railway',description:''},specific={title:'steam locomotive pulling train',description:''};
   assert.ok(fastDocumentaryCandidateScore(plan,specific)>fastDocumentaryCandidateScore(plan,generic));
   assert.equal(fastDocumentaryCandidateScore(plan,{...generic,title:'train train train railway'}),fastDocumentaryCandidateScore(plan,generic));
-  assert.ok(fastDocumentaryCandidateScore(plan,{title:'A classic steam locomotive traversing the countryside.',description:''})
+  assert.ok(fastDocumentaryCandidateScore(plan,specific)
     >fastDocumentaryCandidateScore(plan,{title:'Steam locomotive releasing smoke at an outdoor train station.',description:''}));
 });
