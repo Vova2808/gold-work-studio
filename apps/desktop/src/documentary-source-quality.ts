@@ -39,7 +39,7 @@ export function documentaryGameplayMetadataIssue(candidate:DocumentaryCandidate,
   // A real-vs-game comparison can still contain camera footage worth inspecting.
   const metadata=`${candidate.title} ${candidate.description}`;
   if(/\breal\s*(?:vs\.?|versus)\b|\b(?:real life|real footage)\b.*\bcomparison\b|сравнен\S*\s+с\s+реальн/iu.test(metadata))return;
-  if(/\bgameplay\b|\bin[- ]game footage\b|геймплей|игровой процесс|#motogp\d{2}\b|\bmotogp(?:1[5-9]|2[0-9])\b|\b(?:ps[1-5]|playstation\s*[1-5]?)\b.{0,80}\b(?:season mode|career mode|walkthrough|let'?s play)\b/iu.test(metadata))
+  if(/\b(?:gameplay|in[- ]game footage|game (?:footage|recording|capture|walkthrough)|career mode|season mode|let'?s play)\b|геймплей|игровой процесс|запись (?:видео)?игры/iu.test(metadata))
     return 'Источник помечен как запись видеоигры. Для документального кадра нужна натурная съёмка.';
   // A launch trailer can be an ordinary film. Require game release copy.
   if(/\bvideo[- ]game trailer\b/iu.test(candidate.title)||/\blaunch trailer\b/iu.test(candidate.title)

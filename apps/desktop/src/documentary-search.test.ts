@@ -202,7 +202,16 @@ test("proper names are literal archive queries and a sister ship is not an exact
   const candidate = { ...commonsCandidates(payload, "Icon of the Seas")[0]!, title: "Star of the Seas at Cadiz", description: "Star of the Seas, sister of Icon of the Seas" };
   const ranked = rankDocumentaryCandidates([candidate], { query: "Icon of the Seas", kind: "image", entities: ["Icon of the Seas"] });
   assert.equal(ranked[0]!.match, "unverified");
-  assert.ok(ranked[0]!.concerns.some(concern => concern.includes("другой корабль")));
+  assert.ok(ranked[0]!.concerns.some(concern => concern.includes("В заголовке не подтверждён объект")));
+});
+
+test('named title evidence works for fictional subjects without a ship-name suffix rule',()=>{
+  const base=commonsCandidates(payload,'Ardent Vega')[0]!;
+  const related={...base,id:'related',title:'Boreal Vega research spacecraft',description:'Boreal Vega, sister spacecraft of Ardent Vega'};
+  const exact={...base,id:'exact',title:'Ardent Vega research spacecraft',description:'Ardent Vega in flight',downloadUrl:'https://example.org/ardent.jpg'};
+  const ranked=rankDocumentaryCandidates([related,exact],{query:'Ardent Vega',kind:'image',entities:['Ardent Vega']});
+  assert.equal(ranked[0]!.id,'exact');assert.equal(ranked[0]!.match,'exact-metadata');
+  assert.equal(ranked[1]!.id,'related');assert.equal(ranked[1]!.match,'unverified');
 });
 
 test("download backoff honors Retry-After seconds and dates with a bounded fallback", () => {

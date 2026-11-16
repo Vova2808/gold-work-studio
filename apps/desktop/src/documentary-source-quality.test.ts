@@ -83,13 +83,23 @@ test('a narrow original may pass only when the automatic portrait panel can disp
 test('explicit game footage is skipped before download without rejecting real racing years or mixed comparisons',()=>{
   const scene={durationSeconds:5} as Scene;
   const source={provider:'youtube',kind:'video',title:'VALENTINO ROSSI RC211V 2002 | 4K',description:'#valentinorossi #motogp22'} as const;
-  assert.match(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
+  assert.equal(documentaryKnownQualityIssue(source as never,{aspectRatio:'16:9'},scene),undefined,'A brand hashtag alone does not establish game recording');
+  assert.match(documentaryKnownQualityIssue({...source,description:'#valentinorossi #motogp22 game recording'} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
   assert.ok(documentaryKnownQualityIssue({...source,title:'Aircraft simulator gameplay',description:''} as never,{aspectRatio:'16:9'},scene));
   assert.match(documentaryKnownQualityIssue({...source,title:'MotoGP 4 (PS2) - Eps #2 - Season Mode',description:''} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
   assert.match(documentaryKnownQualityIssue({...source,title:'MotoGP Pov Shoulder Cam vs MotoGP21',
     description:'Some comparison between real life footage and game footage'} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/);
   for(const description of ['MotoGP 2022 race footage','Real vs gameplay comparison','Interview about motorcycle engineering'])
     assert.equal(documentaryKnownQualityIssue({...source,description} as never,{aspectRatio:'16:9'},scene),undefined);
+});
+
+test('game metadata uses explicit recording or mode labels for fictional and familiar brands alike',()=>{
+  const scene={durationSeconds:5} as Scene;
+  const source={provider:'youtube',kind:'video',title:'Nebula Circuit 37',description:''} as const;
+  for(const clue of ['gameplay','career mode','season mode','game recording','game footage','game capture','game walkthrough'])
+    assert.match(documentaryKnownQualityIssue({...source,title:source.title+' '+clue} as never,{aspectRatio:'16:9'},scene)!,/видеоигры/,clue);
+  for(const title of ['Nebula Circuit 37 racing documentary','MotoGP22 #motogp22 PlayStation5','Museum walkthrough'])
+    assert.equal(documentaryKnownQualityIssue({...source,title} as never,{aspectRatio:'16:9'},scene),undefined,title);
 });
 test('YouTube SD is skipped before a full-screen download but a small card still gets an original check',()=>{
   const scene={durationSeconds:5} as Scene;

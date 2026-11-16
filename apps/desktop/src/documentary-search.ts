@@ -128,13 +128,12 @@ export function rankDocumentaryCandidates(candidates: DocumentaryCandidate[], in
     const metadata = `${caption.title} ${caption.description} ${candidate.capturedAt ?? ""}`;
     const missing = (input.entities ?? []).filter(entity => !metadataHas(metadata, entity));
     const years = (input.years ?? []).filter(year => !metadataHas(metadata, year));
-    const titleShips = candidate.title.match(/\b[A-Z][a-z]+ of the Seas\b/g) ?? [];
-    const conflictingShip = input.entities?.some(entity => /of the Seas$/i.test(entity)) && titleShips.length > 0 && !titleShips.some(ship => input.entities?.some(entity => metadataHas(ship, entity)));
-    return { ...candidate, match: (input.entities?.length && !missing.length && !conflictingShip ? "exact-metadata" : "unverified") as DocumentaryCandidate["match"],
+    const missingTitle = (input.entities ?? []).filter(entity => !metadataHas(caption.title,entity));
+    return { ...candidate, match: (input.entities?.length && !missing.length && !missingTitle.length ? "exact-metadata" : "unverified") as DocumentaryCandidate["match"],
       concerns: [...new Set([...candidate.concerns,
         ...missing.map(entity => `В метаданных не подтверждён объект: ${entity}`),
         ...years.map(year => `Год ${year} требует проверки`),
-        ...(conflictingShip ? [`В названии указан другой корабль: ${titleShips.join(", ")}`] : []),
+        ...missingTitle.filter(entity=>!missing.includes(entity)).map(entity=>`В заголовке не подтверждён объект: ${entity}`),
         "Содержание изображения / фрагмента нужно проверить визуально",
         ...(candidate.rights === "unknown" ? ["Условия использования не подтверждены"] : [])])]
     };
