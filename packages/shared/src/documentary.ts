@@ -49,6 +49,11 @@ export interface DocumentarySettings {
   autoEffects?: boolean;
   autoTransitions?: boolean;
   autoMotionGraphics?: boolean;
+  missingMaterialPolicy?: 'related' | 'card' | 'hold';
+  videoQuotaPolicy?: 'target' | 'strict';
+  retryEmptyVisualResponse?: boolean;
+  effectsStatus?: {audio:number;transitions:number;message:string};
+  productionReport?: {videoPercent:number;targetVideoPercent:number;placeholderScenes:number[];message:string};
   montageDensity?: 'calm' | 'balanced' | 'rich';
   montage?: DocumentaryMontageSettings;
   /** Outcome is tied to source input, so an unavailable paid plan is not retried on export. */
@@ -67,7 +72,8 @@ export interface DocumentarySettings {
   excludedTemplates?: DocumentaryTemplate[];
 }
 export function createDocumentarySettings(): DocumentarySettings {
-  return { version: 2, narrationMode: "scene", pace: "dynamic", backgroundColor: "#161a20", accentColor: "#84c6db", textColor: "#ffffff", sfxVolume: 25, captionsEnabled: true, autoEffects: true, autoTransitions: true, autoMotionGraphics: true };
+  return { version: 2, narrationMode: "scene", missingMaterialPolicy:'related',videoQuotaPolicy:'target',retryEmptyVisualResponse:true,
+    pace: "dynamic", backgroundColor: "#161a20", accentColor: "#84c6db", textColor: "#ffffff", sfxVolume: 25, captionsEnabled: true, autoEffects: true, autoTransitions: true, autoMotionGraphics: true };
 }
 
 /** A downloaded replacement is renderable while its approximate match remains under manual review. */
@@ -190,7 +196,13 @@ export function documentaryAiPlanGroundingIssue(plan: DocumentaryAiSearchPlan | 
 export interface DocumentaryAiSearchPlan {
   version: 1;
   inputHash: string;
+  /** Scene semantics; inputHash above remains the immutable paid receipt identity. */
+  sceneInputHash?: string;
   model: string;
+  /** Optional only for saved plans authored before class/availability planning. */
+  objectClass?: string;
+  excludedClasses?: string[];
+  availability?: {status:'unknown'|'likely'|'limited'; note:string; representations:string[]};
   /** Absent on legacy plans; refresh unfinished scenes before automatic reuse. */
   grounding?: DocumentaryAiPlanGrounding;
   visualTarget: string;
@@ -351,6 +363,7 @@ export interface DocumentaryTextClip {
 }
 export interface DocumentaryScene {
   version: 2;
+  acceptedUnderPreviousRules?: {version:1;fingerprint:string;reason:string};
   /** Cached semantic direction, tied to the narration/source fingerprint. */
   semanticMontage?: DocumentarySemanticMontage['scenes'][number];
   /** Automatic cuts are replaceable; unmarked legacy cuts remain authored. */
