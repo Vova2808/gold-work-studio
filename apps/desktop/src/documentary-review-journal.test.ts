@@ -85,6 +85,29 @@ test('same source verdict survives mtime, model and unrelated script edits; new 
   await intel.inspectForSelection(f.project,f.scene);assert.equal(calls,2);
 });
 
+test('legacy approval needs its full old task proof; changed years cannot inherit a short-target approval',async t=>{
+  const f=await fixture(t);let calls=0;
+  const client={configured:async()=>true,documentaryAnalysisModel:async()=>'fixture',documentaryCompletion:async()=>{
+    calls++;return JSON.stringify({suitable:true,targetVisible:true,description:'A bird sitting on a branch.',reason:'The bird is visible.',
+      targetEvidence:'The bird and its tree branch are clearly visible.',sourceText:{kind:'none',text:''}});
+  }};
+  const original=new DocumentaryIntelligence(client,()=>f.root),complete=Reflect.get(original,'complete').bind(original);
+  Reflect.set(original,'complete',(...args:any[])=>{
+    const legacy=args[5].find((request:any)=>request.system===args[2]&&JSON.parse(request.input).fullScript&&JSON.parse(request.input).singleReviewVersion===5);
+    assert.ok(legacy);return complete(args[0],args[1],legacy.system,legacy.input,args[4]);
+  });
+  assert.equal((await original.inspectForSelection(f.project,f.scene)).review.status,'accepted');
+  const entry=(await readDocumentaryRequestJournal(f.directory)).find(row=>row.receipt?.singleReviewBinding)!;
+  const legacy={...entry.receipt,singleReviewBinding:{...entry.receipt!.singleReviewBinding,verdictKey:undefined}};
+  const path=join(f.directory,entry.key+'.json'),bytes=JSON.stringify(legacy);await writeFile(path,bytes);
+  const resumed=new DocumentaryIntelligence(client,()=>f.root);
+  assert.equal((await resumed.inspectForSelection(f.project,f.scene)).review.status,'accepted');assert.equal(calls,1);
+  f.scene.documentary!.requirement.aiSearchPlan!.years=['1950'];
+  const changed=await resumed.inspectForSelection(f.project,f.scene);
+  assert.equal(changed.review.status,'uncertain');assert.equal(changed.review.illustrationApproval,undefined);
+  assert.equal(calls,1,'Ambiguous legacy evidence never buys a second vote automatically');assert.equal(await readFile(path,'utf8'),bytes);
+});
+
 for(const automatic of [true,false])test(`known empty has an actionable single retry with larger output allowance (automatic=${automatic})`,async t=>{
   const f=await fixture(t);f.project.settings.assembly.documentary!.retryEmptyVisualResponse=automatic;
   const tokens:number[]=[];

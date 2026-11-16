@@ -2989,7 +2989,7 @@ export class DocumentaryIntelligence {
       activeListItem:documentaryActiveListItem(scene),narrativeContext:documentarySceneContext(project,scene),fullScript,...(fallbackNarrativeContext?{fallbackNarrativeContext}:{}),...(scriptGrounding?{scriptGrounding}:{})};
     const taskKey=singleReviewTaskKey(taskInput);
     const verdictKey=documentaryVisualVerdictKey({...taskInput,singleReview:true,checksum:doc.checksum,startSeconds:start,endSeconds:end});
-    let stableReview:Record<string,unknown>|undefined;
+    let stableReview:Record<string,unknown>|undefined,stableReviewPriority=-1;
     const savedRevision=previousMetadataRevision(doc.visualReview?.localReview,revision);
     if(savedRevision)predecessors.push(savedRevision);
     for(const {key,receipt} of await readDocumentaryRequestJournal(analysisRoot)){
@@ -3003,13 +3003,22 @@ export class DocumentaryIntelligence {
       // the same actual target. A different authored target remains independent.
       const sameVisualQuestion=sameFrames&&binding.quality?.target===qualityTarget&&binding.quality.narration===scene.narration;
       const legacyQuestion=sameVisualQuestion&&!binding.verdictKey&&binding.quality?.version===1;
+      const provedLegacyTask=legacyQuestion&&[taskKey,
+        singleReviewTaskKey({...taskInput,analysisModel:receipt?.model}),singleReviewTaskKey({...taskInput,analysisModel:undefined})].includes(binding.taskKey);
       if((sameTask||legacyQuestion)&&receipt?.purpose==='visual-illustration'&&receipt.state==='complete'&&receipt.result
         &&!documentaryKnownEmptyReceipt(receipt)){
         completedCurrentTask=true;
-        // Reuse the actual model answer and run all current evidence validators
-        // below. Legacy receipts with target+narration remain useful even when
-        // their prompt, model or file date has changed.
-        if(binding.quality?.version===1)stableReview={...receipt.result,__illustrationQualityVersion:1};
+        // Old target+narration bindings lack independent years/location/grounding.
+        // Preserve their refusal or uncertainty, but never promote an approval
+        // to a different task merely because its short target stayed unchanged.
+        // Existing accepted scenes keep their separate migration approval.
+        const unprovedApproval=legacyQuestion&&!provedLegacyTask&&(receipt.result.suitable??receipt.result.relevant)===true;
+        const priority=binding.verdictKey===verdictKey?2:provedLegacyTask?1:0;
+        if(binding.quality?.version===1&&priority>=stableReviewPriority){
+          stableReviewPriority=priority;
+          stableReview={...receipt.result,...(unprovedApproval?{suitable:undefined,relevant:undefined,
+            reason:'Прежний ответ сохранён, но его старая привязка не доказывает неизменность всех условий текущей задачи. Новая оплата не выполнялась; требуется явная проверка изменённой задачи.'}:{}),__illustrationQualityVersion:1};
+        }
       }
       if(sameTask&&receipt?.rejection==='model-refusal')throw new DocumentaryAnalysisError(receipt.error??'Модель отказалась анализировать материал.','pending',receipt.purpose);
       if((sameTask||sameVisualQuestion)&&documentaryKnownEmptyReceipt(receipt))
