@@ -57,7 +57,6 @@ export function documentaryMetadataRelevanceIssue(candidate:MetadataCandidate,ta
   if(excluded)return `В заголовке указан исключённый AI-планом класс «${excluded}».`;
   if(!words(target.visualTarget||target.subject||target.queries?.[0]||'').length)return;
   // An uncatalogued local file or a sparse archival record remains available for pixels.
-  if(candidate.provider==='local')return;
   const stock=candidate.provider==='pexels'||candidate.provider==='pixabay'||candidate.provider==='web';
   if(!stock&&words(`${caption.title} ${caption.description}`).length<3)return;
   if(documentaryMetadataRelevance(candidate,target)<documentaryMetadataRelevanceThreshold)

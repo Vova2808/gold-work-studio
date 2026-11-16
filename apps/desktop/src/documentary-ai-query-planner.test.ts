@@ -560,6 +560,9 @@ test('an unknown prior plan cannot be resubmitted through a model/title/distant-
   project.title='New title';f.state.model='fixture/new-model';scenes[2]!.narration='New ending.';
   await assert.rejects(f.planner().plan(project,[scenes[0]!]),/неизвестный результат/);
   assert.equal(f.calls.length,1);
+  const issues=await f.planner().readIssues(project,[scenes[0]!]);
+  assert.match(issues[0]?.reason??'',/неизвестный результат/);
+  assert.equal(issues[0]?.canContinue,undefined);
 });
 
 test('Stop drains sent planning responses and prevents the next batch',async t=>{

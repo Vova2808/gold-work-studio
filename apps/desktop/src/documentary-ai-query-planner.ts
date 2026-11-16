@@ -1056,8 +1056,9 @@ export class DocumentaryAiQueryPlanner {
             ||hash(primaryOnly(req.aiSearchPlan!))!==hash(primaryOnly(active))) {
             rows.push({ ...row, cached: true, reason: 'Ответ уже сохранён. Продолжите подготовку, чтобы применить его к сцене без нового запроса.' });
           }
-        } else if (cache.attempts.length) {
-          rows.push(queryIssue(cache, scene) ?? { ...row, canContinue: true, reason: 'План ещё не готов. Можно продолжить общую подготовку.' });
+        } else if (cache.attempts.length||reusable.held.has(scene.id)) {
+          rows.push(primaryIssues().find(issue=>issue.sceneId===scene.id)
+            ?? { ...row, canContinue: true, reason: 'План ещё не готов. Можно продолжить общую подготовку.' });
         }
       }
       inspect(rows);

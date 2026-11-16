@@ -18,6 +18,7 @@ test('short legitimate archive labels remain available while explicit AI classes
   assert.equal(documentaryMetadataRelevanceIssue({title:'Aurora',description:'',provider:'commons'},target),undefined);
   assert.ok(documentaryMetadataRelevanceIssue({title:'Aurora aircraft',description:'Aurora',provider:'commons'},target));
   assert.equal(documentaryMetadataRelevanceIssue({title:'Uncatalogued',description:'',provider:'local'},target),undefined);
+  assert.ok(documentaryMetadataRelevanceIssue({title:'Vintage straw hat',description:'Clothing fashion item.',provider:'local'},target));
 });
 
 test('Pixabay tags copied into the title count once and long tag soups lose to concise labels',()=>{
