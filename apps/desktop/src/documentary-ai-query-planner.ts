@@ -560,9 +560,11 @@ function planningContext(project: Project, scenes: Scene[]) {
  * Unknown old submissions are held even when the global cache address changed. */
 async function reusableScenePlans(project:Project,scenes:Scene[],root:string,currentHash:string) {
   const plans=new Map<string,DocumentaryAiSearchPlan>(),held=new Set<string>();
+  const originalScript=planningContext(project,scenes).originalScript;
+  const grounded=(plan:DocumentaryAiSearchPlan)=>!plan.grounding||!documentaryAiPlanGroundingIssue(plan,originalScript);
   for(const scene of scenes){
     const current=currentDocumentaryAiSearchPlan(project,scene);
-    if(current)plans.set(scene.id,{...current,sceneInputHash:documentaryAiScenePlanHash(project,scene)});
+    if(current&&grounded(current))plans.set(scene.id,{...current,sceneInputHash:documentaryAiScenePlanHash(project,scene)});
   }
   const directory=path.join(root,'documentary-ai-query-plans');
   const files=await readdir(directory).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error;});
@@ -588,7 +590,7 @@ async function reusableScenePlans(project:Project,scenes:Scene[],root:string,cur
         if(!replaced.has(attempt)&&!closedEmptyResponse(attempt)&&unsettledReserveAttempt(attempt)){
           held.add(scene.id);continue;
         }
-        if(plans.has(scene.id)||!owned||scene.documentary?.requirement?.text!==scene.narration
+        if(plans.has(scene.id)||!owned||!grounded(owned)||scene.documentary?.requirement?.text!==scene.narration
           ||owned.inputHash!==hash({inputHash:cache.inputHash,sceneId:scene.id})
           ||documentaryAiScenePlanContextHash(oldContext,scene.id)!==documentaryAiScenePlanHash(project,scene))continue;
         const proved=completedExplicitQueryPlan(cache,scene)?.plan??completed.get(scene.id);

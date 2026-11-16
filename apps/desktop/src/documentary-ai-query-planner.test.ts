@@ -553,6 +553,31 @@ test('legacy scene plan migrates from the exact paid request after unrelated con
   assert.equal(await readFile(file,'utf8'),before,'Do not rewrite the old receipt during migration');
 });
 
+for(const legacy of [false,true])test(`scene-plan reuse checks source grounding after readyScript edits, legacy=${legacy}`,async t=>{
+  const originalQuote='Aurora was a sailing vessel.',replacementQuote='Aurora was a passenger liner.';
+  let quote=originalQuote;
+  const f=await fixture(t,async call=>JSON.stringify({scenes:call.data.requestedScenes.map(scene=>
+    groundedEntry(scene.sceneId,'Aurora',quote))}));
+  const scenes=scenesOf('Her story continues.','A modern view illustrates her story.');
+  const project=projectOf(scenes,originalQuote+'\n'+scenes.map(scene=>scene.narration).join('\n'));
+  const scene=scenes[1]!,planned=await f.planner().plan(project,[scene]);
+  scene.documentary={requirement:planned.get(scene.id)!} as Scene['documentary'];
+  if(legacy)delete scene.documentary!.requirement.aiSearchPlan!.sceneInputHash;
+  const file=path.join(f.root,'documentary-ai-query-plans',(await f.cacheFiles())[0]!),before=await readFile(file,'utf8');
+  project.videoBrief!.readyScript+='\nUnrelated epilogue.';
+  assert.equal((await f.planner().plan(project,[scene])).get(scene.id)!.aiSearchPlan!.inputHash,
+    scene.documentary!.requirement.aiSearchPlan!.inputHash,'An unrelated addition preserves the paid plan');
+  assert.equal(f.calls.length,1);
+  project.videoBrief!.readyScript=project.videoBrief!.readyScript!.replace(originalQuote,replacementQuote);
+  quote=replacementQuote;
+  assert.equal((await f.planner().readCached(project,[scene])).size,0,'The removed source quote cannot support reuse');
+  const repaired=(await f.planner().plan(project,[scene])).get(scene.id)!.aiSearchPlan!;
+  assert.equal(f.calls.length,2,'Changed mandatory source grounding requires one newly planned response');
+  assert.equal(repaired.grounding!.mandatory[0]!.scriptQuote,replacementQuote);
+  assert.notEqual(repaired.inputHash,scene.documentary!.requirement.aiSearchPlan!.inputHash);
+  assert.equal(await readFile(file,'utf8'),before,'The original paid receipt remains untouched');
+});
+
 test('an unknown prior plan cannot be resubmitted through a model/title/distant-script cache change',async t=>{
   const f=await fixture(t,async()=>{throw Error('Connection lost');});
   const scenes=scenesOf('First.','Second.','Third.'),project=projectOf(scenes);
